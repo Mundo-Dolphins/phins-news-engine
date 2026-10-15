@@ -4,9 +4,11 @@ Copyright (c) 2026 Mundo-Dolphins. Licensed under the MIT License (see LICENSE).
 What this library does not ship
 -------------------------------
 
-* No scrapers. The library has no code that downloads or parses the HTML of
-  third-party websites, and no headless browsers or scraping proxies. Hosts
-  that need one implement the out.Scraper port themselves.
+* No scrapers. The library contains no scrapers and does not fetch or
+  parse third-party web pages; it only normalises text found in feeds and API
+  responses it is given (HTML tags in feed content are stripped). It has no
+  headless browsers or scraping proxies. Hosts that need a scraper implement
+  the out.Scraper port themselves.
 * No data. It contains no real articles, sources, dictionaries, entity
   catalogs, rosters, trained models or datasets. Every fixture and example
   file is synthetic: fictional teams and people, example.com hosts.

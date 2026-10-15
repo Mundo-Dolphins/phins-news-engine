@@ -174,8 +174,8 @@ produces no error, only different behaviour.
 | `classifierdictionary.StopValues` | `Super Bowl`, `NFL Draft` | silent |
 | `entitydiscovery.AmbiguousTokens` | none | **silent**: bare city and shared-nickname aliases are no longer scrubbed |
 | `weblookup.BuildTemplateQuery(kind, name, team)` | falls back to "NFL" when no team is given | n/a (callers pass the team) |
-| `cli.SetRemoteSyncScriptPath` (remote database sync script run by the editorial cycle's sync step) | `scripts/sync-remote-sqlite.sh` | sync step fails: script not found. The private host passes `scripts/sync-rpi-sqlite-safe.sh` |
-| `cli.SetStatsLogPath` (process log `stats` scans when `--log-path` is not given) | `data/logs/out.log` | silent: the process log is not found and cycle activity is skipped. The private host passes `data/rpi-logs/out.log` |
+| `cli.SetRemoteSyncScriptPath` (remote database sync script run by the editorial cycle's sync step) | `scripts/sync-remote-sqlite.sh` | sync step fails: script not found. The host passes its previous value |
+| `cli.SetStatsLogPath` (process log `stats` scans when `--log-path` is not given) | `data/logs/out.log` | silent: the process log is not found and cycle activity is skipped. The host passes its previous value |
 | `train seed-v1 --v1-team-slug` | `team` | silent: team-specific v1 rejects are skipped |
 
 The live-lane milestone list also accepts any `touchdown_<team>` tag.

@@ -38,7 +38,7 @@ jobs:
         run: |
           pattern='outbound/(website|instagram|twitter|scrapingservice|directhttp)|privatewiring|privatecmd|rpi|raspberry|docs/superpowers|sync-rpi|deploy-unified|dolphin|miami|[a-z0-9._%+-]+@(gmail|googlemail|hotmail|outlook|yahoo|icloud)\.com'
           hits=$(git grep -nIiE "$pattern" -- . \
-              ':!.github' ':!NOTICE' ':!SECURITY.md' ':!docs/EXTRACTION-NOTES.md' ':!tools' \
+              ':!.github' \
             | perl -pe 's/mundo-dolphins//gi; s/phins-news-engine//gi' \
             | grep -iE "$pattern" || true)
           if [ -n "$hits" ]; then
