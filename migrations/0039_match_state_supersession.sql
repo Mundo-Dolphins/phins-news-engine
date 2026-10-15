@@ -1,0 +1,4 @@
+-- Match state is intentionally stored in articles.metadata as a versioned
+-- source contract: match_id, match_home_team, match_away_team, match_phase.
+-- No migration is needed for the JSON contract. Supersession only reads
+-- exact structured values and fails closed when they are absent/ambiguous.

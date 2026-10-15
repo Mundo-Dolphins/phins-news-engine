@@ -1,0 +1,1 @@
+CREATE TABLE known_a (id INTEGER PRIMARY KEY);

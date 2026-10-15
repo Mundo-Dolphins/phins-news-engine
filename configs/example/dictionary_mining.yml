@@ -1,0 +1,23 @@
+# Example dictionary-mining policy: which mined n-grams are never proposed
+# as dictionary candidates.
+min_support: 2
+ignored_terms:
+  - about
+  - ahead
+  - despite
+  - fans
+  - going
+  - keep going
+  - start
+  - they
+  - this week
+ignored_tokens:
+  - despite
+  - fans
+  - the
+  - their
+  - will
+ignored_substrings:
+  - "http"
+category_guesses:
+  isotopes: official_names

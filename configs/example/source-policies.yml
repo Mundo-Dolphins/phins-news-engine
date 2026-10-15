@@ -1,0 +1,17 @@
+# Example per-source policies. source_id values must match sources.yml.
+version: 1
+mode: enforce
+policies:
+  - source_id: rss:isotopes-official
+    authority: official_team
+    retain_near_duplicates: true
+    representative_preference: high
+    allow_official_confirmation: true
+    allow_substantial_update: true
+    publish_confirmation_without_new_information: true
+    minimum_update_novelty: 0.65
+  - source_id: rss:example-sports-wire
+    authority: trusted_reporter
+    representative_preference: medium
+    allow_substantial_update: true
+    minimum_update_novelty: 0.65

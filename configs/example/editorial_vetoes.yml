@@ -1,0 +1,11 @@
+# Example editorial veto rules: patterns that always reject an article.
+version: "0.1.0-example"
+rules:
+  - category: betting
+    reason_code: veto_betting
+    patterns: ["\\bbetting odds\\b", "\\bparlay\\b"]
+    exclude_patterns: []
+  - category: merchandise
+    reason_code: veto_merchandise
+    patterns: ["\\bjersey sale\\b"]
+    exclude_patterns: ["\\bjersey number\\b"]

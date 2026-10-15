@@ -1,0 +1,23 @@
+meta:
+  version: "1.0.0"
+  name: test_dictionary
+  language: en
+
+decision:
+  positive_threshold_high: 10
+  positive_threshold_medium: 6
+  negative_threshold_high: 0
+  title_weight_multiplier: 2
+  max_count_per_term: 3
+
+categories:
+  a:
+    weight: 1
+    entries:
+      - canonical_name: "isotopes"
+        source: x
+  b:
+    weight: 1
+    entries:
+      - canonical_name: "isotopes"
+        source: y

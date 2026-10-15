@@ -1,0 +1,24 @@
+meta:
+  version: "test-1.0.0"
+  name: test_dictionary
+  language: en
+  generated_at: "2026-09-01"
+
+decision:
+  positive_threshold_high: 0.8
+  positive_threshold_medium: 0.5
+  negative_threshold_high: -0.3
+  title_weight_multiplier: 1.5
+  max_count_per_term: 3
+
+categories:
+  active_roster_core:
+    weight: 8
+    strong_override: false
+    entries:
+      - canonical_name: Casey Fixture
+        type: person
+        position: OT
+        source: manual
+        updated_at: "2026-09-01"
+        confidence: 0.9

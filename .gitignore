@@ -1,0 +1,36 @@
+# Test and coverage artefacts
+coverage.out
+coverage*.txt
+c.out
+*.test
+
+# Build output and local scratch
+build/
+tmp/
+vendor/
+go.work
+go.work.sum
+
+# Runtime data: databases, sessions and credentials never belong here
+*.db
+*.db-*
+*.session
+*.session.json
+session.json
+sessions/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Agent and tooling state
+.superpowers/
+.claude/
+
+# OS and editors
+.DS_Store
+.idea/
+.vscode/
+*~
+*.swp

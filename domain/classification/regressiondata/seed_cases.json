@@ -1,0 +1,98 @@
+[
+  {
+    "name": "official team name is strong override",
+    "title": "Springfield Isotopes fall to Sharks in overtime thriller",
+    "body": "",
+    "want_related": true
+  },
+  {
+    "name": "current player plus injury context",
+    "title": "Ezo Quarrington exits with injury, ruled out for Sunday",
+    "body": "",
+    "want_related": true
+  },
+  {
+    "name": "headline without the team name, coach plus context",
+    "title": "Mike Thistlewood praises rookie's practice squad performance",
+    "body": "",
+    "want_related": true
+  },
+  {
+    "name": "ambiguous team term alone is the animal, not related",
+    "title": "Isotopes spotted swimming near the coast",
+    "body": "",
+    "want_related": false
+  },
+  {
+    "name": "animal false positive from past traffic",
+    "title": "Local aquarium launches isotope watching program for tourists",
+    "body": "",
+    "want_related": false
+  },
+  {
+    "name": "rival mentioned incidentally, no Isotopes evidence",
+    "title": "Shelbyville Sharks clinch playoff berth after dominant win",
+    "body": "",
+    "want_related": false
+  },
+  {
+    "name": "local Springfield crime news false positive from past traffic",
+    "title": "Suspect arrested after Springfield County shooting",
+    "body": "",
+    "want_related": false
+  },
+  {
+    "name": "other sports false positive from past traffic",
+    "title": "Springfield Blaze post: NBA Finals rematch preview",
+    "body": "",
+    "want_related": false
+  },
+  {
+    "name": "official URL pattern alone is strong override, no team name needed",
+    "title": "Roster notes",
+    "body": "Full story at https://www.isotopes.example.com/news/roster-notes",
+    "want_related": true
+  },
+  {
+    "name": "former player alone does not reach positive_threshold_medium",
+    "title": "Dan Pellingham inducted into another hall of fame",
+    "body": "",
+    "want_related": false
+  },
+  {
+    "name": "rival player alone plus rival team name is not related",
+    "title": "Josh Wrenfield throws five touchdowns in Sharks rout",
+    "body": "",
+    "want_related": false
+  },
+  {
+    "name": "reporter alone plus generic NFL term is not related",
+    "title": "Adam Quorvale reports on league-wide trade deadline",
+    "body": "",
+    "want_related": false
+  },
+  {
+    "name": "four rival teams mentioned together with no Isotopes evidence is not related",
+    "title": "Sharks, Owls, Hornets, and Capitals",
+    "body": "",
+    "want_related": false
+  },
+  {
+    "name": "four rival teams mentioned by full name together with no Isotopes evidence is not related",
+    "title": "Shelbyville Sharks, Ogdenville Owls, North Haverbrook Hornets, and Capital City Capitals",
+    "body": "",
+    "want_related": false
+  },
+  {
+    "name": "NFC rival teams mentioned together with no Isotopes evidence is not related",
+    "title": "88ers, Ospreys, Rhinos, Foals, and Capitals",
+    "body": "",
+    "want_related": false
+  },
+  {
+    "name": "rival team mentioned alongside genuine Isotopes matchup context is still related",
+    "title": "Isotopes injury report ahead of Sunday's game against the Shelbyville Sharks",
+    "body": "",
+    "want_related": true
+  }
+]

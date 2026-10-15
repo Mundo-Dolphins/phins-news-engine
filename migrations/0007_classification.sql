@@ -1,0 +1,1 @@
+ALTER TABLE articles ADD COLUMN relevance_score REAL NOT NULL DEFAULT 0;

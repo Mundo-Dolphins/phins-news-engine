@@ -1,0 +1,82 @@
+# Synthetic clustering evaluation dataset (fictional teams, players and
+# example.* domains). Loaded by app/clustereval.LoadDataset and used as
+# the default dataset of `clustering evaluate` and `events gate`.
+#
+# Each group is one gold event: its articles are expected to land in the
+# same predicted cluster, and articles of different groups are expected
+# not to share one.
+groups:
+  - id: transaction-multi-source
+    representative: txn-1
+    articles:
+      - id: txn-1
+        title: "Springfield Isotopes sign linebacker Riley Stubbs to a two-year deal"
+        source_id: isotopes-official
+        source_type: rss
+        domain: isotopes.example.com
+        content_type: article
+        published_at: "2026-03-01T09:00:00Z"
+        is_primary_source: true
+      - id: txn-2
+        title: "Isotopes signed Riley Stubbs to a two-year deal, team confirmed"
+        source_id: example-sports-wire
+        source_type: rss
+        domain: news.example.org
+        content_type: article
+        published_at: "2026-03-01T10:00:00Z"
+      - id: txn-3
+        title: "Riley Stubbs signs two-year deal with the Isotopes"
+        source_id: example-fan-blog
+        source_type: rss
+        domain: blog.example.net
+        content_type: article
+        published_at: "2026-03-01T11:00:00Z"
+
+  - id: injury-update
+    representative: inj-1
+    articles:
+      - id: inj-1
+        title: "Isotopes receiver Casey Fixture injured, ankle sprain confirmed"
+        source_id: isotopes-official
+        source_type: rss
+        domain: isotopes.example.com
+        content_type: article
+        published_at: "2026-03-03T15:00:00Z"
+        is_primary_source: true
+      - id: inj-2
+        title: "Casey Fixture injured with an ankle sprain, Isotopes say"
+        source_id: example-sports-wire
+        source_type: rss
+        domain: news.example.org
+        content_type: article
+        published_at: "2026-03-03T16:30:00Z"
+
+  - id: game-recap
+    representative: game-1
+    articles:
+      - id: game-1
+        title: "Final score: Isotopes 27, Sharks 24 as Jordan Sample throws three touchdowns"
+        source_id: example-sports-wire
+        source_type: rss
+        domain: news.example.org
+        content_type: article
+        published_at: "2026-03-08T22:00:00Z"
+      - id: game-2
+        title: "Recap: Jordan Sample leads Isotopes past Sharks 27-24"
+        source_id: example-fan-blog
+        source_type: rss
+        domain: blog.example.net
+        content_type: article
+        published_at: "2026-03-08T23:00:00Z"
+
+  - id: draft-pick
+    representative: draft-1
+    articles:
+      - id: draft-1
+        title: "Isotopes general manager Taylor Ledger discusses the first draft pick"
+        source_id: isotopes-official
+        source_type: rss
+        domain: isotopes.example.com
+        content_type: article
+        published_at: "2026-04-20T18:00:00Z"
+        is_primary_source: true

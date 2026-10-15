@@ -1,0 +1,49 @@
+name: release
+
+# Publishes a patch release when main only contains unreleased Dependabot
+# commits. It runs on a schedule (and on demand) instead of on push because a
+# merge performed with GITHUB_TOKEN does not trigger push workflows.
+#
+# If any unreleased commit was written by a human, nothing is published: tag
+# those manually (or run this workflow after releasing).
+on:
+  schedule:
+    - cron: '17 7 * * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  patch-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Decide the next version
+        id: version
+        run: echo "next=$(.github/scripts/next-patch-release.sh)" >> "$GITHUB_OUTPUT"
+
+      - name: Create the release
+        if: steps.version.outputs.next != ''
+        run: |
+          gh release create "$VERSION" --target "$GITHUB_SHA" --title "$VERSION" --generate-notes
+        env:
+          VERSION: ${{ steps.version.outputs.next }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prime the Go module proxy
+        # Makes the new version visible to Dependabot in the repos that import this module.
+        if: steps.version.outputs.next != ''
+        run: |
+          module=$(awk '/^module /{print $2}' go.mod)
+          escaped=$(printf '%s' "$module" | sed -E 's/[A-Z]/!\L&/g')
+          curl -fsS --retry 5 --retry-delay 10 --retry-all-errors "https://proxy.golang.org/${escaped}/@v/${VERSION}.info" || echo "proxy not primed yet; it will pick the tag up on first use"
+        env:
+          VERSION: ${{ steps.version.outputs.next }}

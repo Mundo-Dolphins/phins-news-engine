@@ -1,0 +1,411 @@
+# Example settings for a fictional deployment that follows the
+# "Springfield Isotopes". Every host, handle and id is a placeholder.
+# Paths are relative to the repository root. Secrets (bot token, API keys)
+# never live here: they come from the environment.
+sqlite:
+  path: data/operational.db
+  busy_timeout_ms: 5000
+scheduler:
+  check_interval_minutes: 5
+  outbox_interval_minutes: 1
+  cleanup_interval_hours: 24
+http:
+  timeout_seconds: 10
+  max_response_bytes: 2097152
+  # Feed URLs on loopback/private networks are refused unless this is true.
+  allow_private_hosts: false
+scraping_service:
+  enabled: false
+  base_url: "http://localhost:9090/"
+  timeout_seconds: 30
+  max_retries: 2
+  backoff_base_ms: 500
+  backoff_max_ms: 5000
+  response_limit_bytes: 10485760
+  default_mode: auto
+  default_cache_ttl_seconds: 900
+  concurrency:
+    global: 4
+    per_domain: 1
+  circuit_breaker:
+    failure_threshold: 5
+    cooldown_seconds: 60
+    half_open_max_probes: 1
+  domains:
+    news.example.org:
+      mode: auto
+      cache_ttl_seconds: 1800
+      concurrency: 1
+fetch:
+  global_concurrency: 6
+  fan_in_buffer: 64
+  sources_path: configs/example/sources.yml
+fetch_sources:
+  website:
+    enabled: false
+    on_missing_dependency: ""
+  rss:
+    enabled: true
+    on_missing_dependency: ""
+  reddit:
+    enabled: true
+    on_missing_dependency: ""
+  bluesky:
+    enabled: true
+    on_missing_dependency: ""
+  twitter:
+    enabled: false
+    on_missing_dependency: ""
+  instagram:
+    enabled: false
+    on_missing_dependency: ""
+  youtube:
+    enabled: false
+    on_missing_dependency: ""
+source_policy:
+  path: configs/example/source-policies.yml
+classification:
+  enabled: true
+  trusted_source_ids:
+    - rss:isotopes-official
+  context_source_ids:
+    - rss:example-sports-wire
+normalization:
+  url:
+    tracking_params: [utm_source, utm_medium, utm_campaign, utm_term, utm_content, fbclid, gclid, ref]
+    domain_ignored_params: {}
+    strip_default_ports: true
+    trailing_slash: strip
+    known_link_resolvers: [youtube]
+  text:
+    strip_emojis: true
+    strip_hashtags: true
+    strip_mentions: true
+    strip_inline_urls: true
+    repeated_prefix_patterns: ['^\s*\[[^\]]*\]\s*']
+    boilerplate_phrases:
+      - "Subscribe to our newsletter"
+      - "Follow us for more"
+    shingle_size: 3
+    min_token_length: 3
+    stop_words: [the, and, with, for, from, that, this, into, over, after, before]
+deduplication:
+  near_duplicate:
+    enabled: true
+    method: jaccard
+    default_threshold: 0.82
+    threshold_by_source_type: {rss: 0.85}
+    short_text_max_tokens: 8
+    short_text_threshold: 0.90
+    window_hours: 72
+    max_candidates: 50
+    min_shared_terms: 2
+    fields_used: [title]
+    content_type_exceptions: [video]
+    attribute_combo_window_minutes: 2
+    rules_version: dedup-rules-v1
+clustering:
+  enabled: true
+  event_threshold: 0.55
+  rules_path: configs/example/event_clustering_rules.yml
+  rules_version: ""
+  generated_rules_path: ""
+  entity_catalog:
+    manual_path: configs/example/entity_catalog_manual.yml
+    generated_path: configs/example/entity_catalog_generated.yml
+    league:
+      mode: off
+      roster_path: data/league_roster.csv
+      rules_path: configs/example/league_alias_rules.yml
+      max_age_days: 14
+  candidate_limit: 50
+editorial:
+  mode: shadow
+  ambiguous_policy: reject
+  veto_path: configs/example/editorial_vetoes.yml
+  model_bypass_source_ids:
+    - rss:isotopes-official
+  unconditional_publish_source_ids:
+    - rss:isotopes-official
+freshness:
+  hard_news_hours: 72
+  social_hours: 6
+  analysis_hours: 168
+  default_hours: 72
+telegram:
+  # Placeholder id: replace it with your channel id. The production
+  # profile rejects this value on purpose.
+  channel_id: "-1000000000000"
+  timeout_seconds: 10
+  session_path: telegram_session.json
+publication_policy:
+  burst:
+    max_per_window: 10
+    window_minutes: 15
+  same_topic:
+    max_per_window: 10
+    window_minutes: 60
+    exempt_entities:
+      - Springfield Isotopes
+  quiet_hours:
+    enabled: false
+    start_hour: 2
+    end_hour: 6
+  live:
+    enabled: true
+    ttl_minutes: 30
+    source_allowlist:
+      - rss:isotopes-official
+      - rss:example-sports-wire
+    milestones: [kickoff, q1, q2, halftime, q3, q4]
+    burst:
+      max_per_window: 0
+      window_minutes: 1
+    same_topic:
+      max_per_window: 0
+      window_minutes: 1
+      exempt_entities: []
+    quiet_hours:
+      enabled: false
+      start_hour: 2
+      end_hour: 6
+espn_scoreboard:
+  enabled: false
+  team_abbreviation: spr
+  request_timeout_seconds: 5
+  user_agent: "phins-news-engine/1.0"
+publication:
+  max_attempts: 6
+  base_backoff_seconds: 30
+  max_backoff_seconds: 1800
+  claim_batch_size: 100
+  stale_claim_after_minutes: 10
+  reconciliation:
+    enabled: true
+    channel_history_limit: 200
+    clock_skew_seconds: 120
+    batch_size: 20
+  backlog:
+    pending_warning: 25
+    pending_critical: 50
+    age_warning_minutes: 60
+    age_critical_minutes: 120
+    lag_p95_warning_minutes: 180
+    lag_p95_critical_minutes: 360
+retention:
+  rejected_articles_days: 14
+  duplicates_days: 7
+  audit_events_days: 30
+  publication_attempts_days: 30
+  clusters_days: 14
+cluster_lifecycle:
+  close_after_hours: 96
+  batch_size: 200
+  max_batches_per_run: 50
+  time_budget_seconds: 30
+  close_reason: "inactivity_ttl"
+seen_items:
+  reclaim_after_minutes: 10
+model:
+  path: models/editorial/current
+  version: ""
+dictionary:
+  path: configs/example/example_dictionary.yml
+  version: ""
+dictionary_mining:
+  path: configs/example/dictionary_mining.yml
+editorial_cycle:
+  sample_size: 50
+  pool_limit: 500
+  ambiguous_cooldown_days: 14
+editorial_gates:
+  min_precision: 0.7
+  max_recall_regression: 0.05
+  min_regression_baseline_examples: 500
+  min_prauc: 0.5
+  max_false_positive_rate: 0.15
+  min_per_source_precision: 0.6
+  min_source_examples: 5
+  excluded_sources: []
+  max_artifact_size_bytes: 1048576
+  max_inference_nanos: 1000000
+editorial_costs:
+  false_publish_cost: 3
+  missed_news_cost: 1
+editorial_rollout:
+  shadow_min_days: 14
+  shadow_min_articles: 200
+  canary_percent: 10
+  canary_min_days: 7
+  canary_min_articles: 100
+  canary_max_false_positive_rate: 0.05
+  canary_min_precision: 0.85
+remote:
+  sqlite_remote_db_hint: "~/news-engine/data/operational.db"
+  retention_days: 7
+dictionary_update:
+  enabled: false
+  transport: direct
+  allowed_domains:
+    - isotopes.example.com
+  sources:
+    roster:
+      url: https://isotopes.example.com/team/roster/
+      mode: auto
+      selectors:
+        player_card: "table.roster tbody tr"
+        name: ".player-name a"
+        number: "td:nth-of-type(2)"
+        position: "td:nth-of-type(3)"
+        status_section_header: "h4.roster-title"
+    coaches:
+      url: https://isotopes.example.com/team/coaches/
+      mode: auto
+      selectors:
+        staff_card: ".staff-card"
+        name: ".staff-card__name"
+        role: ".staff-card__role"
+        group_header: "h2.section-title"
+    front_office:
+      url: https://isotopes.example.com/team/front-office/
+      mode: auto
+      relevant_sections:
+        - Executives
+      selectors:
+        staff_card: ".staff-card"
+        name: ".staff-card__name"
+        role: ".staff-card__role"
+        group_header: "h2.section-title"
+  deactivation_policy:
+    minimum_successful_absences: 2
+    minimum_elapsed_days: 3
+  plausibility:
+    roster:
+      minimum_entities: 40
+      maximum_entities: 130
+      maximum_missing_ratio: 0.30
+    coaching_staff:
+      minimum_entities: 10
+      maximum_entities: 40
+    front_office:
+      minimum_entities: 5
+      maximum_entities: 60
+entity_discovery:
+  enabled: false
+  extractor_version: entity-discovery-v1
+  batch_size: 3
+  limit: 30
+  llm:
+    base_url: http://localhost:8000/v1
+    model: example-local-model
+    temperature: 0
+    timeout_seconds: 300
+    max_tokens: 2048
+    disable_thinking: true
+  wikidata:
+    enabled: true
+    base_url: https://www.wikidata.org/w/api.php
+    language: en
+    max_candidates: 5
+    timeout_seconds: 10
+    max_concurrency: 1
+    positive_cache_ttl: 720h
+    negative_cache_ttl: 24h
+    cache_retention: 720h
+    allow_stale_on_error: true
+    user_agent: "example-news-engine/0.1 (https://example.com/contact)"
+    properties: []
+    # Loopback/private base_url (a local mirror) is refused unless true.
+    allow_private_hosts: false
+  roster:
+    enabled: false
+    path: data/league_roster.csv
+    max_age_days: 7
+    url: ""
+  league:
+    enabled: true
+    rules_path: configs/example/league_alias_rules.yml
+    chooser:
+      enabled: true
+      max_candidates: 8
+      max_articles: 3
+  verification:
+    wikidata_first: true
+    fallback: true
+entity_extraction:
+  fallback:
+    enabled: false
+    provider: openai_compatible
+    base_url: https://llm.example.com/v1
+    model: example-small-model
+    temperature: 0
+    timeout_seconds: 10
+    max_tokens: 200
+    min_confidence: 0.7
+    max_candidates_per_article: 5
+catalog_maintenance:
+  web_lookup:
+    enabled: true
+    provider: searxng
+    base_url: http://localhost:8081/search
+    timeout_seconds: 10
+    max_searches_per_candidate: 2
+    max_results_per_search: 5
+    max_searches_per_run: 200
+    min_search_interval_ms: 1500
+    max_consecutive_provider_failures: 3
+    engine_groups: ["engine-a", "engine-b,engine-c"]
+    cache_ttl: 168h
+    fallback:
+      provider: "tavily"
+      base_url: https://search.example.com/search
+      max_searches_per_run: 100
+    trusted_domains:
+      - isotopes.example.com
+      - news.example.org
+offline_training:
+  llm:
+    auto_label_threshold: 0.95
+    base_url: http://localhost:8000/v1
+    model: example-local-model
+    temperature: 0
+    timeout_seconds: 180
+    batch_size: 20
+    limit: 500
+    max_tokens: 4096
+    disable_thinking: true
+  promotion:
+    min_precision: 0.85
+    max_precision_drop: 0.02
+    min_f1_improvement: 0
+  retrain_triggers:
+    auto_enabled: false
+    min_new_gold_examples: 0
+    min_new_silver_examples: 0
+    max_disagreement_rate: 0
+    max_manual_error_rate: 0
+    novel_vocabulary_threshold: 0
+    min_hard_example_count: 0
+  mining:
+    batch_limit: 0
+    min_nb_confidence: 0.8
+  model_training:
+    threshold_max_false_positive_rate: 0.12
+    stratify_split_by_label: true
+    relevant_only: true
+    binary_features: true
+    silver_weight: 0.6
+  review_scoring:
+    weights:
+      disagreement: 1.0
+      nb_uncertainty: 0.7
+      llm_uncertainty: 0.7
+      novel_vocabulary: 0.5
+      unknown_entities: 0.5
+      new_source: 0.3
+      recency: 0.2
+      hard_mining: 0
+    llm_confidence_auto_label_threshold: 0.9
+    llm_confidence_uncertain_threshold: 0.5
+    new_source_window_hours: 72
+    recency_window_hours: 24

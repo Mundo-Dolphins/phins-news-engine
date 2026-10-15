@@ -1,0 +1,13 @@
+-- migrations/0027_source_policy_decisions_cooldown_outcome.sql
+--
+-- Adds source_policy_decisions.cooldown_outcome, the differentiated field
+-- separating shadow-mode telemetry from real cooldown enforcement (issue
+-- #166). would_publish_special stays exactly what it always was — the
+-- pure, unconditional output of sourcepolicy.Decide, recorded in every
+-- mode, never read by any gating logic. cooldown_outcome instead records
+-- what the reservation layer (source_policy_cooldowns, migration 0028)
+-- actually did with that verdict: '' for a row where no cooldown
+-- decision applies, or one of 'shadow' / 'reserved' / 'forced' /
+-- 'blocked_by_cooldown' — see domain/sourcepolicy/cooldown.go's
+-- ReservationOutcome.
+ALTER TABLE source_policy_decisions ADD COLUMN cooldown_outcome TEXT NOT NULL DEFAULT '';

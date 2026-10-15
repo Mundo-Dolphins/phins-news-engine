@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  # Branches with an open PR are covered by pull_request; push only checks
+  # main so each commit runs CI once.
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+# A newer commit on the same PR or branch cancels the run in progress.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # The job name is the required status check of the main-branch ruleset.
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Public boundary check
+        # Fails if a private adapter, private wiring package, real team
+        # name, private deployment detail, private design-document
+        # reference or personal e-mail address reaches the public tree. The org
+        # name in the module path is the only allowed match. ("dolphin" and
+        # "miami" also cover the team's site name; owner identifiers are
+        # matched through the e-mail pattern so they are not published here.)
+        run: |
+          pattern='outbound/(website|instagram|twitter|scrapingservice|directhttp)|privatewiring|privatecmd|rpi|raspberry|docs/superpowers|sync-rpi|deploy-unified|dolphin|miami|[a-z0-9._%+-]+@(gmail|googlemail|hotmail|outlook|yahoo|icloud)\.com'
+          hits=$(git grep -nIiE "$pattern" -- . \
+              ':!.github' ':!NOTICE' ':!SECURITY.md' ':!docs/EXTRACTION-NOTES.md' ':!tools' \
+            | perl -pe 's/mundo-dolphins//gi; s/phins-news-engine//gi' \
+            | grep -iE "$pattern" || true)
+          if [ -n "$hits" ]; then
+            echo "::error::private names found in the public tree"
+            echo "$hits"
+            exit 1
+          fi
+
+      - name: Test release script
+        run: .github/scripts/test-next-patch-release.sh
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.14.0
+
+      - name: Test (race, coverage threshold)
+        run: make cover
+
+      - name: Docs check
+        run: make docs-check
+
+      - name: Validate example config
+        run: make validate-config
+
+      - name: Consumer smoke test
+        # Builds a throwaway host module that requires this library through
+        # a replace directive: catches internal/ paths and other leaks that
+        # make the module unusable from outside.
+        run: tools/smoke/consumer.sh

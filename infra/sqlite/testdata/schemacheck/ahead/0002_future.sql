@@ -1,0 +1,1 @@
+CREATE TABLE future_b (id INTEGER PRIMARY KEY);

@@ -1,0 +1,35 @@
+# GENERATED FILE — DO NOT EDIT BY HAND.
+# Example output of `entities generate` for the fictional Springfield
+# Isotopes roster in example_dictionary.yml.
+
+entities:
+  - id: jordan-sample
+    canonical_name: Jordan Sample
+    kind: player
+    terms: [Jordan Sample, Sample]
+    is_primary_team: false
+    position: QB
+  - id: casey-fixture
+    canonical_name: Casey Fixture
+    kind: player
+    terms: [Casey Fixture, Fixture]
+    is_primary_team: false
+    position: WR
+  - id: riley-stubbs
+    canonical_name: Riley Stubbs
+    kind: player
+    terms: [Riley Stubbs, Stubbs]
+    is_primary_team: false
+    position: LB
+  - id: morgan-mockley
+    canonical_name: Morgan Mockley
+    kind: coach
+    terms: [Morgan Mockley]
+    is_primary_team: false
+    position: ""
+  - id: taylor-ledger
+    canonical_name: Taylor Ledger
+    kind: executive
+    terms: [Taylor Ledger]
+    is_primary_team: false
+    position: ""

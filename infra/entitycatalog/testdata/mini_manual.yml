@@ -1,0 +1,6 @@
+entities:
+  - id: springfield-isotopes
+    canonical_name: "Springfield Isotopes"
+    kind: team
+    terms: ["Springfield Isotopes", "Isotopes"]
+    is_primary_team: true

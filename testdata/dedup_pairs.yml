@@ -1,0 +1,18 @@
+# Synthetic dedup evaluation pairs (fictional teams and players).
+# Loaded by app/dedupeval.LoadDataset; default dataset of `dedup evaluate`.
+pairs:
+  - a: {title: "Isotopes Beat Sharks 27-24 Behind Three Jordan Sample Touchdowns", source_type: rss, content_type: article, canonical_url: "https://news.example.org/a1", published_at: "2026-03-08T22:00:00Z"}
+    b: {title: "Isotopes Beat Sharks 27-24 Behind Three Jordan Sample Touchdowns", source_type: rss, content_type: article, canonical_url: "https://blog.example.net/b1", published_at: "2026-03-08T22:10:00Z"}
+    label: same_content
+  - a: {title: "Isotopes Sign Linebacker Riley Stubbs To Two-Year Deal", source_type: rss, content_type: article, canonical_url: "https://isotopes.example.com/a2", published_at: "2026-03-01T09:00:00Z"}
+    b: {title: "Riley Stubbs Agrees To Two-Year Contract With Springfield", source_type: rss, content_type: article, canonical_url: "https://news.example.org/b2", published_at: "2026-03-01T10:00:00Z"}
+    label: same_event
+  - a: {title: "Isotopes Sign Linebacker Riley Stubbs To Two-Year Deal", source_type: rss, content_type: article, canonical_url: "https://isotopes.example.com/a3", published_at: "2026-03-01T09:00:00Z"}
+    b: {title: "Casey Fixture Misses Practice With Ankle Sprain", source_type: rss, content_type: article, canonical_url: "https://news.example.org/b3", published_at: "2026-03-03T15:00:00Z"}
+    label: different
+  - a: {title: "Morgan Mockley Press Conference Recap After Sharks Win", source_type: rss, content_type: article, canonical_url: "https://blog.example.net/a4", published_at: "2026-03-09T12:00:00Z"}
+    b: {title: "Morgan Mockley Press Conference Recap After Sharks Win", source_type: twitter, content_type: social_post, canonical_url: "https://social.example.com/b4", published_at: "2026-03-09T12:05:00Z"}
+    label: same_content
+  - a: {title: "Isotopes Linked To Veteran Receiver Before Deadline", source_type: rss, content_type: article, canonical_url: "https://news.example.org/a5", published_at: "2026-03-10T08:00:00Z"}
+    b: {title: "Isotopes Expected To Add Receiver Depth This Week", source_type: rss, content_type: article, canonical_url: "https://blog.example.net/b5", published_at: "2026-03-10T09:00:00Z"}
+    label: ambiguous

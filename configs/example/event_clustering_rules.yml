@@ -1,0 +1,134 @@
+# Example event-clustering rules for the fictional "Springfield Isotopes"
+# deployment. Every domain is under example.com / example.org. Copy this
+# file and tune it for a real deployment.
+meta:
+  version: "0.1.0-example"
+  name: example_event_clustering_rules
+  generated_at: "2026-10-01"
+
+# Phrases rewritten to a canonical action term before action matching.
+synonyms:
+  - phrase: "agrees to a deal"
+    canonical: "sign"
+  - phrase: "multi-year extension"
+    canonical: "extend"
+  - phrase: "did not report"
+    canonical: "practice"
+
+event_rules:
+  action_terms:
+    sign: ["sign", "signs", "signed", "agreed to terms"]
+    release: ["release", "released", "releases", "cut", "cuts"]
+    trade: ["trade", "traded", "trades"]
+    waive: ["waive", "waived", "waives"]
+    claim: ["claimed off waivers", "claims off waivers"]
+    extend: ["extend", "extends", "extended", "extension"]
+    injured-reserve: ["placed on injured reserve", "goes to injured reserve"]
+    injure: ["injured", "injury", "torn", "sprained"]
+    practice-squad: ["practice squad"]
+    promotion: ["promoted to the active roster"]
+    demotion: ["moved to the practice squad"]
+    contract: ["contract situation", "new contract terms"]
+    game-status: ["questionable", "doubtful", "ruled out"]
+    depth-chart: ["depth chart", "starting lineup"]
+    roster: ["final roster", "roster cuts"]
+    tryout: ["tryout"]
+    return: ["returns to practice", "returned to practice", "back at practice"]
+    practice: ["practice", "practices", "practiced", "limited practice", "dnp"]
+    activate: ["activated", "activates"]
+    draft: ["drafted", "drafts", "draft pick"]
+    preview: ["preview", "previews", "how to watch"]
+    result: ["final score", "recap", "postgame"]
+    quote: ["said", "says", "told reporters", "press conference"]
+    report: ["reportedly", "sources say", "is expected to"]
+    confirm: ["confirmed", "confirms", "officially"]
+    correct: ["correction", "clarification", "walks back"]
+  content_cues:
+    rumor: ["reportedly", "expected to", "linked to"]
+    confirmation: ["confirmed", "makes it official"]
+    correction: ["correction:", "walks back"]
+    analysis: ["analysis", "breakdown", "takeaways"]
+    reaction: ["reacts", "fans react"]
+    quote: ["said", "told reporters", "press conference"]
+  date_window_policy:
+    default_window: "24h"
+
+temporal_windows:
+  transaction: "48h"
+  injury: "72h"
+  draft: "240h"
+  game: "24h"
+  practice: "24h"
+  quote: "12h"
+  rumor: "24h"
+  confirmation: "24h"
+  correction: "24h"
+  analysis: "48h"
+  reaction: "12h"
+
+thresholds:
+  join_threshold: 0.72
+  join_margin: 0.08
+  ambiguous_low: 0.45
+  ambiguous_high: 0.60
+  substantial_update_threshold: 0.55
+  representative_switch_margin: 0.10
+
+weights:
+  entity_match: 0.35
+  action_match: 0.20
+  event_type_match: 0.15
+  opponent_match: 0.10
+  date_window_match: 0.05
+  source_priority: 0.10
+  novelty: 0.05
+  primary_source: 0.30
+  completeness: 0.20
+  clickbait_penalty: -0.15
+
+domain_priorities:
+  isotopes.example.com: 100
+  news.example.org: 80
+  blog.example.net: 50
+
+content_type_rules:
+  hard_news:
+    window_hours: 24
+    publish_limit: 1
+    allow_updates: true
+  social_posts:
+    window_hours: 6
+    publish_limit: 0
+    allow_updates: false
+  videos:
+    window_hours: 48
+    publish_limit: 1
+    allow_updates: false
+  analysis:
+    window_hours: 24
+    publish_limit: 1
+    allow_updates: false
+  reactions:
+    window_hours: 6
+    publish_limit: 0
+    allow_updates: false
+
+field_weights:
+  title: 1.0
+  description: 0.7
+  body: 0.3
+
+topic_groups:
+  transaction: [sign, release, trade, waive, claim, extend, contract, "practice-squad", promotion, demotion, roster, "injured-reserve"]
+  injury: [injure, "injured-reserve", return, activate, "game-status"]
+  draft: [draft]
+  practice: [practice, tryout]
+
+injury_types:
+  knee: ["knee", "knee injury"]
+  ankle: ["ankle", "ankle sprain"]
+  hamstring: ["hamstring", "hamstring strain"]
+
+unknown_entity_stoplist:
+  - "Example Bowl"
+  - "All Star Game"

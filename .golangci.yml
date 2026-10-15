@@ -1,0 +1,27 @@
+version: "2"
+linters:
+  # Default set (standard) is used and includes staticcheck; PR CI relies on
+  # it instead of a standalone `make staticcheck` run. Do not disable it.
+  default: standard
+  settings:
+    errcheck:
+      check-type-assertions: true
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - vendor
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

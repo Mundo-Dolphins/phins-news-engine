@@ -1,0 +1,114 @@
+# Example classification dictionary for the fictional Springfield Isotopes.
+# Every name below is invented. The relevance classifier scores an article
+# by the weighted categories whose terms it mentions.
+meta:
+  version: "0.1.0"
+  name: example_dictionary
+  language: en
+  generated_at: "2026-10-01"
+
+decision:
+  positive_threshold_high: 10
+  positive_threshold_medium: 6
+  negative_threshold_high: 0
+  title_weight_multiplier: 2
+  max_count_per_term: 3
+
+categories:
+  official_names:
+    weight: 12
+    strong_override: true
+    entries:
+      - canonical_name: "Springfield Isotopes"
+        type: official_name
+        source: manual
+        confidence: 1.0
+  hashtags:
+    weight: 12
+    strong_override: true
+    entries:
+      - canonical_name: "#GoTopes"
+        type: hashtag
+        source: manual
+        confidence: 1.0
+  ambiguous_team_terms:
+    weight: 4
+    requires_any_of: [nfl_context_terms, active_roster_core, coaching_staff]
+    entries:
+      - canonical_name: "isotopes"
+        aliases: ["topes"]
+        type: ambiguous_term
+        source: manual
+        confidence: 0.8
+  venue:
+    weight: 6
+    entries:
+      - canonical_name: "Example Stadium"
+        type: venue
+        source: manual
+        confidence: 0.9
+  active_roster_core:
+    weight: 8
+    entries:
+      - canonical_name: "Jordan Sample"
+        type: person
+        source: manual
+        roster_status: active
+        position: QB
+        number: "7"
+        confidence: 0.9
+      - canonical_name: "Casey Fixture"
+        type: person
+        source: manual
+        roster_status: active
+        position: WR
+        number: "11"
+        confidence: 0.9
+      - canonical_name: "Riley Stubbs"
+        type: person
+        source: manual
+        roster_status: active
+        position: LB
+        number: "52"
+        confidence: 0.9
+  coaching_staff:
+    weight: 6
+    entries:
+      - canonical_name: "Morgan Mockley"
+        type: coach
+        source: manual
+        role: "Head Coach"
+        confidence: 0.9
+  front_office:
+    weight: 5
+    entries:
+      - canonical_name: "Taylor Ledger"
+        type: front_office
+        source: manual
+        role: "General Manager"
+        confidence: 0.9
+  rivals:
+    weight: 1
+    entries:
+      - canonical_name: "Shelbyville Sharks"
+        type: rival
+        source: manual
+        confidence: 0.7
+  nfl_context_terms:
+    weight: 3
+    entries:
+      - canonical_name: "touchdown"
+        type: nfl_context
+        source: manual
+        confidence: 0.6
+      - canonical_name: "quarterback"
+        type: nfl_context
+        source: manual
+        confidence: 0.6
+  negative_other_sports_terms:
+    weight: -12
+    entries:
+      - canonical_name: "baseball"
+        type: negative
+        source: manual
+        confidence: 0.9

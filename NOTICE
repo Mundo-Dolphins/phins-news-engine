@@ -1,0 +1,45 @@
+phins-news-engine
+Copyright (c) 2026 Mundo-Dolphins. Licensed under the MIT License (see LICENSE).
+
+What this library does not ship
+-------------------------------
+
+* No scrapers. The library has no code that downloads or parses the HTML of
+  third-party websites, and no headless browsers or scraping proxies. Hosts
+  that need one implement the out.Scraper port themselves.
+* No data. It contains no real articles, sources, dictionaries, entity
+  catalogs, rosters, trained models or datasets. Every fixture and example
+  file is synthetic: fictional teams and people, example.com hosts.
+* No credentials. API keys, bot tokens and session files are supplied by the
+  host program at run time and never stored in this repository.
+
+Whoever runs the engine chooses its sources and is responsible for having
+the right to fetch, process and republish their content.
+
+Third-party data and services
+-----------------------------
+
+* nflverse roster data. The roster sync (packages infra/nflverse and
+  infra/nflverse/rostersync, command "entities roster sync") downloads roster
+  files published by the nflverse project
+  (https://github.com/nflverse/nflverse-data). That data is licensed under
+  the Creative Commons Attribution 4.0 International licence (CC BY 4.0,
+  https://creativecommons.org/licenses/by/4.0/). Credit the nflverse project
+  when you redistribute data derived from it. No roster data is included in
+  this repository.
+* ESPN scoreboard. The match-state adapter (adapters/outbound/espnscoreboard)
+  reads a public scoreboard JSON endpoint that is undocumented and
+  unofficial. It may change, be rate limited or be restricted at any time
+  without notice. It is disabled by default; enabling it is at your own risk,
+  and you must respect the provider's terms of use.
+* Reddit, Bluesky, YouTube, Telegram, Wikidata, SearXNG and Tavily are
+  reached through their public or official APIs and are subject to their own
+  terms of service and rate limits. Wikidata content is CC0.
+
+Trademarks
+----------
+
+NFL, ESPN, nflverse, Reddit, Bluesky, YouTube, Telegram, Wikidata, Tavily
+and any other name mentioned belong to their respective owners. This project
+is not affiliated with, endorsed by or sponsored by any of them; the names
+are used only to describe what the software works with.

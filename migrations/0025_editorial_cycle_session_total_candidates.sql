@@ -1,0 +1,32 @@
+-- migrations/0025_editorial_cycle_session_total_candidates.sql
+--
+-- Records how many candidates a session froze at creation.
+--
+-- Migration 0024's editorial_cycle_session_candidates.article_id is
+-- ON DELETE CASCADE, so a purged article's frozen-set row is deleted
+-- outright rather than left orphaned. That makes the table itself
+-- useless as a drift baseline: ListFrozen and CountResolvable read the
+-- same surviving rows and can never disagree, so "the frozen set shrank
+-- while the session was paused" (design spec §6.3) and "the frozen set
+-- became entirely un-reviewable" (§4.3, transition 9) are both
+-- undetectable from the candidate table alone.
+--
+-- total_candidates is that missing baseline: written once, when
+-- editorialcycle.StartOrResume creates the session (or, for a legacy
+-- session with no recorded frozen set, when its one-time best-effort
+-- backfill runs), and never updated afterwards. Drift is then
+-- COUNT(resolvable rows) < total_candidates, and transition 9 fires on
+-- total_candidates > 0 AND COUNT(resolvable rows) = 0.
+--
+-- Compatibility: purely additive, and the DEFAULT 0 is meaningful for
+-- pre-0025 rows — a session created before this column existed has no
+-- recorded baseline, which is exactly the "unknown, do not report drift,
+-- do not cancel" case total_candidates = 0 denotes. Such a session is
+-- also the one whose frozen set is backfilled on first resume, which
+-- repairs total_candidates at the same time.
+--
+-- Rollback: ALTER TABLE editorial_cycle_sessions DROP COLUMN
+-- total_candidates (SQLite 3.35+), or rebuild the table without it the
+-- way migration 0024 rebuilds it. No other table references this column.
+
+ALTER TABLE editorial_cycle_sessions ADD COLUMN total_candidates INTEGER NOT NULL DEFAULT 0;

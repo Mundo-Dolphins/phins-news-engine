@@ -1,0 +1,33 @@
+meta:
+  version: "1.0.0"
+  name: test_dictionary
+  language: en
+  generated_at: "2026-07-01"
+
+decision:
+  positive_threshold_high: 10
+  positive_threshold_medium: 6
+  negative_threshold_high: 0
+  title_weight_multiplier: 2
+  max_count_per_term: 3
+
+categories:
+  official_names:
+    weight: 12
+    strong_override: true
+    entries:
+      - canonical_name: "Springfield Isotopes"
+        type: official_name
+        source: manual
+        confidence: 1.0
+        updated_at: "2026-07-01"
+  ambiguous_team_terms:
+    weight: 4
+    requires_any_of: [official_names]
+    entries:
+      - canonical_name: "isotopes"
+        aliases: ["topes", "isos"]
+        type: ambiguous_term
+        source: manual
+        confidence: 0.8
+        active_since: "2020-01-01"

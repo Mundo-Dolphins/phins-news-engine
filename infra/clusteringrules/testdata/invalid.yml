@@ -1,0 +1,59 @@
+# Deliberately invalid fixture: "agrees to a deal" is listed twice as a
+# synonym phrase (case-insensitive, mapped to two different canonical
+# tokens). Load must reject this rather than silently pick one.
+meta:
+  version: "1.0.0-test"
+  name: test_clustering_rules_invalid
+  generated_at: "2026-07-24"
+
+synonyms:
+  - phrase: "agrees to a deal"
+    canonical: "sign"
+  - phrase: "Agrees To A Deal"
+    canonical: "confirm"
+
+event_rules:
+  action_terms:
+    sign: ["sign"]
+  content_cues:
+    rumor: ["reportedly"]
+  date_window_policy:
+    default_window: "24h"
+
+field_weights:
+  title: 1.0
+  description: 0.7
+  body: 0.3
+
+topic_groups: {}
+
+temporal_windows: {}
+
+thresholds:
+  join_threshold: 0.72
+  join_margin: 0.08
+  ambiguous_low: 0.45
+  ambiguous_high: 0.60
+  substantial_update_threshold: 0.55
+  representative_switch_margin: 0.10
+
+weights:
+  entity_match: 0.35
+  action_match: 0.20
+  event_type_match: 0.15
+  opponent_match: 0.10
+  date_window_match: 0.05
+  source_priority: 0.10
+  novelty: 0.05
+  primary_source: 0.30
+  completeness: 0.20
+  clickbait_penalty: -0.15
+
+domain_priorities:
+  news.example.org: 85
+
+content_type_rules:
+  hard_news:
+    window_hours: 24
+    publish_limit: 1
+    allow_updates: true

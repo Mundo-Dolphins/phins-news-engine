@@ -1,0 +1,13 @@
+# Example league alias rules for a fictional six-team league. The league
+# gazetteer resolves team mentions against this closed set.
+noise_min_letters: 3
+common_words: [all, good, best, free, nice]
+undecided_terms: [league, example league]
+teams:
+  - {abbr: SPR, name: Springfield Isotopes, aliases: [isotopes, topes], upper_abbrs: [SPR, SPF]}
+  - {abbr: SHE, name: Shelbyville Sharks, aliases: [sharks], upper_abbrs: [SHE, SHV]}
+  - {abbr: CAP, name: Capital City Capitals, aliases: [capitals, caps], upper_abbrs: [CAP]}
+  - {abbr: OGD, name: Ogdenville Owls, aliases: [owls], upper_abbrs: [OGD]}
+  - {abbr: NH, name: North Haverbrook Hornets, aliases: [hornets], upper_abbrs: [NH, NHV]}
+  - {abbr: BRK, name: Brockway Badgers, aliases: [badgers], upper_abbrs: [BRK]}
+corrections: []

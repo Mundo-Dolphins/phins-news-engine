@@ -1,0 +1,28 @@
+meta:
+  version: "2.1.0"
+  name: isotopes
+  language: en
+  generated_at: "2026-08-01"
+  schema_version: 2
+  checksum: "deadbeef"
+  sources: ["roster", "coaches"]
+  snapshot_ref: "fetched-20260801-090000.json"
+  change_count: 3
+  tool: "example-tools dictionary update"
+decision:
+  positive_threshold_high: 5
+  positive_threshold_medium: 2
+  negative_threshold_high: -3
+  title_weight_multiplier: 2
+  max_count_per_term: 3
+categories:
+  active_roster_core:
+    weight: 1
+    entries:
+      - canonical_name: "Jordan Sample"
+        type: person
+        roster_status: active
+        role: "Quarterback"
+        position: "QB"
+        number: "1"
+        confidence: 0.9

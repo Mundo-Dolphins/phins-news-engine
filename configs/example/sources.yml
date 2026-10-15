@@ -1,0 +1,59 @@
+# Example content-source catalog. Only public, generic feed types are
+# shown (RSS, Reddit, Bluesky). Every name, URL and handle is fictional.
+websites: []
+
+rss_feeds:
+  - name: "isotopes-official"
+    url: "https://isotopes.example.com/news/feed.xml"
+    source_type: hard_news
+    interval_minutes: 10
+    max_items_per_cycle: 20
+    max_age_hours: 72
+    blocked_keywords: []
+    required_keywords: []
+    blocked_authors: []
+    enabled: true
+  - name: "example-sports-wire"
+    url: "https://news.example.org/teams/springfield/rss"
+    source_type: hard_news
+    interval_minutes: 15
+    max_items_per_cycle: 20
+    max_age_hours: 72
+    blocked_keywords: ["sponsored"]
+    required_keywords: []
+    blocked_authors: []
+    enabled: true
+  - name: "example-fan-blog"
+    url: "https://blog.example.net/feed"
+    source_type: analysis
+    interval_minutes: 30
+    max_items_per_cycle: 10
+    max_age_hours: 168
+    blocked_keywords: []
+    required_keywords: ["isotopes"]
+    blocked_authors: []
+    enabled: false
+
+reddit:
+  feeds:
+    - subreddit: example_isotopes_fanclub_placeholder
+      mode: new
+      source_type: social
+      interval_minutes: 15
+      max_items_per_cycle: 25
+      max_age_hours: 24
+      enabled: false
+
+bluesky:
+  accounts:
+    - handle: isotopes.example.com
+      name: "Springfield Isotopes"
+      source_type: social
+      interval_minutes: 10
+      max_items_per_cycle: 20
+      max_age_hours: 24
+      blocked_urls: []
+      blocked_keywords: []
+      skip_authors: []
+      enabled: false
+  feeds: []

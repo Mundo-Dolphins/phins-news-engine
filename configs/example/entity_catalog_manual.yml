@@ -1,0 +1,45 @@
+# Example hand-maintained entity catalog for a fictional league.
+# Every team, player and coach here is invented.
+entities:
+  - id: springfield-isotopes
+    canonical_name: Springfield Isotopes
+    kind: team
+    terms: [isotopes, springfield isotopes, topes]
+    is_primary_team: true
+    position: ""
+  - id: shelbyville-sharks
+    canonical_name: Shelbyville Sharks
+    kind: team
+    terms: [sharks, shelbyville sharks]
+    is_primary_team: false
+    position: ""
+  - id: capital-city-capitals
+    canonical_name: Capital City Capitals
+    kind: team
+    terms: [capitals, capital city capitals]
+    is_primary_team: false
+    position: ""
+  - id: ogdenville-owls
+    canonical_name: Ogdenville Owls
+    kind: team
+    terms: [owls, ogdenville owls]
+    is_primary_team: false
+    position: ""
+  - id: north-haverbrook-hornets
+    canonical_name: North Haverbrook Hornets
+    kind: team
+    terms: [hornets, north haverbrook hornets]
+    is_primary_team: false
+    position: ""
+  - id: brockway-badgers
+    canonical_name: Brockway Badgers
+    kind: team
+    terms: [badgers, brockway badgers]
+    is_primary_team: false
+    position: ""
+  - id: example-bowl
+    canonical_name: Example Bowl
+    kind: competition
+    terms: [example bowl]
+    is_primary_team: false
+    position: ""
