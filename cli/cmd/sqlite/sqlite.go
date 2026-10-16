@@ -35,7 +35,7 @@ func newMergeLocalCommand() *cobra.Command {
 	var from, dbPath string
 	cmd := &cobra.Command{
 		Use:   "merge-local",
-		Short: "Carry labels, review sessions and registries forward from a previous local database, then migrate",
+		Short: "Migrate the database, then carry labels, review sessions and registries forward from a previous local database",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			// The root command is reused across invocations (tests); reset
 			// flag state so a previous --db never leaks into the next run.
@@ -54,14 +54,17 @@ func newMergeLocalCommand() *cobra.Command {
 			}
 			defer db.Close()
 
+			// The snapshot can lag behind the local schema. Upgrade it before
+			// merging, which clears and refills locally-owned tables the
+			// snapshot may not have yet (same order as editorialsync).
+			if err := infrasqlite.Migrate(cmd.Context(), db, migrations.FS); err != nil {
+				return err
+			}
 			warnings, err := infrasqlite.MergeLocalOwnedTables(cmd.Context(), db, from)
 			if err != nil {
 				return err
 			}
 			printMergeWarningSummary(cmd, warnings)
-			if err := infrasqlite.Migrate(cmd.Context(), db, migrations.FS); err != nil {
-				return err
-			}
 			cmd.Printf("merged local-owned tables from %s into %s\n", from, target)
 			return nil
 		},
