@@ -102,4 +102,4 @@ store them off the host, and test restores on a copy.
 | Corruption suspected | Run `sqlite integrity` on a copy first; restore the newest backup that passes |
 | Restoring a backup | Stop the service, move the database and its `-wal` and `-shm` files aside, put the verified copy in place with mode `0600`, start the service. Items fetched since the backup are fetched again while they are inside their windows |
 | Outbox after a restore | Rows delivered after the backup are unknown to it. Enable reconciliation (`publication.reconciliation`) with a host history client so recent channel posts are matched, or accept a few repeated posts |
-| Labels and review sessions in an older local database | `phins-news-engine-tools sqlite merge-local` carries them forward, then migrates |
+| Labels and review sessions in an older local database | `phins-news-engine-tools sqlite merge-local` migrates the snapshot, then carries them forward |

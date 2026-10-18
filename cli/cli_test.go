@@ -246,3 +246,32 @@ func TestSQLiteMergeLocal_SummarizesPurgedArticleReferences(t *testing.T) {
 		t.Errorf("output = %q, want a per-table count of purged-article references", out)
 	}
 }
+
+// The production snapshot can lag behind the local schema (e.g. predate
+// migration 0045). merge-local must migrate it before merging, or clearing
+// a locally-owned table the snapshot does not have yet fails the sync.
+func TestSQLiteMergeLocal_MigratesLaggingSnapshotBeforeMerging(t *testing.T) {
+	path := testsupport.WriteFixture(t)
+	target := filepath.Join(t.TempDir(), "snapshot.db")
+	testsupport.CopyMigratedTestDB(t, target)
+	previous := filepath.Join(t.TempDir(), "previous.db")
+	testsupport.CopyMigratedTestDB(t, previous)
+
+	targetDB, err := infrasqlite.Open(target, 5*time.Second)
+	if err != nil {
+		t.Fatalf("open target: %v", err)
+	}
+	for _, stmt := range []string{
+		`DROP TABLE event_rule_proposals`,
+		`DELETE FROM schema_migrations WHERE version = '0045_event_rule_proposals.sql'`,
+	} {
+		if _, err := targetDB.Exec(stmt); err != nil {
+			t.Fatalf("make target lag (%s): %v", stmt, err)
+		}
+	}
+	targetDB.Close()
+
+	if out, err := testsupport.Execute(t, "sqlite", "merge-local", "--from", previous, "--db", target, "--config", path); err != nil {
+		t.Fatalf("Execute() error = %v, output = %s", err, out)
+	}
+}
