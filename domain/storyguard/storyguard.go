@@ -1,8 +1,8 @@
 // Package storyguard limits how many messages the channel carries about the
 // same story. Near-duplicate scoring and event clustering only catch
 // headlines that share word trigrams or an action vocabulary; the same story
-// reworded by several outlets ("Ross sells 2.1% stake" vs "Ross sells sliver
-// of Dolphins at record valuation") slips through both. This guard compares
+// reworded by several outlets ("Burns sells 2.1% stake" vs "Burns sells sliver
+// of Isotopes at record valuation") slips through both. This guard compares
 // plain word overlap against what was already published or queued.
 package storyguard
 
@@ -26,7 +26,7 @@ type Policy struct {
 	// OverlapThreshold is the minimum shared/min(len(a), len(b)) ratio.
 	OverlapThreshold float64
 	// GenericTokenShare, when above zero, makes Exceeded ignore tokens that
-	// appear in more than this share of recent titles ("dolphins", the
+	// appear in more than this share of recent titles ("isotopes", the
 	// opponent's name in game week): they say what the channel is about, not
 	// which story a title tells. Needs at least minPopulation recent titles
 	// to apply.

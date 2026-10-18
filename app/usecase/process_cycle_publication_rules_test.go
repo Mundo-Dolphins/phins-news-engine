@@ -72,8 +72,8 @@ func TestProcessCycle_StoryGuardWithholdsThirdMessageAboutSameStory(t *testing.T
 	cascade := defaultCascade()
 	cascade.StoryGuard = storyguard.Policy{Enabled: true, Window: 48 * time.Hour, MaxPerStory: 2, MinSharedTokens: 4, OverlapThreshold: 0.65}
 	recent := fakeRecentStories{stories: []out.RecentStory{
-		{ArticleID: "a", Title: "Stephen Ross sells 2.1% of the Dolphins at record valuation"},
-		{ArticleID: "b", Title: "[NBC Sports] - Stephen Ross sells sliver of Dolphins at record valuation"},
+		{ArticleID: "a", Title: "Montgomery Burns sells 2.1% of the Isotopes at record valuation"},
+		{ArticleID: "b", Title: "[NBC Sports] - Montgomery Burns sells sliver of Isotopes at record valuation"},
 	}}
 	fetch := func(title string) fakeFetcher {
 		return fakeFetcher{articles: []article.Article{{
@@ -83,7 +83,7 @@ func TestProcessCycle_StoryGuardWithholdsThirdMessageAboutSameStory(t *testing.T
 	}
 
 	articles := &fakeArticleRepo{}
-	uc := newRulesTestCycle(fetch("Dolphins owner Stephen Ross sells stake at record valuation"), articles, &fakeDecisionRepo{}, now, dictionary.Matcher{}, cascade)
+	uc := newRulesTestCycle(fetch("Isotopes owner Montgomery Burns sells stake at record valuation"), articles, &fakeDecisionRepo{}, now, dictionary.Matcher{}, cascade)
 	uc.SetRecentStories(recent)
 	result, err := uc.Run(context.Background())
 	if err != nil {
@@ -97,7 +97,7 @@ func TestProcessCycle_StoryGuardWithholdsThirdMessageAboutSameStory(t *testing.T
 	}
 
 	articles = &fakeArticleRepo{}
-	uc = newRulesTestCycle(fetch("Troy Aikman no longer officially working with Dolphins"), articles, &fakeDecisionRepo{}, now, dictionary.Matcher{}, cascade)
+	uc = newRulesTestCycle(fetch("Kent Brockman no longer officially working with Isotopes"), articles, &fakeDecisionRepo{}, now, dictionary.Matcher{}, cascade)
 	uc.SetRecentStories(recent)
 	if result, err = uc.Run(context.Background()); err != nil || result.Accepted != 1 {
 		t.Fatalf("unrelated story: result %+v err %v, want accepted", result, err)
@@ -113,7 +113,7 @@ func TestProcessCycle_SocialPostsDuringLiveGameGetShortWindow(t *testing.T) {
 	run := func(provider out.MatchStateProvider, contentType article.ContentType, age time.Duration) in.ProcessCycleResult {
 		cascade := defaultCascade()
 		uc := newRulesTestCycle(fakeFetcher{articles: []article.Article{{
-			Title: "Another sack for Miami on 3rd and long", OriginalURL: "https://example.com/sack",
+			Title: "Another sack for Springfield on 3rd and long", OriginalURL: "https://example.com/sack",
 			Source: source.Source{ID: id, Type: source.TypeTwitter}, ContentType: contentType, PublishedAt: now.Add(-age),
 		}}}, &fakeArticleRepo{}, &fakeDecisionRepo{}, now, dictionary.Matcher{}, cascade)
 		if provider != nil {

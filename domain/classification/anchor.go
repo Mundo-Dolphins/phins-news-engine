@@ -27,7 +27,7 @@ type AnchorPolicy struct {
 	MultiWordCategories map[string]bool
 	// MinConfidence, when above zero, stops entries with a lower confidence
 	// from anchoring: machine-discovered names (other teams' players an LLM
-	// proposed) are not evidence of a Dolphins story.
+	// proposed) are not evidence of a Isotopes story.
 	MinConfidence float64
 }
 

@@ -25,8 +25,8 @@ func TestApplyAnchor(t *testing.T) {
 		{"disabled keeps result", related(Evidence{Category: "venue", EntryName: "Hard Rock Stadium"}), AnchorPolicy{}, true},
 		{"venue only is demoted", related(Evidence{Category: "venue", EntryName: "Hard Rock Stadium"}), policy, false},
 		{"bare surname is demoted", related(Evidence{Category: "active_roster_core", EntryName: "jones"}), policy, false},
-		{"full name anchors", related(Evidence{Category: "active_roster_core", EntryName: "Malik Willis"}), policy, true},
-		{"official name anchors", related(Evidence{Category: "official_names", EntryName: "Miami Dolphins"}), policy, true},
+		{"full name anchors", related(Evidence{Category: "active_roster_core", EntryName: "Bart Simpson"}), policy, true},
+		{"official name anchors", related(Evidence{Category: "official_names", EntryName: "Springfield Isotopes"}), policy, true},
 		{"unrelated untouched", Result{RuleApplied: RuleBelowThreshold}, policy, false},
 	}
 	for _, tc := range tests {
@@ -39,13 +39,13 @@ func TestApplyAnchor(t *testing.T) {
 	past := now.AddDate(0, 0, -10)
 	for name, ev := range map[string]Evidence{
 		"low confidence": {Category: "active_roster_core", EntryName: "Kirk Cousins", Confidence: 0.5},
-		"retired entry":  {Category: "active_roster_core", EntryName: "Tua Tagovailoa", Confidence: 0.9, ActiveUntil: &past},
+		"retired entry":  {Category: "active_roster_core", EntryName: "Homer Simpson", Confidence: 0.9, ActiveUntil: &past},
 	} {
 		if ApplyAnchor(related(ev), weak, now).Related {
 			t.Errorf("%s must not anchor", name)
 		}
 	}
-	if !ApplyAnchor(related(Evidence{Category: "active_roster_core", EntryName: "Malik Willis", Confidence: 0.8}), weak, now).Related {
+	if !ApplyAnchor(related(Evidence{Category: "active_roster_core", EntryName: "Bart Simpson", Confidence: 0.8}), weak, now).Related {
 		t.Error("confident active entry must anchor")
 	}
 	if got := ApplyAnchor(related(Evidence{Category: "venue", EntryName: "x"}), policy, now); got.RuleApplied != RuleNoAnchor {
