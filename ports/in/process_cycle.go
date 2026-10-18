@@ -7,9 +7,11 @@ import (
 	"time"
 
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/article"
+	"github.com/Mundo-Dolphins/phins-news-engine/domain/classification"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/clustering"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/normalization"
+	"github.com/Mundo-Dolphins/phins-news-engine/domain/storyguard"
 )
 
 // ProcessCycleResult summarizes the outcome of one fetch-process-publish cycle.
@@ -223,6 +225,9 @@ type ClassificationSettings struct {
 	// title mention can be treated as unambiguous team context. They do not
 	// bypass scoring: posts without positive evidence remain rejected.
 	ContextSourceIDs map[string]bool
+	// Anchor demotes a related verdict that has no team-naming evidence.
+	// Trusted sources are never subject to it.
+	Anchor classification.AnchorPolicy
 }
 
 // EditorialSettings bundles the editorial-classifier tunable ProcessCycle
@@ -261,4 +266,11 @@ type DedupCascadeConfig struct {
 	Cluster        ClusterSettings
 	Editorial      EditorialSettings
 	SeenItems      SeenItemsSettings
+	// StoryGuard caps how many messages one story may have in the channel.
+	StoryGuard storyguard.Policy
+	// PublishAmbiguousClusters lets an article whose clustering decision was
+	// ambiguous continue as the first report of a new cluster instead of
+	// being retained without publishing. The story guard still bounds
+	// repeats.
+	PublishAmbiguousClusters bool
 }

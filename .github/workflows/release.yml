@@ -1,16 +1,26 @@
 name: release
 
-# Publishes a patch release when main only contains unreleased Dependabot
-# commits. It runs on a schedule (and on demand) instead of on push because a
-# merge performed with GITHUB_TOKEN does not trigger push workflows.
+# Publishes a patch release for the commits on main that have not been
+# released yet. A commit opts out with "[skip release]" anywhere in its message
+# (with squash merges: the PR title or description); a skipped commit ships
+# with the next release that is created.
 #
-# If any unreleased commit was written by a human, nothing is published: tag
-# those manually (or run this workflow after releasing).
+# Triggers:
+#  - CI finished successfully for a push to main: the usual path, so only a
+#    green commit is ever released.
+#  - Daily schedule and manual dispatch: merges performed with GITHUB_TOKEN
+#    (Dependabot auto-merge) do not trigger push workflows, hence neither CI
+#    nor the path above.
 on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
   schedule:
     - cron: '17 7 * * *'
   workflow_dispatch: {}
 
+# Releases are created one at a time so two quick merges get consecutive versions.
 concurrency:
   group: release
   cancel-in-progress: false
@@ -20,11 +30,15 @@ permissions:
 
 jobs:
   patch-release:
+    # For workflow_run only act on a successful CI run of a push to main.
+    if: github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          # The commit CI validated, not whatever main moved to meanwhile.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Decide the next version
         id: version
@@ -33,7 +47,7 @@ jobs:
       - name: Create the release
         if: steps.version.outputs.next != ''
         run: |
-          gh release create "$VERSION" --target "$GITHUB_SHA" --title "$VERSION" --generate-notes
+          gh release create "$VERSION" --target "$(git rev-parse HEAD)" --title "$VERSION" --generate-notes
         env:
           VERSION: ${{ steps.version.outputs.next }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

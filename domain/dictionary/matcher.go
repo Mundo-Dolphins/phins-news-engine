@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -17,6 +18,10 @@ type Occurrence struct {
 	EntryName   string
 	MatchedText string
 	Count       int
+	// Confidence and ActiveUntil are the matched entry's own fields,
+	// carried so callers can discount weak or retired entries.
+	Confidence  float64
+	ActiveUntil *time.Time
 }
 
 type termPattern struct {
@@ -26,6 +31,8 @@ type termPattern struct {
 
 type compiledEntry struct {
 	canonicalName string
+	confidence    float64
+	activeUntil   *time.Time
 	patterns      []termPattern
 }
 
@@ -59,7 +66,7 @@ func Prepare(d Dictionary) (Matcher, error) {
 				}
 				patterns = append(patterns, termPattern{term: term, re: re})
 			}
-			entries = append(entries, compiledEntry{canonicalName: entry.CanonicalName, patterns: patterns})
+			entries = append(entries, compiledEntry{canonicalName: entry.CanonicalName, confidence: entry.Confidence, activeUntil: entry.ActiveUntil, patterns: patterns})
 		}
 		categories = append(categories, compiledCategory{Category: cat, entries: entries})
 	}
@@ -120,6 +127,7 @@ func (m Matcher) Find(text string) []Occurrence {
 			occurrences = append(occurrences, Occurrence{
 				Category: cat.Name, EntryName: entry.canonicalName,
 				MatchedText: strings.Join(matchedForms, "; "), Count: count,
+				Confidence: entry.confidence, ActiveUntil: entry.activeUntil,
 			})
 		}
 	}

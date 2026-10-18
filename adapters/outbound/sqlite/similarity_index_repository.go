@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/article"
 	appout "github.com/Mundo-Dolphins/phins-news-engine/ports/out"
@@ -119,4 +120,34 @@ func (r *SimilarityIndexRepository) FindCandidates(ctx context.Context, filter a
 		return nil, fmt.Errorf("sqlite: iterate candidates: %w", err)
 	}
 	return candidates, nil
+}
+
+var _ appout.RecentStoryRepository = (*SimilarityIndexRepository)(nil)
+
+// ListRecentlyPublishable implements ports/out.RecentStoryRepository.
+func (r *SimilarityIndexRepository) ListRecentlyPublishable(ctx context.Context, since time.Time, excludeID string, limit int) ([]appout.RecentStory, error) {
+	rows, err := executor(ctx, r.db).QueryContext(ctx, `
+		SELECT id, title, source_id
+		FROM articles
+		WHERE fetched_at >= ?
+		  AND id <> ?
+		  AND status IN ('published','pending_publication','publishing','pending_retry')
+		ORDER BY fetched_at DESC
+		LIMIT ?`, since, excludeID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: list recently publishable: %w", err)
+	}
+	defer rows.Close()
+	var out []appout.RecentStory
+	for rows.Next() {
+		var s appout.RecentStory
+		if err := rows.Scan(&s.ArticleID, &s.Title, &s.SourceID); err != nil {
+			return nil, fmt.Errorf("sqlite: scan recent story: %w", err)
+		}
+		out = append(out, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sqlite: iterate recent stories: %w", err)
+	}
+	return out, nil
 }

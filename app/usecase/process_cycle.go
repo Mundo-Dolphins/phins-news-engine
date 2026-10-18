@@ -33,6 +33,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/similarity"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/source"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/sourcepolicy"
+	"github.com/Mundo-Dolphins/phins-news-engine/domain/storyguard"
 	"github.com/Mundo-Dolphins/phins-news-engine/ports/in"
 	"github.com/Mundo-Dolphins/phins-news-engine/ports/out"
 )
@@ -93,6 +94,8 @@ type ProcessCycle struct {
 	// and read by accept() for the rest of that Run.
 	currentMatchState   matchstate.State
 	currentMatchStateOK bool
+
+	recentStories out.RecentStoryRepository
 }
 
 // SetLivePolicy is called by the composition root. Its zero value is safe:
@@ -103,6 +106,11 @@ func (p *ProcessCycle) SetLivePolicy(policy publishing.LivePolicy) { p.lanePolic
 // value (nil) is safe: Run never stamps match-state metadata, and every
 // article is treated exactly as it was before this feature existed.
 func (p *ProcessCycle) SetMatchStateProvider(m out.MatchStateProvider) { p.matchStateProvider = m }
+
+// SetRecentStories is called by the composition root to supply what the
+// channel already carries. Its zero value (nil) is safe: the story-repeat
+// guard never withholds anything.
+func (p *ProcessCycle) SetRecentStories(r out.RecentStoryRepository) { p.recentStories = r }
 
 // NewProcessCycle builds a ProcessCycle use case. editorialModel is nil
 // when cascade.Editorial.Mode is "disabled" — the caller (main.go) never
@@ -413,6 +421,9 @@ func (p *ProcessCycle) processOne(ctx context.Context, raw article.Article, cycl
 			} else {
 				verdict = classification.Decide(titleText, bodyText, p.matcher)
 			}
+			if !p.cascade.Classification.TrustedSourceIDs[a.Source.ID.String()] {
+				verdict = classification.ApplyAnchor(verdict, p.cascade.Classification.Anchor, now)
+			}
 			a.DictionaryVersion = verdict.DictionaryVersion
 			a.RelevanceScore = verdict.Score
 
@@ -539,7 +550,7 @@ func (p *ProcessCycle) processOne(ctx context.Context, raw article.Article, cycl
 			return err
 		}
 		a.Status = article.StatusClustered
-		if clusterDecision.Action == clustering.ActionAmbiguous {
+		if clusterDecision.Action == clustering.ActionAmbiguous && !p.cascade.PublishAmbiguousClusters {
 			result.Rejected++
 			return p.retainClusterAmbiguous(ctx, a, identity, contentHash, cycleID, now, clusterDecision)
 		}
@@ -689,14 +700,32 @@ func (p *ProcessCycle) processOne(ctx context.Context, raw article.Article, cycl
 			}
 		}
 
+		// Step 7.5: story-repeat guard. Withholds an article when the channel
+		// already carries Cascade.StoryGuard.MaxPerStory messages about the
+		// same story. Official and model-bypass sources are exempt.
+		if repeated, matched, err := p.storyRepeated(ctx, a, text, now); err != nil {
+			return err
+		} else if repeated && !modelBypassSource && !unconditionalSource {
+			if a.ClusterID != "" {
+				if _, err := p.sourcePolicyCooldowns.Release(ctx, a.Source.ID.String(), a.ClusterID, a.ID, now); err != nil {
+					return fmt.Errorf("process cycle: release source policy cooldown for %s: %w", a.ID, err)
+				}
+			}
+			result.Rejected++
+			return p.retainStoryRepeat(ctx, a, identity, contentHash, cycleID, now, matched)
+		}
+
 		// Step 8: freshness gate, then the cluster publication gate (at most one initial publication per cluster,
 		// enforced in persistence, independent of sourcepolicy.Mode), then
 		// accept or reject.
-		a.FreshnessMaxAge = p.freshness.MaxAge(a.ContentType)
+		a.FreshnessMaxAge = p.freshness.MaxAgeFor(a)
+		if p.gameInProgress() {
+			a.FreshnessMaxAge = p.freshness.MaxAgeDuringLiveGame(a)
+		}
 		if unconditionalSource && !a.PublishedAt.IsZero() {
 			a.FreshnessMaxAge = max(a.FreshnessMaxAge, now.Sub(a.PublishedAt)+24*time.Hour)
 		}
-		if !unconditionalSource && !publishing.Decide(a, p.freshness, now) {
+		if !unconditionalSource && !publishing.DecideStored(a, now) {
 			if a.ClusterID != "" {
 				if _, err := p.sourcePolicyCooldowns.Release(ctx, a.Source.ID.String(), a.ClusterID, a.ID, now); err != nil {
 					return fmt.Errorf("process cycle: release source policy cooldown for %s: %w", a.ID, err)
@@ -1614,6 +1643,64 @@ func (p *ProcessCycle) retainNoPublish(ctx context.Context, a article.Article, i
 	}
 	p.logger.Info("article retained without publishing", "cycle_id", cycleID, "article_id", a.ID,
 		"cluster_id", a.ClusterID, "source", a.Source.ID, "decision", string(decision.Code), "reason", decision.Explanation)
+	return nil
+}
+
+// gameInProgress reports whether the match-state provider confirmed, for
+// this cycle, that the team's game is being played (not pregame, not final).
+func (p *ProcessCycle) gameInProgress() bool {
+	if !p.currentMatchStateOK {
+		return false
+	}
+	switch p.currentMatchState.Phase {
+	case matchstate.Kickoff, matchstate.Q1, matchstate.Q2, matchstate.Halftime, matchstate.Q3, matchstate.Q4:
+		return true
+	}
+	return false
+}
+
+// storyRepeated reports whether the channel already carries the configured
+// maximum number of messages about a's story, and which articles they are.
+func (p *ProcessCycle) storyRepeated(ctx context.Context, a article.Article, text normalization.Representations, now time.Time) (bool, []string, error) {
+	policy := p.cascade.StoryGuard
+	if !policy.Enabled || p.recentStories == nil || policy.Exempt(a.Title) {
+		return false, nil, nil
+	}
+	stories, err := p.recentStories.ListRecentlyPublishable(ctx, now.Add(-policy.Window), a.ID, 2000)
+	if err != nil {
+		return false, nil, fmt.Errorf("process cycle: list recent stories for %s: %w", a.ID, err)
+	}
+	recent := make([]storyguard.Recent, len(stories))
+	for i, s := range stories {
+		recent[i] = storyguard.Recent{ArticleID: s.ArticleID, Title: s.Title, Tokens: normalization.Normalize(s.Title, p.cascade.Normalization.Text).Tokens}
+	}
+	exceeded, matched := policy.Exceeded(text.Tokens, recent)
+	return exceeded, matched, nil
+}
+
+// retainStoryRepeat saves a as StatusRetainedNoPublish because its story
+// already reached the channel the maximum number of times.
+func (p *ProcessCycle) retainStoryRepeat(ctx context.Context, a article.Article, identity ingestidentity.Identity, contentHash, cycleID string, now time.Time, matched []string) error {
+	fromStatus := a.Status
+	a.Status = article.StatusRetainedNoPublish
+	a.StatusReason = "story_repeat_limit"
+	if err := p.articles.Save(ctx, a); err != nil {
+		return fmt.Errorf("process cycle: save story-repeat retained article %s: %w", a.ID, err)
+	}
+	detail := fmt.Sprintf("story already published or queued %d times: %s", len(matched), strings.Join(matched, ","))
+	if err := p.decisions.Append(ctx, out.Event{
+		ArticleID: a.ID, OccurredAt: now, FromStatus: fromStatus, ToStatus: a.Status,
+		EventType: "story_repeat_retain", ReasonCode: "story_repeat_limit", ReasonDetail: detail, CycleID: cycleID,
+	}); err != nil {
+		return fmt.Errorf("process cycle: append event for %s: %w", a.ID, err)
+	}
+	if identity.Key != "" {
+		if err := p.seenItems.Finalize(ctx, identity, string(a.Status), contentHash, a.CanonicalURL, now); err != nil {
+			return fmt.Errorf("process cycle: finalize seen item for %s: %w", a.ID, err)
+		}
+	}
+	p.logger.Info("article retained: story repeat limit", "cycle_id", cycleID, "article_id", a.ID,
+		"cluster_id", a.ClusterID, "source", a.Source.ID, "matched", strings.Join(matched, ","))
 	return nil
 }
 

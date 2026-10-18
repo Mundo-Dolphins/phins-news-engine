@@ -5,6 +5,7 @@ package classification
 
 import (
 	"sort"
+	"time"
 
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/dictionary"
 )
@@ -16,6 +17,10 @@ type Evidence struct {
 	MatchedText  string
 	Count        int
 	Contribution float64
+	// Confidence and ActiveUntil are the matched dictionary entry's own
+	// fields (see dictionary.Occurrence).
+	Confidence  float64
+	ActiveUntil *time.Time
 }
 
 // Result is the outcome of classifying an article's relevance to the covered team.
@@ -49,6 +54,8 @@ type aggregatedHit struct {
 	matchedText string
 	rawCount    int
 	scoreCount  float64
+	confidence  float64
+	activeUntil *time.Time
 }
 
 // Decide classifies an article's relevance to the covered team from
@@ -109,7 +116,7 @@ func decide(title, body string, m dictionary.Matcher, sourceContext bool) Result
 			continue
 		}
 		contribution := weight[h.category] * h.scoreCount
-		ev := Evidence{Category: h.category, EntryName: h.entryName, MatchedText: h.matchedText, Count: h.rawCount, Contribution: contribution}
+		ev := Evidence{Category: h.category, EntryName: h.entryName, MatchedText: h.matchedText, Count: h.rawCount, Contribution: contribution, Confidence: h.confidence, ActiveUntil: h.activeUntil}
 		switch {
 		case contribution > 0:
 			result.PositiveEvidence = append(result.PositiveEvidence, ev)
@@ -182,7 +189,7 @@ func aggregate(titleOcc, bodyOcc []dictionary.Occurrence, d dictionary.Decision)
 			k := key{o.Category, o.EntryName}
 			h, ok := byKey[k]
 			if !ok {
-				h = &aggregatedHit{category: o.Category, entryName: o.EntryName, matchedText: o.MatchedText}
+				h = &aggregatedHit{category: o.Category, entryName: o.EntryName, matchedText: o.MatchedText, confidence: o.Confidence, activeUntil: o.ActiveUntil}
 				byKey[k] = h
 				order = append(order, k)
 			}

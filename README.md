@@ -194,9 +194,12 @@ and YAML snippets.
 ## Versioning
 
 The module follows semantic versioning. While the major version is `0`,
-a minor release may break the API; patch releases do not. Dependency
-updates that pass CI are released automatically as patch versions
-(`.github/workflows/release.yml`).
+a minor release may break the API; patch releases do not. Every commit
+merged to `main` is released automatically as a patch version once CI passes
+on it (`.github/workflows/release.yml`). Put `[skip release]` in the commit
+message (with squash merges: the PR title or description) to opt out; a
+skipped commit ships with the next release. Minor and major versions are
+tagged by hand.
 
 ## Documentation
 
