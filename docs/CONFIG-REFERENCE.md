@@ -105,6 +105,8 @@ test fails if a new secret field is not covered.
 | `deduplication.near_duplicate` | `enabled`, `method` (`jaccard` or `dice`), `default_threshold`, `threshold_by_source_type`, `short_text_max_tokens`, `short_text_threshold`, `window_hours`, `max_candidates`, `min_shared_terms`, `fields_used`, `content_type_exceptions`, `attribute_combo_window_minutes`, `rules_version` ([DEDUPLICATION.md](DEDUPLICATION.md)) |
 | `classification.enabled` | Turns the relevance gate on |
 | `classification.trusted_source_ids` | Sources that skip the relevance gate |
+| `classification.anchor` | `enabled`, `categories`, `multi_word_categories`, `min_confidence`: an untrusted article must have positive evidence from an anchor category (team names, staff, players by full name, hashtags) to count as related; `multi_word_categories` ignore bare single-word entries such as surnames |
+| `deduplication.story_guard` | `enabled`, `window_hours`, `max_per_story`, `min_shared_tokens`, `overlap_threshold`: withholds (`retained_no_publish`, reason `story_repeat_limit`) an article once its story has `max_per_story` published or queued messages; official and model-bypass sources are exempt |
 | `classification.context_source_ids` | Sources whose scope disambiguates mentions; still scored |
 | `dictionary.path` | Relevance dictionary; required when classification is on |
 | `dictionary.version` | Optional pin; start-up fails on a mismatch |
@@ -119,6 +121,7 @@ test fails if a new secret field is not covered.
 | `clustering.rules_version` | Optional pin |
 | `clustering.generated_rules_path` | Optional file of approved generated phrases merged into the rules; empty means hand-written rules only |
 | `clustering.candidate_limit` | Maximum clusters compared per article |
+| `clustering.publish_ambiguous` | When true, an article whose join-vs-create decision is ambiguous is published as a new cluster instead of `retained_no_publish` (`cluster_ambiguous`) |
 | `clustering.entity_catalog` | `manual_path`, `generated_path`, and `league` (`mode` `off` or `mentions_only`, `roster_path`, `rules_path`, `max_age_days`) |
 
 ### Editorial
@@ -142,6 +145,7 @@ test fails if a new secret field is not covered.
 | Key | Meaning |
 |---|---|
 | `freshness.*` | Maximum age in hours: `hard_news_hours`, `social_hours`, `analysis_hours`, `default_hours` |
+| `freshness.live_updates` | `max_age_minutes`, case-insensitive `patterns` and `exclude_patterns`: a social post that reads as news from a game in progress (running score, kickoff, halftime, turnover) expires after `max_age_minutes` instead of `social_hours`; a post matching an exclude pattern (final score, recap) is finished-game news and keeps the normal window; 0 disables |
 | `telegram.channel_id` | Destination channel |
 | `telegram.timeout_seconds` | Bot API request timeout |
 | `telegram.session_path` | Session file for a host history client |

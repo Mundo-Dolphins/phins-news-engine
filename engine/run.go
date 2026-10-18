@@ -298,6 +298,7 @@ func Run(ctx context.Context, configPath string, profile config.Profile, logger 
 		entityFallback,
 	)
 	processCycle.SetLivePolicy(cfg.PublicationPolicy.LivePolicy())
+	processCycle.SetRecentStories(similarityIndex)
 	if cfg.EspnScoreboard.Enabled {
 		processCycle.SetMatchStateProvider(espnscoreboard.NewClient(cfg.EspnScoreboard.TeamAbbreviation, cfg.EspnScoreboard.UserAgent, cfg.EspnScoreboard.Timeout()))
 		logger.Info("espn scoreboard match-state provider enabled", "team", cfg.EspnScoreboard.TeamAbbreviation)

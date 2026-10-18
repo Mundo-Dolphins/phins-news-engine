@@ -271,5 +271,6 @@ func Wire(cfg *config.Config, labDB *sql.DB, overrides Overrides) (*usecase.Proc
 		cfg.Freshness.Policy(), matcher, editorialModel, editorialVetoCfg, cascade, clock, noopLogger{},
 		sourcePolicies, sourcePolicyResolver, clusterPublications, seenItems, sourcePolicyCooldowns, unknownEntities, nil,
 	)
+	pc.SetRecentStories(similarityIndex)
 	return pc, articles, fetcher, clock, nil
 }

@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 # Prints the next patch version (vX.Y.Z+1) when main has unreleased commits and
-# ALL of them were authored by Dependabot. Prints nothing otherwise, so that
-# human work is never published by accident: release those manually.
+# at least one of them lacks the opt-out keyword. Prints nothing otherwise.
+#
+# A commit opts out of releasing by containing the keyword (default
+# "[skip release]", override with RELEASE_SKIP_KEYWORD) anywhere in its
+# message. With a squash merge that is the PR title or description. Skipped
+# commits are not lost: they ship with the next release that is created.
 #
 # Usage: next-patch-release.sh   (run inside a clone with full history and tags)
 set -euo pipefail
 
-bot='dependabot[bot]'
+keyword=${RELEASE_SKIP_KEYWORD:-'[skip release]'}
 
 # Highest plain vMAJOR.MINOR.PATCH tag reachable from HEAD (pre-release tags are ignored).
 last=$(git tag --merged HEAD --list 'v[0-9]*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1 || true)
@@ -24,9 +28,15 @@ if [ "$total" -eq 0 ]; then
   exit 0
 fi
 
-humans=$(git log --format='%an' "$range" | grep -cvxF "$bot" || true)
-if [ "$humans" -gt 0 ]; then
-  echo "$humans unreleased commit(s) not authored by $bot since $last: release manually" >&2
+releasable=0
+while read -r sha; do
+  if ! git log -1 --format=%B "$sha" | grep -qiF -- "$keyword"; then
+    releasable=1
+    break
+  fi
+done < <(git rev-list "$range")
+if [ "$releasable" -eq 0 ]; then
+  echo "all $total unreleased commit(s) since $last contain \"$keyword\": no release" >&2
   exit 0
 fi
 

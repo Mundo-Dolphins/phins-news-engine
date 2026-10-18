@@ -2870,3 +2870,45 @@ func TestRepoSettings_LeagueCatalogShipsOff(t *testing.T) {
 		t.Fatal("configs/example/settings.yml must ship with the league catalog off; enabling it is an explicit operator decision")
 	}
 }
+
+func TestAnchorConfig_Validate(t *testing.T) {
+	ok := config.AnchorConfig{Enabled: true, Categories: []string{"a", "b"}, MultiWordCategories: []string{"b"}, MinConfidence: 0.7}
+	if err := ok.Validate(); err != nil {
+		t.Fatalf("valid: %v", err)
+	}
+	if err := (config.AnchorConfig{}).Validate(); err != nil {
+		t.Fatalf("disabled must always validate: %v", err)
+	}
+	for name, c := range map[string]config.AnchorConfig{
+		"no categories":       {Enabled: true},
+		"unlisted multi-word": {Enabled: true, Categories: []string{"a"}, MultiWordCategories: []string{"b"}},
+		"confidence above 1":  {Enabled: true, Categories: []string{"a"}, MinConfidence: 1.5},
+	} {
+		if err := c.Validate(); err == nil {
+			t.Errorf("%s: want error", name)
+		}
+	}
+}
+
+func TestStoryGuardConfig_Validate(t *testing.T) {
+	ok := config.StoryGuardConfig{Enabled: true, WindowHours: 48, MaxPerStory: 2, MinSharedTokens: 4, OverlapThreshold: 0.65, GenericTokenShare: 0.05}
+	if err := ok.Validate(); err != nil {
+		t.Fatalf("valid: %v", err)
+	}
+	if err := (config.StoryGuardConfig{}).Validate(); err != nil {
+		t.Fatalf("disabled must always validate: %v", err)
+	}
+	for name, mutate := range map[string]func(*config.StoryGuardConfig){
+		"window":  func(c *config.StoryGuardConfig) { c.WindowHours = 0 },
+		"max":     func(c *config.StoryGuardConfig) { c.MaxPerStory = 0 },
+		"shared":  func(c *config.StoryGuardConfig) { c.MinSharedTokens = 0 },
+		"overlap": func(c *config.StoryGuardConfig) { c.OverlapThreshold = 1.2 },
+		"generic": func(c *config.StoryGuardConfig) { c.GenericTokenShare = 1 },
+	} {
+		c := ok
+		mutate(&c)
+		if err := c.Validate(); err == nil {
+			t.Errorf("%s: want error", name)
+		}
+	}
+}

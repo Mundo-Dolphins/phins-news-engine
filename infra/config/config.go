@@ -18,9 +18,11 @@ import (
 
 	"github.com/Mundo-Dolphins/phins-news-engine/app/usecase"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/article"
+	"github.com/Mundo-Dolphins/phins-news-engine/domain/classification"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/normalization"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/publishing"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/source"
+	"github.com/Mundo-Dolphins/phins-news-engine/domain/storyguard"
 	"github.com/Mundo-Dolphins/phins-news-engine/ports/in"
 )
 
@@ -1350,6 +1352,66 @@ type ClassificationConfig struct {
 	// ContextSourceIDs disambiguate explicit Isotopes/Topes title evidence
 	// without granting the unconditional trusted-source bypass.
 	ContextSourceIDs []string `yaml:"context_source_ids"`
+	// Anchor requires related articles from non-trusted sources to carry
+	// evidence that names the team itself. See classification.AnchorPolicy.
+	Anchor AnchorConfig `yaml:"anchor"`
+}
+
+// AnchorConfig configures classification.AnchorPolicy.
+type AnchorConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// Categories are dictionary category names whose evidence can anchor.
+	Categories []string `yaml:"categories"`
+	// MultiWordCategories is the subset of Categories whose single-token
+	// entries (bare surnames) do not anchor.
+	MultiWordCategories []string `yaml:"multi_word_categories"`
+	// MinConfidence stops dictionary entries with a lower confidence (and
+	// entries whose active_until has passed) from anchoring.
+	MinConfidence float64 `yaml:"min_confidence"`
+}
+
+// Validate checks an enabled policy names at least one anchor category and
+// that every multi-word category is also an anchor category.
+func (c AnchorConfig) Validate() error {
+	if !c.Enabled {
+		return nil
+	}
+	if len(c.Categories) == 0 {
+		return fmt.Errorf("categories must not be empty when enabled")
+	}
+	if c.MinConfidence < 0 || c.MinConfidence > 1 {
+		return fmt.Errorf("min_confidence must be within [0,1]")
+	}
+	known := make(map[string]bool, len(c.Categories))
+	for _, name := range c.Categories {
+		if name == "" {
+			return fmt.Errorf("categories: empty name")
+		}
+		known[name] = true
+	}
+	for _, name := range c.MultiWordCategories {
+		if !known[name] {
+			return fmt.Errorf("multi_word_categories: %q is not listed in categories", name)
+		}
+	}
+	return nil
+}
+
+// Policy converts the section into the domain policy.
+func (c AnchorConfig) Policy() classification.AnchorPolicy {
+	p := classification.AnchorPolicy{
+		Enabled:             c.Enabled,
+		MinConfidence:       c.MinConfidence,
+		Categories:          make(map[string]bool, len(c.Categories)),
+		MultiWordCategories: make(map[string]bool, len(c.MultiWordCategories)),
+	}
+	for _, name := range c.Categories {
+		p.Categories[name] = true
+	}
+	for _, name := range c.MultiWordCategories {
+		p.MultiWordCategories[name] = true
+	}
+	return p
 }
 
 // Validate checks source lists have no empty, duplicate, or overlapping IDs.
@@ -1376,6 +1438,9 @@ func (c ClassificationConfig) Validate() error {
 			return fmt.Errorf("context_source_ids: id %q is already trusted", id)
 		}
 		contextSeen[id] = true
+	}
+	if err := c.Anchor.Validate(); err != nil {
+		return fmt.Errorf("anchor: %w", err)
 	}
 	return nil
 }
@@ -1437,6 +1502,7 @@ func (c NearDuplicateConfig) Validate() error {
 // DeduplicationConfig configures duplicate detection.
 type DeduplicationConfig struct {
 	NearDuplicate NearDuplicateConfig `yaml:"near_duplicate"`
+	StoryGuard    StoryGuardConfig    `yaml:"story_guard"`
 }
 
 // Validate runs the nested near-duplicate section's validation.
@@ -1444,7 +1510,70 @@ func (c DeduplicationConfig) Validate() error {
 	if err := c.NearDuplicate.Validate(); err != nil {
 		return fmt.Errorf("near_duplicate: %w", err)
 	}
+	if err := c.StoryGuard.Validate(); err != nil {
+		return fmt.Errorf("story_guard: %w", err)
+	}
 	return nil
+}
+
+// StoryGuardConfig configures storyguard.Policy.
+type StoryGuardConfig struct {
+	Enabled          bool    `yaml:"enabled"`
+	WindowHours      int     `yaml:"window_hours"`
+	MaxPerStory      int     `yaml:"max_per_story"`
+	MinSharedTokens  int     `yaml:"min_shared_tokens"`
+	OverlapThreshold float64 `yaml:"overlap_threshold"`
+	// GenericTokenShare ignores tokens present in more than this share of
+	// recent titles; 0 disables the filter.
+	GenericTokenShare float64 `yaml:"generic_token_share"`
+	// ExemptTitlePatterns are case-insensitive regular expressions for
+	// templated series (press conferences, stat cards) the guard must not cut.
+	ExemptTitlePatterns []string `yaml:"exempt_title_patterns"`
+}
+
+// Validate checks an enabled guard has usable bounds.
+func (c StoryGuardConfig) Validate() error {
+	if !c.Enabled {
+		return nil
+	}
+	if c.WindowHours <= 0 {
+		return fmt.Errorf("window_hours must be positive")
+	}
+	if c.MaxPerStory <= 0 {
+		return fmt.Errorf("max_per_story must be positive")
+	}
+	if c.MinSharedTokens <= 0 {
+		return fmt.Errorf("min_shared_tokens must be positive")
+	}
+	if c.OverlapThreshold <= 0 || c.OverlapThreshold > 1 {
+		return fmt.Errorf("overlap_threshold must be within (0,1]")
+	}
+	if c.GenericTokenShare < 0 || c.GenericTokenShare >= 1 {
+		return fmt.Errorf("generic_token_share must be within [0,1)")
+	}
+	for _, pat := range c.ExemptTitlePatterns {
+		if _, err := regexp.Compile("(?i)" + pat); err != nil {
+			return fmt.Errorf("exempt_title_patterns: %q: %w", pat, err)
+		}
+	}
+	return nil
+}
+
+// Policy converts the section into the domain policy.
+func (c StoryGuardConfig) Policy() storyguard.Policy {
+	var exempt []*regexp.Regexp
+	for _, pat := range c.ExemptTitlePatterns {
+		exempt = append(exempt, regexp.MustCompile("(?i)"+pat))
+	}
+	return storyguard.Policy{
+		ExemptTitles:      exempt,
+		Enabled:           c.Enabled,
+		Window:            time.Duration(c.WindowHours) * time.Hour,
+		MaxPerStory:       c.MaxPerStory,
+		MinSharedTokens:   c.MinSharedTokens,
+		OverlapThreshold:  c.OverlapThreshold,
+		GenericTokenShare: c.GenericTokenShare,
+	}
 }
 
 // ClusteringConfig configures event clustering.
@@ -1475,6 +1604,9 @@ type ClusteringConfig struct {
 	// CandidateLimit bounds ClusterRepository.FindCandidatesByEventKeys per
 	// lookup. Required when Enabled is true.
 	CandidateLimit int `yaml:"candidate_limit"`
+	// PublishAmbiguous publishes articles whose join-vs-create decision was
+	// ambiguous (as a new cluster) instead of retaining them silently.
+	PublishAmbiguous bool `yaml:"publish_ambiguous"`
 	// EntityCatalog locates the two entity-catalog files merged into
 	// RulesFile.Entities via clusteringrules.LoadWithEntityCatalog.
 	// Required when Enabled is true.
@@ -1630,6 +1762,47 @@ type FreshnessConfig struct {
 	SocialHours   int `yaml:"social_hours"`
 	AnalysisHours int `yaml:"analysis_hours"`
 	DefaultHours  int `yaml:"default_hours"`
+	// LiveUpdates cuts the window of social posts that read as live game
+	// updates to MaxAgeMinutes.
+	LiveUpdates LiveUpdatesConfig `yaml:"live_updates"`
+}
+
+// LiveUpdatesConfig configures publishing.LiveUpdatePolicy. Disabled when
+// MaxAgeMinutes is zero.
+type LiveUpdatesConfig struct {
+	MaxAgeMinutes int `yaml:"max_age_minutes"`
+	// Patterns are case-insensitive regular expressions matched against the
+	// post text.
+	Patterns []string `yaml:"patterns"`
+	// ExcludePatterns mark finished-game news (final score, recap) that must
+	// keep the normal window even if a pattern matches.
+	ExcludePatterns []string `yaml:"exclude_patterns"`
+}
+
+func (c LiveUpdatesConfig) validate() error {
+	if c.MaxAgeMinutes < 0 {
+		return fmt.Errorf("live_updates.max_age_minutes must not be negative")
+	}
+	if c.MaxAgeMinutes > 0 && len(c.Patterns) == 0 {
+		return fmt.Errorf("live_updates.patterns must not be empty when max_age_minutes is set")
+	}
+	for _, pat := range append(append([]string{}, c.Patterns...), c.ExcludePatterns...) {
+		if _, err := regexp.Compile("(?i)" + pat); err != nil {
+			return fmt.Errorf("live_updates: pattern %q: %w", pat, err)
+		}
+	}
+	return nil
+}
+
+func (c LiveUpdatesConfig) policy() publishing.LiveUpdatePolicy {
+	p := publishing.LiveUpdatePolicy{MaxAge: time.Duration(c.MaxAgeMinutes) * time.Minute}
+	for _, pat := range c.Patterns {
+		p.Patterns = append(p.Patterns, regexp.MustCompile("(?i)"+pat))
+	}
+	for _, pat := range c.ExcludePatterns {
+		p.Exclude = append(p.Exclude, regexp.MustCompile("(?i)"+pat))
+	}
+	return p
 }
 
 // Validate checks every threshold is a positive number of hours.
@@ -1637,7 +1810,7 @@ func (c FreshnessConfig) Validate() error {
 	if c.HardNewsHours <= 0 || c.SocialHours <= 0 || c.AnalysisHours <= 0 || c.DefaultHours <= 0 {
 		return fmt.Errorf("all thresholds must be positive")
 	}
-	return nil
+	return c.LiveUpdates.validate()
 }
 
 // Policy converts FreshnessConfig into the domain's FreshnessPolicy.
@@ -1647,6 +1820,7 @@ func (c FreshnessConfig) Policy() publishing.FreshnessPolicy {
 		SocialHours:   c.SocialHours,
 		AnalysisHours: c.AnalysisHours,
 		DefaultHours:  c.DefaultHours,
+		LiveUpdates:   c.LiveUpdates.policy(),
 	}
 }
 
@@ -2708,6 +2882,7 @@ func (c Config) DedupCascade() in.DedupCascadeConfig {
 	return in.DedupCascadeConfig{
 		Classification: in.ClassificationSettings{
 			Enabled: c.Classification.Enabled, TrustedSourceIDs: trustedSourceIDs, ContextSourceIDs: contextSourceIDs,
+			Anchor: c.Classification.Anchor.Policy(),
 		},
 		Editorial: in.EditorialSettings{Mode: c.Editorial.Mode, AmbiguousPolicy: c.Editorial.AmbiguousPolicy, CanaryPercent: c.EditorialRollout.CanaryPercent, ModelBypassSourceIDs: modelBypassSourceIDs, UnconditionalPublishSourceIDs: unconditionalPublishSourceIDs},
 		Normalization: in.NormalizationSettings{
@@ -2736,8 +2911,11 @@ func (c Config) DedupCascade() in.DedupCascadeConfig {
 		// which can fail and therefore does not belong in this
 		// error-free config method. main.go loads and overlays the full
 		// ClusterSettings onto this base value when c.Clustering.Enabled.
-		Cluster:   in.ClusterSettings{Enabled: c.Clustering.Enabled},
-		SeenItems: in.SeenItemsSettings{ReclaimAfter: c.SeenItems.ReclaimAfter()},
+		Cluster:    in.ClusterSettings{Enabled: c.Clustering.Enabled},
+		SeenItems:  in.SeenItemsSettings{ReclaimAfter: c.SeenItems.ReclaimAfter()},
+		StoryGuard: c.Deduplication.StoryGuard.Policy(),
+
+		PublishAmbiguousClusters: c.Clustering.PublishAmbiguous,
 	}
 }
 

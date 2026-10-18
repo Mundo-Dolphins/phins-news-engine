@@ -43,6 +43,7 @@ func NewCommand() *cobra.Command {
 	trainCmd := &cobra.Command{Use: "train", Short: "Train the editorial classifier offline"}
 	trainCmd.AddCommand(newBuildCommand())
 	trainCmd.AddCommand(newAuditDatasetCommand())
+	trainCmd.AddCommand(newAuditGatesCommand())
 	trainCmd.AddCommand(newTrainSeedV1Cmd())
 	trainCmd.AddCommand(newAnalyzeCommand())
 	trainCmd.AddCommand(newEvaluateCommand())

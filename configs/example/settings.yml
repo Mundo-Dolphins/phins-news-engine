@@ -70,6 +70,12 @@ classification:
     - rss:isotopes-official
   context_source_ids:
     - rss:example-sports-wire
+  # Untrusted sources must also carry evidence that names the team itself.
+  anchor:
+    enabled: true
+    categories: [official_names, hashtags, coaching_staff, active_roster_core]
+    multi_word_categories: [active_roster_core]
+    min_confidence: 0.7
 normalization:
   url:
     tracking_params: [utm_source, utm_medium, utm_campaign, utm_term, utm_content, fbclid, gclid, ref]
@@ -90,6 +96,16 @@ normalization:
     min_token_length: 3
     stop_words: [the, and, with, for, from, that, this, into, over, after, before]
 deduplication:
+  # At most max_per_story messages per story within window_hours.
+  story_guard:
+    enabled: true
+    window_hours: 48
+    max_per_story: 2
+    min_shared_tokens: 4
+    overlap_threshold: 0.6
+    generic_token_share: 0.05
+    exempt_title_patterns:
+      - "meets with the media"
   near_duplicate:
     enabled: true
     method: jaccard
@@ -119,6 +135,7 @@ clustering:
       rules_path: configs/example/league_alias_rules.yml
       max_age_days: 14
   candidate_limit: 50
+  publish_ambiguous: true
 editorial:
   mode: shadow
   ambiguous_policy: reject
@@ -130,6 +147,12 @@ editorial:
 freshness:
   hard_news_hours: 72
   social_hours: 6
+  live_updates:
+    max_age_minutes: 90
+    patterns:
+      - "^\\W*(?:touchdown|half-?time)\\b"
+    exclude_patterns:
+      - "\\bfinal\\b"
   analysis_hours: 168
   default_hours: 72
 telegram:
