@@ -62,7 +62,7 @@ func Decide(role clustering.MemberRole, policy Policy, cooldownRemaining time.Du
 
 	switch role {
 	case clustering.MemberRoleFirstReport, clustering.MemberRoleAnalysis,
-		clustering.MemberRoleReaction, clustering.MemberRolePrimarySource:
+		clustering.MemberRoleReaction, clustering.MemberRolePrimarySource, clustering.MemberRoleRelatedCoverage:
 		// Not a duplicate/near-duplicate situation at all — policy has
 		// nothing to decide, publish exactly as every article does today.
 		return Decision{Code: CodeStandard, Explanation: "no policy-relevant duplication signal", Novelty: novelty, MemberRole: role, ShouldPublish: true}

@@ -129,8 +129,8 @@ func Run(ctx context.Context, deps Deps, req Request) (Result, error) {
 	}
 	result.CIPassed = true
 
-	if _, err := deps.Runner.Run(ctx, "make", "build-deploy"); err != nil {
-		return result, fmt.Errorf("deployment: make build-deploy failed: %w", err)
+	if buildOut, err := deps.Runner.Run(ctx, "make", "build-deploy"); err != nil {
+		return result, fmt.Errorf("deployment: make build-deploy failed: %w%s", err, outputTail(buildOut))
 	}
 	result.Built = true
 
@@ -162,4 +162,21 @@ func Run(ctx context.Context, deps Deps, req Request) (Result, error) {
 	}
 	result.RolledBack = true
 	return result, fmt.Errorf("deployment: deploy was unhealthy (%s) — rolled back to the previous version", detail)
+}
+
+// maxOutputTail bounds how much command output an error carries.
+const maxOutputTail = 4000
+
+// outputTail formats the end of a failed command's combined output for an
+// error message ("" when there is none). The cause of a failed build is in
+// that output; the exit status alone ("exit status 2") hides it.
+func outputTail(output string) string {
+	output = strings.TrimSpace(output)
+	if output == "" {
+		return ""
+	}
+	if len(output) > maxOutputTail {
+		output = "...\n" + output[len(output)-maxOutputTail:]
+	}
+	return "\n--- command output ---\n" + output
 }

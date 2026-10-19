@@ -96,6 +96,7 @@ type ProcessCycle struct {
 	currentMatchStateOK bool
 
 	recentStories out.RecentStoryRepository
+	titleTokens   titleTokenCache
 }
 
 // SetLivePolicy is called by the composition root. Its zero value is safe:
@@ -1284,6 +1285,15 @@ func (p *ProcessCycle) cluster(ctx context.Context, a *article.Article, dedupDec
 	applyDedupHint(candidates, dedupDecision)
 
 	decision := clustering.DecideJoin(rep, candidates, p.cascade.Cluster.Decide, now)
+	if decision.Action != clustering.ActionJoin {
+		joined, ok, err := p.lexicalJoin(ctx, *a, decision, now)
+		if err != nil {
+			return clustering.Decision{}, err
+		}
+		if ok {
+			decision = joined
+		}
+	}
 
 	var clusterID string
 	memberRole := clustering.MemberRoleFirstReport
@@ -1659,6 +1669,47 @@ func (p *ProcessCycle) gameInProgress() bool {
 	return false
 }
 
+// lexicalJoin looks for an open cluster holding a recent article that tells
+// the same story as a in other words, for articles event signals could not
+// place (most of the traffic has no event type to match on). It returns the
+// join decision to use instead of prior, or ok=false.
+func (p *ProcessCycle) lexicalJoin(ctx context.Context, a article.Article, prior clustering.Decision, now time.Time) (clustering.Decision, bool, error) {
+	policy := p.cascade.LexicalJoin
+	if !policy.Enabled || p.recentStories == nil || p.cascade.StoryGuard.Exempt(a.Title) {
+		return clustering.Decision{}, false, nil
+	}
+	text := p.cascade.Normalization.Text
+	tokens := storyguard.Tokenize(a.Title, text)
+	if len(tokens) == 0 {
+		return clustering.Decision{}, false, nil
+	}
+	stories, err := p.recentStories.ListRecentClustered(ctx, now.Add(-policy.Window), a.ID, 2000)
+	if err != nil {
+		return clustering.Decision{}, false, fmt.Errorf("process cycle: list recent clustered articles for %s: %w", a.ID, err)
+	}
+	recent := make([]storyguard.Recent, 0, len(stories))
+	for _, s := range stories {
+		if s.ClusterID == "" {
+			continue
+		}
+		recent = append(recent, storyguard.Recent{ArticleID: s.ArticleID, ClusterID: s.ClusterID, Title: s.Title, Tokens: p.titleTokens.get(s.ArticleID, s.Title, text)})
+	}
+	best, ratio, ok := policy.BestMatch(tokens, recent)
+	if !ok {
+		return clustering.Decision{}, false, nil
+	}
+	return clustering.Decision{
+		Action:       clustering.ActionJoin,
+		ClusterID:    best.ClusterID,
+		MemberRole:   clustering.MemberRoleRelatedCoverage,
+		Score:        ratio,
+		Evidence:     []clustering.Evidence{clustering.Evidence(fmt.Sprintf("lexical: wording overlaps %.0f%% with article %s in the cluster", 100*ratio, best.ArticleID))},
+		Alternatives: prior.Alternatives,
+		RulesVersion: prior.RulesVersion,
+		DecidedAt:    now,
+	}, true, nil
+}
+
 // storyRepeated reports whether the channel already carries the configured
 // maximum number of messages about a's story, and which articles they are.
 func (p *ProcessCycle) storyRepeated(ctx context.Context, a article.Article, text normalization.Representations, now time.Time) (bool, []string, error) {
@@ -1672,9 +1723,9 @@ func (p *ProcessCycle) storyRepeated(ctx context.Context, a article.Article, tex
 	}
 	recent := make([]storyguard.Recent, len(stories))
 	for i, s := range stories {
-		recent[i] = storyguard.Recent{ArticleID: s.ArticleID, Title: s.Title, Tokens: normalization.Normalize(s.Title, p.cascade.Normalization.Text).Tokens}
+		recent[i] = storyguard.Recent{ArticleID: s.ArticleID, Title: s.Title, Tokens: p.titleTokens.get(s.ArticleID, s.Title, p.cascade.Normalization.Text)}
 	}
-	exceeded, matched := policy.Exceeded(text.Tokens, recent)
+	exceeded, matched := policy.Exceeded(storyguard.Tokenize(a.Title, p.cascade.Normalization.Text), recent)
 	return exceeded, matched, nil
 }
 

@@ -10,6 +10,8 @@ type RecentStory struct {
 	ArticleID string
 	Title     string
 	SourceID  string
+	// ClusterID is the cluster the article belongs to ("" when it has none).
+	ClusterID string
 }
 
 // RecentStoryRepository lists what the channel already carries, for the
@@ -20,4 +22,9 @@ type RecentStoryRepository interface {
 	// (pending_publication, publishing, pending_retry), newest first,
 	// excluding excludeID.
 	ListRecentlyPublishable(ctx context.Context, since time.Time, excludeID string, limit int) ([]RecentStory, error)
+	// ListRecentClustered returns articles fetched at or after since that
+	// belong to an open cluster, whatever their publication outcome (a
+	// retained or rejected-quality member is still part of the story), newest
+	// first, excluding excludeID.
+	ListRecentClustered(ctx context.Context, since time.Time, excludeID string, limit int) ([]RecentStory, error)
 }

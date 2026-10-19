@@ -14,7 +14,7 @@ var textCfg = normalization.TextConfig{
 	StopWords: []string{"the", "and", "with", "for", "from", "that", "this", "into", "over", "after", "before"},
 }
 
-func tokens(title string) []string { return normalization.Normalize(title, textCfg).Tokens }
+func tokens(title string) []string { return Tokenize(title, textCfg) }
 
 var policy = Policy{Enabled: true, MaxPerStory: 2, MinSharedTokens: 4, OverlapThreshold: 0.6}
 
@@ -30,6 +30,7 @@ func TestSameStory(t *testing.T) {
 		}
 	}
 	different := [][2]string{
+		{"Touchdown Shelbyville Sharks | Joe Burrow 7-yard throw to Mike Gesicki Sharks 14-7", "Touchdown Shelbyville Sharks | Joe Burrow 5-yard throw to Tanner Hudson Sharks 21-7"},
 		{"Montgomery Burns sells 2.1% of the Isotopes at record valuation", "Kent Brockman no longer officially working with Isotopes"},
 		{"Isotopes injury report: Homer Simpson limited in practice", "Isotopes injury report: Ned Flanders did not practice Wednesday"},
 		{"Isotopes bench Bart Simpson", "Bart Simpson checkdowns?"},
@@ -70,5 +71,24 @@ func TestExemptTitles(t *testing.T) {
 		if got := p.Exempt(title); got != want {
 			t.Errorf("Exempt(%q) = %v, want %v", title, got, want)
 		}
+	}
+}
+
+func TestBestMatch(t *testing.T) {
+	recent := []Recent{
+		{ArticleID: "other", ClusterID: "c-other", Tokens: tokens("Kent Brockman no longer officially working with Isotopes")},
+		{ArticleID: "loose", ClusterID: "c-loose", Tokens: tokens("Montgomery Burns sells stake in the team")},
+		{ArticleID: "best", ClusterID: "c-best", Tokens: tokens("Montgomery Burns sells 2.1% of the Isotopes at record valuation")},
+	}
+	got, ratio, ok := policy.BestMatch(tokens("BREAKING: Montgomery Burns sells sliver of Isotopes at record valuation"), recent)
+	if !ok || got.ArticleID != "best" || got.ClusterID != "c-best" || ratio < 0.65 {
+		t.Fatalf("BestMatch = %+v ratio %.2f ok %v, want article best", got, ratio, ok)
+	}
+	if _, _, ok := policy.BestMatch(tokens("Bart Simpson injury update"), recent); ok {
+		t.Fatal("unrelated title must not match")
+	}
+	// Works without MaxPerStory (it only finds the story).
+	if _, _, ok := (Policy{OverlapThreshold: 0.65, MinSharedTokens: 4}).BestMatch(tokens("Montgomery Burns sells stake at record valuation of Isotopes"), recent); !ok {
+		t.Fatal("BestMatch must not depend on Enabled/MaxPerStory")
 	}
 }

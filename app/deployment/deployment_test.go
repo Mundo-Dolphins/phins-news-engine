@@ -349,3 +349,19 @@ func TestRun_RejectsBroadArtifactPaths(t *testing.T) {
 		})
 	}
 }
+
+func TestRun_BuildFailureCarriesTheBuildOutput(t *testing.T) {
+	runner := &fakeRunner{responses: map[string]struct {
+		stdout string
+		err    error
+	}{
+		"git status --porcelain": {"", nil},
+		sanitizedCICommand:       {"ok", nil},
+		"make build-deploy":      {"# example/cmd\ncmd/main.go:9:2: undefined: nope", errors.New("exit status 2")},
+	}}
+	_, err := deployment.Run(context.Background(), deployment.Deps{Runner: runner, Deploy: &fakeDeploy{}, Health: &fakeHealth{}, Rollback: &fakeRollback{}},
+		deployment.Request{Host: "h", CITimeout: time.Minute})
+	if err == nil || !strings.Contains(err.Error(), "undefined: nope") {
+		t.Fatalf("Run() error = %v, want it to carry the build output", err)
+	}
+}

@@ -136,6 +136,12 @@ clustering:
       max_age_days: 14
   candidate_limit: 50
   publish_ambiguous: true
+  lexical_join:
+    enabled: true
+    window_hours: 48
+    min_shared_tokens: 4
+    overlap_threshold: 0.65
+    generic_token_share: 0.05
 editorial:
   mode: shadow
   ambiguous_policy: reject

@@ -25,7 +25,7 @@ func TestDecide_AcquiredAlwaysReservesInitialRegardlessOfRoleOrPolicy(t *testing
 func TestDecide_NotAcquired_ExemptRolesAlwaysAllowed(t *testing.T) {
 	exempt := []clustering.MemberRole{
 		clustering.MemberRoleFirstReport, clustering.MemberRoleAnalysis,
-		clustering.MemberRoleReaction, clustering.MemberRolePrimarySource,
+		clustering.MemberRoleReaction, clustering.MemberRolePrimarySource, clustering.MemberRoleRelatedCoverage,
 	}
 	for _, role := range exempt {
 		if got := clustergate.Decide(false, role, sourcepolicy.CodeStandard); got != clustergate.OutcomeAllowedExempt {

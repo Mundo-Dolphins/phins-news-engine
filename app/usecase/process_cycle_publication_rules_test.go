@@ -8,6 +8,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/app/usecase"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/article"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/classification"
+	"github.com/Mundo-Dolphins/phins-news-engine/domain/clustering"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/dictionary"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/matchstate"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/publishing"
@@ -62,6 +63,10 @@ func TestProcessCycle_AnchorPolicyRejectsRelatedVerdictWithoutAnchor(t *testing.
 }
 
 type fakeRecentStories struct{ stories []out.RecentStory }
+
+func (f fakeRecentStories) ListRecentClustered(context.Context, time.Time, string, int) ([]out.RecentStory, error) {
+	return f.stories, nil
+}
 
 func (f fakeRecentStories) ListRecentlyPublishable(context.Context, time.Time, string, int) ([]out.RecentStory, error) {
 	return f.stories, nil
@@ -141,5 +146,46 @@ func TestProcessCycle_SocialPostsDuringLiveGameGetShortWindow(t *testing.T) {
 	}
 	if r := run(nil, article.ContentTypeSocialPost, 2*time.Hour); r.Accepted != 1 {
 		t.Errorf("no match-state provider: %+v, want accepted", r)
+	}
+}
+
+func TestProcessCycle_LexicalJoinPutsRewrittenStoryInTheExistingCluster(t *testing.T) {
+	now := time.Date(2026, 10, 16, 20, 0, 0, 0, time.UTC)
+	cascade := defaultCascade()
+	cascade.LexicalJoin = storyguard.Policy{Enabled: true, Window: 48 * time.Hour, MinSharedTokens: 4, OverlapThreshold: 0.65}
+	recent := fakeRecentStories{stories: []out.RecentStory{
+		{ArticleID: "a", ClusterID: "cluster-ross", Title: "Montgomery Burns sells 2.1% of the Isotopes at record valuation"},
+		{ArticleID: "b", ClusterID: "cluster-aikman", Title: "Kent Brockman no longer officially working with Isotopes"},
+	}}
+	run := func(title string, join bool) (article.Article, in.ProcessCycleResult) {
+		c := cascade
+		if !join {
+			c.LexicalJoin.Enabled = false
+		}
+		articles := &fakeArticleRepo{}
+		uc := newRulesTestCycle(fakeFetcher{articles: []article.Article{{
+			Title: title, OriginalURL: "https://example.com/" + title[:6],
+			ContentType: article.ContentTypeArticle, PublishedAt: now.Add(-time.Hour),
+		}}}, articles, &fakeDecisionRepo{}, now, dictionary.Matcher{}, c)
+		uc.SetRecentStories(recent)
+		result, err := uc.Run(context.Background())
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+		return articles.lastSaved(), result
+	}
+
+	saved, result := run("Montgomery Burns sells sliver of Isotopes at record valuation", true)
+	if saved.ClusterID != "cluster-ross" || saved.ClusterMemberRole != string(clustering.MemberRoleRelatedCoverage) {
+		t.Errorf("cluster = %q role = %q, want cluster-ross/related_coverage", saved.ClusterID, saved.ClusterMemberRole)
+	}
+	if result.Accepted != 1 {
+		t.Errorf("result = %+v, want the second point of view accepted (the story guard, not the cluster gate, bounds repeats)", result)
+	}
+	if saved, _ := run("Montgomery Burns sells sliver of Isotopes at record valuation", false); saved.ClusterID == "cluster-ross" {
+		t.Error("lexical join disabled: the article must not join the cluster")
+	}
+	if saved, _ := run("Bart Simpson ruled out for Sunday", true); saved.ClusterID == "cluster-ross" || saved.ClusterID == "cluster-aikman" {
+		t.Errorf("unrelated article joined %q", saved.ClusterID)
 	}
 }

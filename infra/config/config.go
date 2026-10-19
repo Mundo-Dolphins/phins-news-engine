@@ -1516,6 +1516,47 @@ func (c DeduplicationConfig) Validate() error {
 	return nil
 }
 
+// LexicalJoinConfig configures the lexical cluster join. It reuses
+// storyguard's matching, so its thresholds mean the same as story_guard's.
+type LexicalJoinConfig struct {
+	Enabled           bool    `yaml:"enabled"`
+	WindowHours       int     `yaml:"window_hours"`
+	MinSharedTokens   int     `yaml:"min_shared_tokens"`
+	OverlapThreshold  float64 `yaml:"overlap_threshold"`
+	GenericTokenShare float64 `yaml:"generic_token_share"`
+}
+
+// Validate checks an enabled lexical join has usable bounds.
+func (c LexicalJoinConfig) Validate() error {
+	if !c.Enabled {
+		return nil
+	}
+	if c.WindowHours <= 0 {
+		return fmt.Errorf("window_hours must be positive")
+	}
+	if c.MinSharedTokens <= 0 {
+		return fmt.Errorf("min_shared_tokens must be positive")
+	}
+	if c.OverlapThreshold <= 0 || c.OverlapThreshold > 1 {
+		return fmt.Errorf("overlap_threshold must be within (0,1]")
+	}
+	if c.GenericTokenShare < 0 || c.GenericTokenShare >= 1 {
+		return fmt.Errorf("generic_token_share must be within [0,1)")
+	}
+	return nil
+}
+
+// Policy converts the section into the domain policy.
+func (c LexicalJoinConfig) Policy() storyguard.Policy {
+	return storyguard.Policy{
+		Enabled:           c.Enabled,
+		Window:            time.Duration(c.WindowHours) * time.Hour,
+		MinSharedTokens:   c.MinSharedTokens,
+		OverlapThreshold:  c.OverlapThreshold,
+		GenericTokenShare: c.GenericTokenShare,
+	}
+}
+
 // StoryGuardConfig configures storyguard.Policy.
 type StoryGuardConfig struct {
 	Enabled          bool    `yaml:"enabled"`
@@ -1607,6 +1648,9 @@ type ClusteringConfig struct {
 	// PublishAmbiguous publishes articles whose join-vs-create decision was
 	// ambiguous (as a new cluster) instead of retaining them silently.
 	PublishAmbiguous bool `yaml:"publish_ambiguous"`
+	// LexicalJoin joins articles that event signals cannot place to the open
+	// cluster of a recent article with overlapping distinctive wording.
+	LexicalJoin LexicalJoinConfig `yaml:"lexical_join"`
 	// EntityCatalog locates the two entity-catalog files merged into
 	// RulesFile.Entities via clusteringrules.LoadWithEntityCatalog.
 	// Required when Enabled is true.
@@ -1696,6 +1740,9 @@ func (c ClusteringConfig) Validate() error {
 	}
 	if c.CandidateLimit <= 0 {
 		return fmt.Errorf("candidate_limit must be positive")
+	}
+	if err := c.LexicalJoin.Validate(); err != nil {
+		return fmt.Errorf("lexical_join: %w", err)
 	}
 	if err := c.EntityCatalog.Validate(); err != nil {
 		return fmt.Errorf("entity_catalog: %w", err)
@@ -2916,6 +2963,7 @@ func (c Config) DedupCascade() in.DedupCascadeConfig {
 		StoryGuard: c.Deduplication.StoryGuard.Policy(),
 
 		PublishAmbiguousClusters: c.Clustering.PublishAmbiguous,
+		LexicalJoin:              c.Clustering.LexicalJoin.Policy(),
 	}
 }
 

@@ -127,7 +127,7 @@ var _ appout.RecentStoryRepository = (*SimilarityIndexRepository)(nil)
 // ListRecentlyPublishable implements ports/out.RecentStoryRepository.
 func (r *SimilarityIndexRepository) ListRecentlyPublishable(ctx context.Context, since time.Time, excludeID string, limit int) ([]appout.RecentStory, error) {
 	rows, err := executor(ctx, r.db).QueryContext(ctx, `
-		SELECT id, title, source_id
+		SELECT id, title, source_id, COALESCE(current_cluster_id, '')
 		FROM articles
 		WHERE fetched_at >= ?
 		  AND id <> ?
@@ -141,13 +141,43 @@ func (r *SimilarityIndexRepository) ListRecentlyPublishable(ctx context.Context,
 	var out []appout.RecentStory
 	for rows.Next() {
 		var s appout.RecentStory
-		if err := rows.Scan(&s.ArticleID, &s.Title, &s.SourceID); err != nil {
+		if err := rows.Scan(&s.ArticleID, &s.Title, &s.SourceID, &s.ClusterID); err != nil {
 			return nil, fmt.Errorf("sqlite: scan recent story: %w", err)
 		}
 		out = append(out, s)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("sqlite: iterate recent stories: %w", err)
+	}
+	return out, nil
+}
+
+// ListRecentClustered implements ports/out.RecentStoryRepository.
+func (r *SimilarityIndexRepository) ListRecentClustered(ctx context.Context, since time.Time, excludeID string, limit int) ([]appout.RecentStory, error) {
+	rows, err := executor(ctx, r.db).QueryContext(ctx, `
+		SELECT a.id, a.title, a.source_id, a.current_cluster_id
+		FROM articles a
+		JOIN event_clusters c ON c.id = a.current_cluster_id
+		WHERE a.fetched_at >= ?
+		  AND a.id <> ?
+		  AND c.status = 'open'
+		  AND a.status IN ('published','pending_publication','publishing','pending_retry','retained_no_publish','clustered','rejected_quality','rejected_stale')
+		ORDER BY a.fetched_at DESC
+		LIMIT ?`, since, excludeID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: list recent clustered: %w", err)
+	}
+	defer rows.Close()
+	var out []appout.RecentStory
+	for rows.Next() {
+		var s appout.RecentStory
+		if err := rows.Scan(&s.ArticleID, &s.Title, &s.SourceID, &s.ClusterID); err != nil {
+			return nil, fmt.Errorf("sqlite: scan recent clustered: %w", err)
+		}
+		out = append(out, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sqlite: iterate recent clustered: %w", err)
 	}
 	return out, nil
 }
