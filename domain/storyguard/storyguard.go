@@ -8,7 +8,10 @@ package storyguard
 
 import (
 	"regexp"
+	"strings"
 	"time"
+
+	"github.com/Mundo-Dolphins/phins-news-engine/domain/normalization"
 )
 
 // Policy configures the guard. The zero value (Enabled false) disables it.
@@ -54,33 +57,64 @@ type Recent struct {
 	ArticleID string
 	Title     string
 	Tokens    []string
+	// ClusterID is set by callers that match against clusters.
+	ClusterID string
 }
 
 // SameStory reports whether two token sets describe the same story: enough
 // distinct shared tokens and a high overlap relative to the shorter title, so
 // a short headline contained in a long one still matches.
 func (p Policy) SameStory(a, b []string) bool {
+	if conflictingNumbers(a, b) {
+		return false
+	}
+	a, b = words(a), words(b)
 	if len(a) == 0 || len(b) == 0 {
 		return false
 	}
+	shared, smaller := sharedAndSmaller(a, b)
+	if shared < p.MinSharedTokens || smaller == 0 {
+		return false
+	}
+	return float64(shared)/float64(smaller) >= p.OverlapThreshold
+}
+
+// BestMatch returns the entry of recent that tokens tells the same story as,
+// preferring the highest overlap and then the most shared tokens; ok is false
+// when none does. Unlike Exceeded it does not require Enabled or MaxPerStory:
+// it serves callers (clustering) that only need to find the story.
+func (p Policy) BestMatch(tokens []string, recent []Recent) (best Recent, ratio float64, ok bool) {
+	generic := genericTokens(recent, p.GenericTokenShare)
+	tokens = without(tokens, generic)
+	var bestRatio float64
+	var bestShared int
+	for _, r := range recent {
+		other := without(r.Tokens, generic)
+		if !p.SameStory(tokens, other) {
+			continue
+		}
+		shared, smaller := sharedAndSmaller(words(tokens), words(other))
+		r2 := float64(shared) / float64(smaller)
+		if !ok || r2 > bestRatio || (r2 == bestRatio && shared > bestShared) {
+			best, bestRatio, bestShared, ok = r, r2, shared, true
+		}
+	}
+	return best, bestRatio, ok
+}
+
+func sharedAndSmaller(a, b []string) (shared, smaller int) {
 	set := make(map[string]bool, len(a))
 	for _, t := range a {
 		set[t] = true
 	}
-	shared, seen := 0, make(map[string]bool, len(b))
+	seen := make(map[string]bool, len(b))
 	for _, t := range b {
 		if set[t] && !seen[t] {
 			seen[t] = true
 			shared++
 		}
 	}
-	distinctA := len(set)
-	distinctB := distinctCount(b)
-	smaller := min(distinctA, distinctB)
-	if shared < p.MinSharedTokens || smaller == 0 {
-		return false
-	}
-	return float64(shared)/float64(smaller) >= p.OverlapThreshold
+	return shared, min(len(set), distinctCount(b))
 }
 
 // Exceeded reports whether the story of tokens already has MaxPerStory
@@ -145,4 +179,70 @@ func without(tokens []string, drop map[string]bool) []string {
 		}
 	}
 	return kept
+}
+
+// numberMark prefixes the number entries Tokenize appends to a title's
+// tokens. They are facts to compare (a score, a yardage, a price), not words
+// to count, so the overlap ignores them and only conflictingNumbers reads them.
+const numberMark = "#n:"
+
+var numberPattern = regexp.MustCompile(`\d+(?:[.,]\d+)?`)
+
+// Tokenize returns the dedup tokens of title followed by its numbers (marked,
+// whatever their length: the tokenizer drops short words, which would drop
+// "7" and "14" from "7-yard throw, 14-7").
+func Tokenize(title string, cfg normalization.TextConfig) []string {
+	tokens := normalization.Normalize(title, cfg).Tokens
+	seen := map[string]bool{}
+	for _, n := range numberPattern.FindAllString(title, -1) {
+		n = numberMark + strings.NewReplacer(",", "", ".", "").Replace(n)
+		if !seen[n] {
+			seen[n] = true
+			tokens = append(tokens, n)
+		}
+	}
+	return tokens
+}
+
+func isNumber(t string) bool { return strings.HasPrefix(t, numberMark) }
+
+// words returns tokens without the number entries.
+func words(tokens []string) []string {
+	out := make([]string, 0, len(tokens))
+	for _, t := range tokens {
+		if !isNumber(t) {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// conflictingNumbers reports whether both titles carry numbers and those
+// numbers mostly differ (less than half of them in common): "7-yard throw,
+// 14-7" and "5-yard throw, 21-7", "over/under 258.5" and "450 yards" are the
+// same template reporting different facts, not the same story. A title
+// without numbers never conflicts.
+func conflictingNumbers(a, b []string) bool {
+	setA, setB := map[string]bool{}, map[string]bool{}
+	for _, t := range a {
+		if isNumber(t) {
+			setA[t] = true
+		}
+	}
+	for _, t := range b {
+		if isNumber(t) {
+			setB[t] = true
+		}
+	}
+	if len(setA) == 0 || len(setB) == 0 {
+		return false
+	}
+	common := 0
+	for t := range setA {
+		if setB[t] {
+			common++
+		}
+	}
+	union := len(setA) + len(setB) - common
+	return float64(common)/float64(union) < 0.5
 }

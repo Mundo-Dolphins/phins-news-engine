@@ -18,7 +18,7 @@ func TestDecide_DefaultPolicy_NonDuplicateRolesAlwaysPublishStandard(t *testing.
 	now := time.Now()
 	roles := []clustering.MemberRole{
 		clustering.MemberRoleFirstReport, clustering.MemberRoleAnalysis,
-		clustering.MemberRoleReaction, clustering.MemberRolePrimarySource,
+		clustering.MemberRoleReaction, clustering.MemberRolePrimarySource, clustering.MemberRoleRelatedCoverage,
 	}
 	for _, role := range roles {
 		d := sourcepolicy.Decide(role, sourcepolicy.DefaultPolicy("x"), 0, now)

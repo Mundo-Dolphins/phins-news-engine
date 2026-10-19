@@ -273,4 +273,9 @@ type DedupCascadeConfig struct {
 	// being retained without publishing. The story guard still bounds
 	// repeats.
 	PublishAmbiguousClusters bool
+	// LexicalJoin lets an article that event signals could not place join the
+	// open cluster of a recent article that tells the same story in other
+	// words (Enabled, Window and the matching thresholds are used; MaxPerStory
+	// is not).
+	LexicalJoin storyguard.Policy
 }

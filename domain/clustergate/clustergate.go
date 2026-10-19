@@ -66,7 +66,7 @@ func Decide(acquired bool, role clustering.MemberRole, policyCode sourcepolicy.D
 func isExempt(role clustering.MemberRole) bool {
 	switch role {
 	case clustering.MemberRoleFirstReport, clustering.MemberRoleAnalysis,
-		clustering.MemberRoleReaction, clustering.MemberRolePrimarySource:
+		clustering.MemberRoleReaction, clustering.MemberRolePrimarySource, clustering.MemberRoleRelatedCoverage:
 		return true
 	default:
 		return false

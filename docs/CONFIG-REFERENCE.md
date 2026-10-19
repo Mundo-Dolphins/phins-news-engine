@@ -121,6 +121,7 @@ test fails if a new secret field is not covered.
 | `clustering.rules_version` | Optional pin |
 | `clustering.generated_rules_path` | Optional file of approved generated phrases merged into the rules; empty means hand-written rules only |
 | `clustering.candidate_limit` | Maximum clusters compared per article |
+| `clustering.lexical_join` | `enabled`, `window_hours`, `min_shared_tokens`, `overlap_threshold`, `generic_token_share`: an article event signals could not place joins the open cluster of a recent article with overlapping distinctive title words, as role `related_coverage` (exempt from the one-initial-publication gate; `deduplication.story_guard` bounds how many reach the channel) |
 | `clustering.publish_ambiguous` | When true, an article whose join-vs-create decision is ambiguous is published as a new cluster instead of `retained_no_publish` (`cluster_ambiguous`) |
 | `clustering.entity_catalog` | `manual_path`, `generated_path`, and `league` (`mode` `off` or `mentions_only`, `roster_path`, `rules_path`, `max_age_days`) |
 

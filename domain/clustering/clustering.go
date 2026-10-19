@@ -144,6 +144,13 @@ const (
 	// exists here so the MemberRole vocabulary Task 6/Task 7 persist
 	// against is fully defined in this one package.
 	MemberRolePrimarySource MemberRole = "primary_source"
+	// MemberRoleRelatedCoverage marks an article joined to a cluster because
+	// its wording overlaps with a member's (a rewrite of the same story, or
+	// another outlet's take), not because event signals matched. It is another
+	// point of view on the story, not a duplicate of it: like analysis and
+	// reaction it is exempt from the one-initial-publication gate, and how
+	// many such articles reach the channel is bounded by the story guard.
+	MemberRoleRelatedCoverage MemberRole = "related_coverage"
 )
 
 // Candidate is one existing article — and the cluster it already belongs
