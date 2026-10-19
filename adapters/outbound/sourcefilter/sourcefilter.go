@@ -30,6 +30,34 @@ func ContainsBlockedKeyword(values []string, blockedKeywords []string) bool {
 	return false
 }
 
+// ContainsBlockedKeywordUnless is ContainsBlockedKeyword with an escape hatch:
+// an item that contains any of keepKeywords is never blocked by keyword. A
+// blocked keyword is a coarse guard against off-topic chatter ("Hurricanes"),
+// but the same word shows up in on-topic items (NFL scouts at a college game
+// between two teams); keepKeywords names those. Blocked URLs and skipped
+// authors are separate filters and are not affected.
+func ContainsBlockedKeywordUnless(values []string, blockedKeywords, keepKeywords []string) bool {
+	if !ContainsBlockedKeyword(values, blockedKeywords) {
+		return false
+	}
+	return !containsAnyKeyword(values, keepKeywords)
+}
+
+func containsAnyKeyword(values []string, keywords []string) bool {
+	for _, keep := range keywords {
+		normalized := strings.ToLower(strings.TrimSpace(keep))
+		if normalized == "" {
+			continue
+		}
+		for _, value := range values {
+			if strings.Contains(strings.ToLower(value), normalized) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // ContainsRequiredKeyword reports whether any of values contains any of
 // requiredKeywords. An empty requiredKeywords list means "no requirement"
 // — always true.

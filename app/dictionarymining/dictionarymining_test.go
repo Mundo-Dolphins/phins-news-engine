@@ -373,3 +373,102 @@ func TestExtractCandidatesWithFilter_CatalogTermsHaveWordBoundaries(t *testing.T
 		t.Errorf("incorrect catalog boundaries: %+v", got)
 	}
 }
+
+func TestCommonWordsFromSeparatesVocabularyFromProperNouns(t *testing.T) {
+	var corpus []article.Article
+	add := func(n int, title string) {
+		for i := 0; i < n; i++ {
+			corpus = append(corpus, article.Article{Title: title})
+		}
+	}
+	add(5, "the record was broken again")      // "record": vocabulary, lower case
+	add(3, "Record crowd expected tonight")    // also capitalized in headlines
+	add(8, "Montgomery Burns buys the plant")  // a name: always capitalized
+	add(1, "montgomery burns lowercase tweet") // one lower-case tweet must not make a name common
+	common := dictionarymining.CommonWordsFrom(corpus, 3, 0.3)
+	if !common["record"] {
+		t.Error("record is vocabulary (lower case in most uses)")
+	}
+	if common["montgomery"] || common["burns"] {
+		t.Errorf("a name seen once in lower case among eight capitalized must stay proper: %v", common)
+	}
+}
+
+func TestExtractCandidatesWithCommonWordsMinesOnlyProperNouns(t *testing.T) {
+	common := map[string]bool{}
+	for _, w := range []string{"lose", "fifth", "straight", "game", "bye", "record", "stake", "sells", "week", "taking", "head"} {
+		common[w] = true
+	}
+	articles := []article.Article{
+		{ID: "a", Title: "Springfield Isotopes Lose Fifth Straight Game Heading Into Bye"},
+		{ID: "b", Title: "Springfield Isotopes Lose Fifth Straight Game"},
+		{ID: "c", Title: "Montgomery Burns sells stake at record price"},
+		{ID: "d", Title: "Montgomery Burns sells another stake"},
+		{ID: "e", Title: "Sunday's game: I'm taking Moe Szyslak"},
+		{ID: "f", Title: "Moe Szyslak will start Sunday"},
+	}
+	filter := dictionarymining.FilterConfig{MinSupport: 2, CommonWords: common}
+	got := map[string]int{}
+	for _, c := range dictionarymining.ExtractCandidatesWithFilter(articles, testTextConfig(), emptyMatcher(t), filter) {
+		got[c.Term] = c.SupportCount
+	}
+	for _, want := range []string{"Montgomery Burns", "Moe Szyslak"} {
+		if got[want] < 2 {
+			t.Errorf("%q missing from candidates: %v", want, got)
+		}
+	}
+	for _, noise := range []string{"Lose Fifth Straight Game", "Lose Fifth Straight", "bye", "record", "stake", "Sunday's", "Sunday", "I'm", "Montgomery", "Burns", "Moe", "Szyslak"} {
+		if _, bad := got[noise]; bad {
+			t.Errorf("%q must not be a candidate: %v", noise, got)
+		}
+	}
+	for term := range got {
+		if term != strings.TrimSpace(term) || term == strings.ToLower(term) {
+			t.Errorf("lower-case or untrimmed candidate %q", term)
+		}
+	}
+}
+
+func TestExtractCandidatesSkipsKnownNamesAndMinesOnlyCoinedLowercaseWords(t *testing.T) {
+	filter := dictionarymining.FilterConfig{
+		MinSupport:    2,
+		CommonWords:   map[string]bool{"fans": true},
+		KnownNames:    map[string]bool{dictionarymining.NameKey("Marvin Harrison Jr."): true},
+		KnownSurnames: map[string]bool{"harrison": true},
+		EnglishWords:  map[string]bool{"fans": true, "love": true, "record": true, "outmatched": true},
+	}
+	articles := []article.Article{
+		{ID: "a", Title: "Marvin Harrison Jr. scores again, fans love the phins"},
+		{ID: "b", Title: "CB Marvin Harrison watched as Montgomery Burns cheers for the phins"},
+		{ID: "c", Title: "Harrison and the phins outmatched record crowd, phiniversary party"},
+		{ID: "d", Title: "Montgomery Burns hosts the phiniversary party"},
+	}
+	got := map[string]int{}
+	for _, c := range dictionarymining.ExtractCandidatesWithFilter(articles, testTextConfig(), emptyMatcher(t), filter) {
+		got[c.Term] = c.SupportCount
+	}
+	for _, want := range []string{"Montgomery Burns", "phins", "phiniversary"} {
+		if got[want] < 2 {
+			t.Errorf("%q should be a candidate (proper noun or coined word): %v", want, got)
+		}
+	}
+	for _, bad := range []string{"Marvin Harrison", "Marvin Harrison Jr", "Harrison", "love", "record", "outmatched", "fans"} {
+		if _, ok := got[bad]; ok {
+			t.Errorf("%q must not be a candidate (known name or English word): %v", bad, got)
+		}
+	}
+}
+
+func TestEnglishFormRecognizesInflections(t *testing.T) {
+	words := map[string]bool{"hire": true, "stop": true, "try": true, "mull": true, "compensate": true}
+	for _, w := range []string{"hiring", "hired", "stopping", "tries", "tried", "mulling", "compensated", "hire"} {
+		if !dictionarymining.EnglishFormForTest(w, words) {
+			t.Errorf("%q should be recognized as English", w)
+		}
+	}
+	for _, w := range []string{"phins", "phiniversary", "checkdowns"} {
+		if dictionarymining.EnglishFormForTest(w, words) {
+			t.Errorf("%q is coined, not English", w)
+		}
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"database/sql"
 	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionaryfile"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionaryminingfile"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/entitycatalog"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/nflverse"
 	infrasqlite "github.com/Mundo-Dolphins/phins-news-engine/infra/sqlite"
 	"github.com/Mundo-Dolphins/phins-news-engine/migrations"
 	"github.com/Mundo-Dolphins/phins-news-engine/ports/out"
@@ -175,6 +177,26 @@ func RunUpdateFlow(cmd *cobra.Command, cfg *config.Config, db *sql.DB, sessionID
 			filter.KnownEntityTerms = append(filter.KnownEntityTerms, entity.Terms...)
 		}
 	}
+	if p := catalogPaths.League.RosterPath; p != "" {
+		if f, openErr := os.Open(p); openErr == nil { // #nosec G304 -- operator-configured roster path
+			players, parseErr := nflverse.ParseRoster(f)
+			_ = f.Close()
+			if parseErr == nil {
+				filter.KnownNames, filter.KnownSurnames = dictionaryminingfile.NamesFromRoster(players)
+			} else {
+				cmd.Printf("WARNING: nflverse roster %s unreadable (%v); people it covers are not filtered out\n", p, parseErr)
+			}
+		} else {
+			cmd.Printf("WARNING: nflverse roster %s not found; people it covers are not filtered out\n", p)
+		}
+	}
+	if p := cfg.DictionaryMining.EnglishWordsPath; p != "" {
+		if words, wordsErr := dictionaryminingfile.LoadEnglishWords(p); wordsErr == nil {
+			filter.EnglishWords = words
+		} else {
+			cmd.Printf("WARNING: english word list unavailable (%v); coined words (nicknames, slang) are not mined\n", wordsErr)
+		}
+	}
 	rejectedTerms, err := candidatesRepo.ListRejectedTerms(cmd.Context())
 	if err != nil {
 		return 0, false, err
@@ -257,6 +279,13 @@ func RunUpdateFlow(cmd *cobra.Command, cfg *config.Config, db *sql.DB, sessionID
 		case "r":
 			if err := candidatesRepo.UpdateDecision(cmd.Context(), c.Term, "rejected", c.CategoryGuess, realClock.Now()); err != nil {
 				return 0, false, err
+			}
+			// Also remember it in the mining policy file, which outlives the
+			// database and is shared between machines.
+			if added, addErr := dictionaryminingfile.AddIgnoredTerm(cfg.DictionaryMining.Path, c.Term); addErr != nil {
+				cmd.Printf("WARNING: rejected term not added to %s: %v\n", cfg.DictionaryMining.Path, addErr)
+			} else if added {
+				cmd.Printf("  added %q to ignored_terms in %s\n", strings.ToLower(c.Term), cfg.DictionaryMining.Path)
 			}
 		case "c":
 			category, err := promptForCategory(cmd, scanner, categoryNames)

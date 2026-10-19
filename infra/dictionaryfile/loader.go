@@ -101,6 +101,30 @@ func Load(path string) (dictionary.Dictionary, error) {
 	return d, nil
 }
 
+// IncludePaths returns the files a root dictionary includes, as paths
+// (resolved the way Load resolves them), or nil when the dictionary has no
+// includes. Saving a dictionary rewrites those files, not the root alone, so a
+// caller that has to know which files an update can touch needs them.
+func IncludePaths(path string) ([]string, error) {
+	data, err := os.ReadFile(path) // #nosec G304 -- operator-provided dictionary path
+	if err != nil {
+		return nil, fmt.Errorf("dictionaryfile: read %s: %w", path, err)
+	}
+	root, err := decodeFile(data, path)
+	if err != nil {
+		return nil, err
+	}
+	paths := make([]string, 0, len(root.Includes))
+	for _, include := range root.Includes {
+		p, err := resolveInclude(path, include)
+		if err != nil {
+			return nil, err
+		}
+		paths = append(paths, p)
+	}
+	return paths, nil
+}
+
 func decodeFile(data []byte, path string) (yamlFile, error) {
 	var f yamlFile
 	dec := yaml.NewDecoder(bytes.NewReader(data))

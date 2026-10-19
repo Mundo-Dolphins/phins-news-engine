@@ -254,6 +254,7 @@ type BlueskyAccountConfig struct {
 	MaxAgeHours      int      `yaml:"max_age_hours"`
 	BlockedURLs      []string `yaml:"blocked_urls"`
 	BlockedKeywords  []string `yaml:"blocked_keywords"`
+	KeepKeywords     []string `yaml:"keep_keywords"` // exempts an item from blocked_keywords
 	SkipAuthors      []string `yaml:"skip_authors"`
 	Enabled          bool     `yaml:"enabled"`
 }
@@ -291,6 +292,7 @@ type BlueskyFeedConfig struct {
 	MaxAgeHours      int      `yaml:"max_age_hours"`
 	BlockedURLs      []string `yaml:"blocked_urls"`
 	BlockedKeywords  []string `yaml:"blocked_keywords"`
+	KeepKeywords     []string `yaml:"keep_keywords"` // exempts an item from blocked_keywords
 	SkipAuthors      []string `yaml:"skip_authors"`
 	Enabled          bool     `yaml:"enabled"`
 }
@@ -353,6 +355,7 @@ type TwitterAccountConfig struct {
 	SkipAuthors      []string `yaml:"skip_authors"`
 	BlockedURLs      []string `yaml:"blocked_urls"`
 	BlockedKeywords  []string `yaml:"blocked_keywords"`
+	KeepKeywords     []string `yaml:"keep_keywords"` // exempts an item from blocked_keywords
 	Enabled          bool     `yaml:"enabled"`
 }
 
@@ -391,6 +394,7 @@ type TwitterSearchConfig struct {
 	SkipAuthorPrefixes []string `yaml:"skip_author_prefixes"`
 	BlockedURLs        []string `yaml:"blocked_urls"`
 	BlockedKeywords    []string `yaml:"blocked_keywords"`
+	KeepKeywords       []string `yaml:"keep_keywords"` // exempts an item from blocked_keywords
 	Enabled            bool     `yaml:"enabled"`
 }
 
@@ -431,6 +435,7 @@ type TwitterListConfig struct {
 	SkipAuthorPrefixes []string `yaml:"skip_author_prefixes"`
 	BlockedURLs        []string `yaml:"blocked_urls"`
 	BlockedKeywords    []string `yaml:"blocked_keywords"`
+	KeepKeywords       []string `yaml:"keep_keywords"` // exempts an item from blocked_keywords
 	Enabled            bool     `yaml:"enabled"`
 }
 

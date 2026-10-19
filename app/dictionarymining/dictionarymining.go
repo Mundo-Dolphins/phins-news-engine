@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -38,6 +39,59 @@ type FilterConfig struct {
 	IgnoredTokens     []string
 	IgnoredSubstrings []string
 	CategoryGuesses   map[string]string
+	// CommonWords, when not empty, switches mining to proper nouns only. It
+	// holds words the corpus uses in lower case (see CommonWordsFrom): "record",
+	// "bye", "taking" are vocabulary, never a team, player or place. Every
+	// term must then contain a word that is not common, lower-case tokens are
+	// no longer mined, and a phrase made only of common words ("Intriguing
+	// Former", "Worst Record") is dropped.
+	CommonWords map[string]bool
+	// KnownNames are the full names (NameKey form) of people another source
+	// already covers, such as the nflverse roster: a candidate that is one of
+	// them, or that contains one, is not proposed again. KnownSurnames does the
+	// same for a single capitalized word.
+	KnownNames    map[string]bool
+	KnownSurnames map[string]bool
+	// EnglishWords is a dictionary of ordinary English words (any inflection).
+	// With it, lower-case tokens are mined again, but only the ones that are not
+	// English: nicknames, slang and coined words ("phins"), which no corpus
+	// statistic can tell from vocabulary.
+	EnglishWords map[string]bool
+}
+
+var nameSuffixes = map[string]bool{"jr": true, "sr": true, "ii": true, "iii": true, "iv": true, "v": true}
+
+// NameKey folds a person's name to the form KnownNames uses: lower case, curly
+// apostrophes and periods removed, single spaces, no generational suffix
+// ("Marvin Harrison Jr." -> "marvin harrison").
+func NameKey(name string) string {
+	name = strings.ToLower(normalizeMiningText(name))
+	name = strings.NewReplacer(".", "", ",", " ").Replace(name)
+	words := strings.Fields(name)
+	for len(words) > 1 && nameSuffixes[words[len(words)-1]] {
+		words = words[:len(words)-1]
+	}
+	return strings.Join(words, " ")
+}
+
+// coversKnownName reports whether term is, or contains as consecutive words, a
+// known full name, or is a single known surname.
+func coversKnownName(term string, cfg FilterConfig) bool {
+	words := strings.Fields(NameKey(term))
+	if len(words) == 0 {
+		return false
+	}
+	if len(words) == 1 {
+		return cfg.KnownSurnames[words[0]]
+	}
+	for i := 0; i < len(words); i++ {
+		for j := i + 2; j <= len(words); j++ {
+			if cfg.KnownNames[strings.Join(words[i:j], " ")] {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // capitalizedPhrasePattern matches a two-to-three-word Title Case phrase
@@ -183,6 +237,27 @@ func ExtractCandidatesWithFilter(articles []article.Article, textCfg normalizati
 	for _, a := range articles {
 		text := normalizeMiningText(normalization.Normalize(a.Title+" "+a.Summary, textCfg).ForClassification)
 		for _, text := range knownEntitySegments(text, entityPatterns) {
+			if len(filter.CommonWords) > 0 {
+				for _, term := range properNounTerms(text, textCfg, filter.CommonWords) {
+					if len(matcher.Find(term)) > 0 || coversKnownName(term, filter) {
+						continue
+					}
+					guess := ""
+					if strings.Contains(term, " ") {
+						guess = "nfl_people_context"
+					}
+					record(term, guess, a.ID)
+				}
+				if len(filter.EnglishWords) > 0 && !looksNonEnglish(text) {
+					for _, tok := range lowerCaseTokens(text) {
+						if !isCoinedWord(tok, filter) || len(matcher.Find(tok)) > 0 {
+							continue
+						}
+						record(tok, "", a.ID)
+					}
+				}
+				continue
+			}
 			for _, phrase := range capitalizedPhrasePattern.FindAllString(text, -1) {
 				if len(matcher.Find(phrase)) > 0 {
 					continue
@@ -334,5 +409,249 @@ func Select(ctx context.Context, deps Deps, sessionID string, matcher dictionary
 		articles = append(articles, a)
 	}
 
+	if filter.CommonWords == nil {
+		// Best effort: without a background corpus mining keeps its old
+		// behavior rather than failing.
+		if background, bgErr := deps.Articles.ListCandidatesForReview(ctx, time.Now().AddDate(0, 0, -backgroundDays), backgroundLimit); bgErr == nil && len(background) >= minBackground {
+			filter.CommonWords = CommonWordsFrom(append(background, articles...), commonMinLower, commonLowerShare)
+		}
+	}
 	return ExtractCandidatesWithFilter(articles, textCfg, matcher, filter), nil
 }
+
+// The background corpus that decides which words are common vocabulary.
+const (
+	backgroundDays  = 7
+	backgroundLimit = 4000
+	// Below this many articles a word cannot be judged common or proper.
+	minBackground    = 500
+	commonMinLower   = 3
+	commonLowerShare = 0.3
+)
+
+var lowerWordPattern = regexp.MustCompile(`[\p{L}][\p{L}']*`)
+
+// commonWordKey folds a word to the key CommonWords uses.
+func commonWordKey(word string) string {
+	return strings.ToLower(strings.Trim(normalizeMiningText(word), "'"))
+}
+
+// CommonWordsFrom returns the words that articles use as ordinary vocabulary:
+// those written in lower case at least minLower times, and in lower case at
+// least lowerShare of all their occurrences. Proper nouns are (almost) never
+// written in lower case, headlines in Title Case do not make a word proper,
+// and a few lower-case tweets do not make a surname common, hence both
+// thresholds. Pass a corpus much larger than the sample being mined (a week
+// of articles): a word seen twice cannot be judged.
+func CommonWordsFrom(articles []article.Article, minLower int, lowerShare float64) map[string]bool {
+	lower, total := map[string]int{}, map[string]int{}
+	for _, a := range articles {
+		text := normalizeMiningText(a.Title + " " + a.Summary)
+		for _, word := range lowerWordPattern.FindAllString(text, -1) {
+			key := commonWordKey(word)
+			if len(key) < 2 {
+				continue
+			}
+			total[key]++
+			if first, _ := utf8.DecodeRuneInString(word); unicode.IsLower(first) {
+				lower[key]++
+			}
+		}
+	}
+	common := make(map[string]bool)
+	for key, n := range lower {
+		if n >= minLower && float64(n) >= lowerShare*float64(total[key]) {
+			common[key] = true
+		}
+	}
+	return common
+}
+
+// hasProperWord reports whether term contains a word that is not common
+// vocabulary.
+func hasProperWord(term string, common map[string]bool) bool {
+	for _, word := range strings.Fields(term) {
+		if !common[commonWordKey(word)] {
+			return true
+		}
+	}
+	return false
+}
+
+// capitalizedRunPattern matches a run of consecutive Capitalized words.
+var capitalizedRunPattern = regexp.MustCompile(`\b[A-Z][\p{L}]*(?:'[\p{L}]+)*(?:\s+[A-Z][\p{L}]*(?:'[\p{L}]+)*)*`)
+
+// properNounTerms lists, for one text, the proper-noun candidates: each run of
+// capitalized words with the stopwords (The, And, Of...) trimmed from its ends,
+// a run of one word as that word, a longer run as its phrase (windows of up to
+// three words), and in both cases only if it holds a word that is not common
+// vocabulary. A single word inside a longer run is not a candidate on its own:
+// "Moe" and "Angeles" are halves of "Moe Szyslak" and "Los Angeles".
+func properNounTerms(text string, cfg normalization.TextConfig, common map[string]bool) []string {
+	stop := make(map[string]bool, len(cfg.StopWords))
+	for _, w := range cfg.StopWords {
+		stop[strings.ToLower(w)] = true
+	}
+	// edge reports whether a word at either end of a run is filler rather than
+	// part of a name: a stopword, or vocabulary the corpus writes in lower case.
+	edge := func(word string) bool {
+		key := commonWordKey(word)
+		return stop[key] || common[key] || calendarWords[key]
+	}
+	trim := func(words []string) []string {
+		cleaned := make([]string, 0, len(words))
+		for _, w := range words {
+			if w = cleanWord(w); w != "" {
+				cleaned = append(cleaned, w)
+			}
+		}
+		words = cleaned
+		for len(words) > 1 && edge(words[0]) {
+			words = words[1:]
+		}
+		for len(words) > 1 && edge(words[len(words)-1]) {
+			words = words[:len(words)-1]
+		}
+		if len(words) == 1 && (stop[commonWordKey(words[0])] || calendarWords[commonWordKey(words[0])]) {
+			return nil
+		}
+		return words
+	}
+	var terms []string
+	for _, run := range capitalizedRunPattern.FindAllString(text, -1) {
+		words := trim(strings.Fields(run))
+		switch {
+		case len(words) == 0:
+		case len(words) == 1:
+			if len([]rune(words[0])) >= 3 && !isHandleLike(words[0]) && hasProperWord(words[0], common) {
+				terms = append(terms, words[0])
+			}
+		default:
+			for i := 0; i < len(words); i += 3 {
+				end := i + 3
+				if end > len(words) {
+					end = len(words)
+				}
+				if end-i < 2 {
+					break
+				}
+				phrase := strings.Join(words[i:end], " ")
+				if hasProperWord(phrase, common) {
+					terms = append(terms, phrase)
+				}
+			}
+		}
+	}
+	return terms
+}
+
+// calendarWords are capitalized by spelling, so the corpus never shows them in
+// lower case, yet they are never entities.
+var calendarWords = map[string]bool{
+	"monday": true, "tuesday": true, "wednesday": true, "thursday": true, "friday": true, "saturday": true, "sunday": true,
+	"january": true, "february": true, "march": true, "april": true, "may": true, "june": true, "july": true,
+	"august": true, "september": true, "october": true, "november": true, "december": true,
+	"jan": true, "feb": true, "mar": true, "apr": true, "jun": true, "jul": true, "aug": true, "sep": true, "sept": true, "oct": true, "nov": true, "dec": true,
+}
+
+var contractionSuffix = regexp.MustCompile(`(?i)'(m|ll|ve|re|d|t|s)$`)
+
+// cleanWord drops a possessive ("Springfield's" -> "Springfield") and returns "" for a
+// contraction ("I'm", "Don't").
+func cleanWord(word string) string {
+	loc := contractionSuffix.FindStringSubmatchIndex(word)
+	if loc == nil {
+		return word
+	}
+	if strings.EqualFold(word[loc[2]:loc[3]], "s") {
+		return word[:loc[0]]
+	}
+	return ""
+}
+
+// isCoinedWord reports whether a lower-case token looks like a nickname or
+// coined word: alphabetic, not an English word, not corpus vocabulary and not
+// a known name.
+func isCoinedWord(tok string, cfg FilterConfig) bool {
+	if len([]rune(tok)) < 4 {
+		return false
+	}
+	for _, r := range tok {
+		if !unicode.IsLetter(r) {
+			return false
+		}
+	}
+	key := commonWordKey(tok)
+	if cfg.CommonWords[key] || cfg.KnownSurnames[key] || englishForm(key, cfg.EnglishWords) {
+		return false
+	}
+	return true
+}
+
+// inflectionSuffixes are the endings englishForm strips to find a base word.
+var inflectionSuffixes = []string{"ing", "ed", "es", "s", "ly", "er", "est", "d", "ers", "ness", "ment", "ments", "ings"}
+
+// englishForm reports whether word is in words or is an inflection or simple
+// derivation of a word in it. A word list holds base forms ("hire"), not
+// "hiring", "hired" or "hires".
+func englishForm(word string, words map[string]bool) bool {
+	if words[word] {
+		return true
+	}
+	for _, suffix := range inflectionSuffixes {
+		if !strings.HasSuffix(word, suffix) || len(word) <= len(suffix)+2 {
+			continue
+		}
+		stem := strings.TrimSuffix(word, suffix)
+		if words[stem] || words[stem+"e"] || words[stem+"y"] {
+			return true
+		}
+		if n := len(stem); n > 2 && stem[n-1] == stem[n-2] && words[stem[:n-1]] {
+			return true // doubled consonant: stopping -> stop
+		}
+		if strings.HasSuffix(stem, "i") && words[strings.TrimSuffix(stem, "i")+"y"] {
+			return true // tries -> try
+		}
+	}
+	return false
+}
+
+// lowerCaseTokens returns the words of text that are written entirely in lower
+// case there. Names, which Title Case headlines and normalization would also
+// fold to lower case ("cobee", "jaylen"), are left out: only a word the author
+// really wrote in lower case can be slang or a nickname.
+func lowerCaseTokens(text string) []string {
+	var out []string
+	for _, tok := range lowerWordPattern.FindAllString(text, -1) {
+		if strings.ToLower(tok) == tok && !strings.Contains(tok, "'") {
+			out = append(out, tok)
+		}
+	}
+	return out
+}
+
+var spanishFunctionWords = map[string]bool{
+	"el": true, "la": true, "los": true, "las": true, "de": true, "del": true, "que": true, "con": true,
+	"por": true, "para": true, "una": true, "un": true, "en": true, "se": true, "su": true, "al": true, "como": true,
+}
+
+// looksNonEnglish reports whether text reads as Spanish (two or more function
+// words), so its words are not mistaken for English slang.
+func looksNonEnglish(text string) bool {
+	n := 0
+	for _, w := range strings.Fields(strings.ToLower(text)) {
+		if spanishFunctionWords[strings.Trim(w, ".,;:!?¡¿\"()")] {
+			n++
+			if n >= 2 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+var camelCasePattern = regexp.MustCompile(`[a-z][A-Z]`)
+
+// isHandleLike reports whether word looks like a social handle or brand
+// (NFLTradeRumors, TylerCarmona), which is not a dictionary term.
+func isHandleLike(word string) bool { return camelCasePattern.MatchString(word) }

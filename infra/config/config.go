@@ -2455,6 +2455,11 @@ func (c DictionaryConfig) Validate() error { return nil }
 // terms from completed editorial review sessions.
 type DictionaryMiningConfig struct {
 	Path string `yaml:"path"`
+	// EnglishWordsPath is a newline-separated list of English words, such as
+	// /usr/share/dict/words. With it, mining also proposes lower-case coined
+	// words (nicknames, slang) while skipping every ordinary English word.
+	// Optional: when empty or unreadable, only proper nouns are mined.
+	EnglishWordsPath string `yaml:"english_words_path"`
 }
 
 // Validate is permissive for backward-compatible config loading. The
