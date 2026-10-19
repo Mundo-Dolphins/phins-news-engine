@@ -175,6 +175,7 @@ test fails if a new secret field is not covered.
 | `entity_discovery.verification` | `wikidata_first`, `fallback` |
 | `catalog_maintenance.web_lookup` | Web search for entity verification: provider (SearXNG), endpoint, budgets, rate limits, cache TTL, a fallback provider, trusted domains |
 | `offline_training.*` | `llm` (teacher model), `promotion`, `retrain_triggers`, `mining`, `model_training`, `review_scoring` |
-| `dictionary_mining.path` | Noise policy for dictionary candidate mining |
+| `dictionary_mining.path` | Noise policy for dictionary candidate mining; a term rejected in `dictionary mine-candidates` is appended to its `ignored_terms` |
+| `dictionary_mining.english_words_path` | Optional English word list (one word per line, e.g. `/usr/share/dict/words`). With it, mining also proposes lower-case coined words (nicknames, slang) and skips every English word; without it only proper nouns are mined. People already in the nflverse roster (`clustering.entity_catalog.league.roster_path`) are never proposed |
 | `dictionary_update.*` | Dictionary refresh from host-chosen pages: `enabled`, `transport`, `allowed_domains`, `sources`, `deactivation_policy`, `plausibility`. Fetching needs a host scraper |
 | `remote.*` | `sqlite_remote_db_hint`, `retention_days` for host remote operations |

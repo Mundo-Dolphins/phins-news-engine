@@ -109,3 +109,26 @@ func TestContentTypeFor(t *testing.T) {
 		})
 	}
 }
+
+func TestContainsBlockedKeywordUnless(t *testing.T) {
+	blocked := []string{"Hurricanes", "Canes"}
+	keep := []string{"NFL scouts", "scouts from"}
+	tests := []struct {
+		name string
+		text string
+		want bool
+	}{
+		{"off-topic is blocked", "Canes tight end earns Week 6 honors", true},
+		{"NFL scouts at a game between blocked teams are kept", "NFL scouts in attendance at Hurricanes vs Seminoles: #Isotopes (x2)", false},
+		{"keep match is case-insensitive", "Scouts FROM 12 teams at the Canes game", false},
+		{"no blocked keyword at all", "Isotopes sign a punter", false},
+	}
+	for _, tc := range tests {
+		if got := sourcefilter.ContainsBlockedKeywordUnless([]string{tc.text}, blocked, keep); got != tc.want {
+			t.Errorf("%s: blocked = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+	if !sourcefilter.ContainsBlockedKeywordUnless([]string{"Canes tight end earns honors"}, blocked, nil) {
+		t.Error("no keep keywords: behaves like ContainsBlockedKeyword")
+	}
+}

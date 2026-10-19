@@ -404,3 +404,22 @@ func writeFile(t *testing.T, path, contents string) {
 		t.Fatalf("write fixture: %v", err)
 	}
 }
+
+func TestIncludePathsListsTheFilesARootDictionaryIncludes(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "dict.yml")
+	if err := os.MkdirAll(filepath.Join(dir, "parts"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(root, []byte("meta:\n  version: 1.0.0\n  name: t\n  schema_version: 2\ndecision:\n  positive_threshold_high: 10\n  positive_threshold_medium: 7\n  negative_threshold_high: 0\n  title_weight_multiplier: 2\n  max_count_per_term: 3\nincludes:\n  - parts/a.yml\n  - parts/b.yml\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := dictionaryfile.IncludePaths(root)
+	if err != nil {
+		t.Fatalf("IncludePaths() error = %v", err)
+	}
+	want := []string{filepath.Join(dir, "parts", "a.yml"), filepath.Join(dir, "parts", "b.yml")}
+	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("IncludePaths() = %v, want %v", got, want)
+	}
+}

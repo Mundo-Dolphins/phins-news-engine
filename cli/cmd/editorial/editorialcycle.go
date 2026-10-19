@@ -30,6 +30,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/reviewdecision"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/clock"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionaryfile"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/shellrunner"
 	infrasqlite "github.com/Mundo-Dolphins/phins-news-engine/infra/sqlite"
 	"github.com/Mundo-Dolphins/phins-news-engine/migrations"
@@ -769,6 +770,14 @@ func newCycleCommand() *cobra.Command {
 					return err
 				}
 				client := ops.NewDeploy("scripts/deploy.sh", "scripts/healthcheck.sh", "scripts/rollback.sh", keyPath)
+				// The dictionary update rewrites the files the root dictionary
+				// includes, not only the root: they are generated artifacts too.
+				dictionaryIncludes, includeErr := dictionaryfile.IncludePaths(cfg.Dictionary.Path)
+				if includeErr != nil {
+					err = fmt.Errorf("editorial cycle: deploy: %w", includeErr)
+					report.Error = err.Error()
+					return err
+				}
 				result, err := deployment.Run(cmd.Context(),
 					deployment.Deps{Runner: shellrunner.Real{}, Deploy: client, Health: client, Rollback: client},
 					deployment.Request{
@@ -776,9 +785,11 @@ func newCycleCommand() *cobra.Command {
 						AllowedDirtyPaths: append([]string{
 							cfg.Dictionary.Path, cfg.Model.Path,
 							cfg.Clustering.EntityCatalog.ManualPath, cfg.Clustering.EntityCatalog.GeneratedPath,
+							// Rejecting a mined term appends it to this policy file.
+							cfg.DictionaryMining.Path,
 							filepath.Join(filepath.Dir(cfg.Model.Path), "candidates"),
 							filepath.Join(filepath.Dir(cfg.Model.Path), "previous"),
-						}, eventRulesDeployPaths...),
+						}, append(dictionaryIncludes, eventRulesDeployPaths...)...),
 						BinaryPath: filepath.Join("build", shared.ServiceBinaryName), ToolsBinaryPath: filepath.Join("build", shared.ProgramName),
 						ConfigDir: "configs", ModelDir: cfg.Model.Path, DictionaryPath: cfg.Dictionary.Path,
 					})

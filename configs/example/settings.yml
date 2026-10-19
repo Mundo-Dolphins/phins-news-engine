@@ -243,6 +243,7 @@ dictionary:
   version: ""
 dictionary_mining:
   path: configs/example/dictionary_mining.yml
+  english_words_path: /usr/share/dict/words
 editorial_cycle:
   sample_size: 50
   pool_limit: 500

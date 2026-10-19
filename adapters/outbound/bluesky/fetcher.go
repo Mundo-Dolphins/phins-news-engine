@@ -25,6 +25,7 @@ type AccountConfig struct {
 	MaxAge          time.Duration
 	BlockedURLs     []string
 	BlockedKeywords []string
+	KeepKeywords    []string
 	SkipAuthors     []string
 }
 
@@ -36,6 +37,7 @@ type FeedConfig struct {
 	MaxAge          time.Duration
 	BlockedURLs     []string
 	BlockedKeywords []string
+	KeepKeywords    []string
 	SkipAuthors     []string
 }
 
@@ -62,6 +64,7 @@ type sourceOptions struct {
 	MaxAge          time.Duration
 	BlockedURLs     []string
 	BlockedKeywords []string
+	KeepKeywords    []string
 	SkipAuthors     []string
 }
 
@@ -95,7 +98,7 @@ func (f *Fetcher) Fetch(ctx context.Context) ([]article.Article, error) {
 		}
 		items := f.parsePosts(posts, sourceOptions{
 			ID: id, Name: name, SourceType: acc.SourceType, MaxAge: acc.MaxAge,
-			BlockedURLs: acc.BlockedURLs, BlockedKeywords: acc.BlockedKeywords, SkipAuthors: acc.SkipAuthors,
+			BlockedURLs: acc.BlockedURLs, BlockedKeywords: acc.BlockedKeywords, KeepKeywords: acc.KeepKeywords, SkipAuthors: acc.SkipAuthors,
 		})
 		f.logger.Info("bluesky: author feed processed", "handle", acc.Handle, "raw_count", len(posts), "kept", len(items))
 		all = append(all, items...)
@@ -121,7 +124,7 @@ func (f *Fetcher) Fetch(ctx context.Context) ([]article.Article, error) {
 		}
 		items := f.parsePosts(posts, sourceOptions{
 			ID: id, Name: name, SourceType: feed.SourceType, MaxAge: feed.MaxAge,
-			BlockedURLs: feed.BlockedURLs, BlockedKeywords: feed.BlockedKeywords, SkipAuthors: feed.SkipAuthors,
+			BlockedURLs: feed.BlockedURLs, BlockedKeywords: feed.BlockedKeywords, KeepKeywords: feed.KeepKeywords, SkipAuthors: feed.SkipAuthors,
 		})
 		f.logger.Info("bluesky: curated feed processed", "feed", feed.Name, "raw_count", len(posts), "kept", len(items))
 		all = append(all, items...)
@@ -189,7 +192,7 @@ func parsePost(p feedViewPost, opts sourceOptions, now time.Time) (article.Artic
 	if sourcefilter.ContainsBlockedURL(candidates, opts.BlockedURLs) {
 		return article.Article{}, false
 	}
-	if sourcefilter.ContainsBlockedKeyword(candidates, opts.BlockedKeywords) {
+	if sourcefilter.ContainsBlockedKeywordUnless(candidates, opts.BlockedKeywords, opts.KeepKeywords) {
 		return article.Article{}, false
 	}
 

@@ -124,7 +124,7 @@ func buildBluesky(cfg *config.Config, catalog *sourcesfile.Sources, logger out.L
 		acctFetcher := bluesky.NewFetcher([]bluesky.AccountConfig{{
 			Handle: a.Handle, Name: a.Name, SourceType: a.SourceType,
 			MaxAge:      time.Duration(a.MaxAgeHours) * time.Hour,
-			BlockedURLs: a.BlockedURLs, BlockedKeywords: a.BlockedKeywords, SkipAuthors: a.SkipAuthors,
+			BlockedURLs: a.BlockedURLs, BlockedKeywords: a.BlockedKeywords, KeepKeywords: a.KeepKeywords, SkipAuthors: a.SkipAuthors,
 		}}, nil, client, logger)
 		sources = append(sources, compositefetcher.Source{
 			Name: "bluesky-account:" + a.Handle, Fetcher: acctFetcher,
@@ -138,7 +138,7 @@ func buildBluesky(cfg *config.Config, catalog *sourcesfile.Sources, logger out.L
 		feedFetcher := bluesky.NewFetcher(nil, []bluesky.FeedConfig{{
 			URI: f.URI, Name: f.Name, SourceType: f.SourceType,
 			MaxAge:      time.Duration(f.MaxAgeHours) * time.Hour,
-			BlockedURLs: f.BlockedURLs, BlockedKeywords: f.BlockedKeywords, SkipAuthors: f.SkipAuthors,
+			BlockedURLs: f.BlockedURLs, BlockedKeywords: f.BlockedKeywords, KeepKeywords: f.KeepKeywords, SkipAuthors: f.SkipAuthors,
 		}}, client, logger)
 		sources = append(sources, compositefetcher.Source{
 			Name: "bluesky-feed:" + f.URI, Fetcher: feedFetcher,
