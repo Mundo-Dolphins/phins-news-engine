@@ -13,6 +13,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/matchstate"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/publishing"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/source"
+	"github.com/Mundo-Dolphins/phins-news-engine/domain/sourcepolicy"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/storyguard"
 	"github.com/Mundo-Dolphins/phins-news-engine/ports/in"
 	"github.com/Mundo-Dolphins/phins-news-engine/ports/out"
@@ -106,6 +107,91 @@ func TestProcessCycle_StoryGuardWithholdsThirdMessageAboutSameStory(t *testing.T
 	uc.SetRecentStories(recent)
 	if result, err = uc.Run(context.Background()); err != nil || result.Accepted != 1 {
 		t.Fatalf("unrelated story: result %+v err %v, want accepted", result, err)
+	}
+}
+
+func TestProcessCycle_StoryGuardWithholdsVerbatimTitleFromAnotherSource(t *testing.T) {
+	now := time.Date(2026, 10, 20, 20, 0, 0, 0, time.UTC)
+	cascade := defaultCascade()
+	cascade.StoryGuard = storyguard.Policy{Enabled: true, Window: 48 * time.Hour, MaxPerStory: 2, MinSharedTokens: 4, OverlapThreshold: 0.65, VerbatimOverlap: 0.75}
+	recent := fakeRecentStories{stories: []out.RecentStory{
+		{ArticleID: "tweet", SourceID: "twitter:wire", Title: "Isotopes release LB, sign DE from their own practice squad"},
+	}}
+	run := func(title string, id source.ID) (in.ProcessCycleResult, article.Article) {
+		articles := &fakeArticleRepo{}
+		uc := newRulesTestCycle(fakeFetcher{articles: []article.Article{{
+			Title: title, OriginalURL: "https://example.com/" + title[:8],
+			Source:      source.Source{ID: id},
+			ContentType: article.ContentTypeArticle, PublishedAt: now.Add(-time.Hour),
+		}}}, articles, &fakeDecisionRepo{}, now, dictionary.Matcher{}, cascade)
+		uc.SetRecentStories(recent)
+		result, err := uc.Run(context.Background())
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+		return result, articles.lastSaved()
+	}
+
+	// One prior message is below max_per_story, but another source repeating
+	// the headline is withheld anyway.
+	result, saved := run("[USA Today: Isotopes Wire] - Isotopes release LB, sign DE from their own practice squad", mustID(t, source.TypeRSS, "sportspyder"))
+	if result.Accepted != 0 || saved.StatusReason != "story_repeat_limit" {
+		t.Fatalf("verbatim repeat: result %+v reason %q, want withheld as story_repeat_limit", result, saved.StatusReason)
+	}
+	// The same source reposting is not a second source: only max_per_story applies.
+	if result, _ := run("Isotopes release LB, sign DE from their own practice squad", mustID(t, source.TypeTwitter, "wire")); result.Accepted != 1 {
+		t.Fatalf("same-source repeat: result %+v, want accepted", result)
+	}
+}
+
+func TestProcessCycle_ClusterGateDeniesRelatedCoverageExceptFirstOfficialVoice(t *testing.T) {
+	now := time.Date(2026, 10, 16, 20, 0, 0, 0, time.UTC)
+	cascade := defaultCascade()
+	cascade.LexicalJoin = storyguard.Policy{Enabled: true, Window: 48 * time.Hour, MinSharedTokens: 4, OverlapThreshold: 0.65}
+	recent := fakeRecentStories{stories: []out.RecentStory{
+		{ArticleID: "a", ClusterID: "cluster-ross", Title: "Montgomery Burns sells 2.1% of the Isotopes at record valuation"},
+	}}
+	official := mustID(t, source.TypeTwitter, "isotopes")
+	mirror := mustID(t, source.TypeInstagram, "isotopes")
+	policies := &fakeSourcePolicyResolver{policies: map[string]sourcepolicy.Policy{
+		official.String(): {SourceID: official.String(), Authority: sourcepolicy.AuthorityOfficialTeam},
+		mirror.String():   {SourceID: mirror.String(), Authority: sourcepolicy.AuthorityOfficialTeam},
+	}}
+	run := func(id source.ID, holder string) (in.ProcessCycleResult, article.Article) {
+		gate := &fakeClusterPublicationRepository{
+			state: map[string]string{"cluster-ross": "confirmed"},
+			rows:  map[string]out.ClusterPublicationReservation{"cluster-ross": {ClusterID: "cluster-ross", ArticleID: "a", SourceID: holder}},
+		}
+		articles := &fakeArticleRepo{}
+		uc := usecase.NewProcessCycle(
+			fakeFetcher{articles: []article.Article{{
+				Title: "Montgomery Burns sells sliver of Isotopes at record valuation", OriginalURL: "https://example.com/" + id.String(),
+				Source: source.Source{ID: id}, ContentType: article.ContentTypeArticle, PublishedAt: now.Add(-time.Hour),
+			}}}, articles, &fakeDeduplicationRepo{}, &fakeAliasRepository{}, &fakeSimilarityIndexRepository{},
+			&fakeClusterRepo{}, &fakeDecisionRepo{}, &fakeOutboxRepo{}, &fakeUnitOfWork{}, freshness, dictionary.Matcher{}, nil, nil, cascade, fakeClock{now: now}, fakeLogger{},
+			&fakeSourcePolicyRepository{}, policies, gate, &fakeSeenItemsRepository{}, &fakeSourcePolicyCooldownRepository{}, &fakeUnknownEntityRepository{},
+			nil,
+		)
+		uc.SetRecentStories(recent)
+		result, err := uc.Run(context.Background())
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+		return result, articles.lastSaved()
+	}
+
+	// A reworded story from an ordinary source is a republication: denied.
+	result, saved := run(mustID(t, source.TypeTwitter, "somebody"), "twitter:other")
+	if result.Accepted != 0 || saved.StatusReason != "cluster_gate_denied_duplicate" {
+		t.Errorf("ordinary related_coverage: result %+v reason %q, want denied by the cluster gate", result, saved.StatusReason)
+	}
+	// The first official voice on a cluster others already covered still publishes.
+	if result, _ := run(official, "twitter:other"); result.Accepted != 1 {
+		t.Errorf("first official voice: result %+v, want accepted", result)
+	}
+	// The same story mirrored to another official platform does not.
+	if result, _ := run(mirror, official.String()); result.Accepted != 0 {
+		t.Errorf("official mirror: result %+v, want denied", result)
 	}
 }
 

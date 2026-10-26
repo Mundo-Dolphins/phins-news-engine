@@ -103,6 +103,9 @@ deduplication:
     max_per_story: 2
     min_shared_tokens: 4
     overlap_threshold: 0.6
+    # Stricter overlap at which a title another source already carries is
+    # withheld whatever max_per_story says (0 disables).
+    verbatim_overlap_threshold: 0.75
     generic_token_share: 0.05
     exempt_title_patterns:
       - "meets with the media"

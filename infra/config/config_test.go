@@ -2899,11 +2899,13 @@ func TestStoryGuardConfig_Validate(t *testing.T) {
 		t.Fatalf("disabled must always validate: %v", err)
 	}
 	for name, mutate := range map[string]func(*config.StoryGuardConfig){
-		"window":  func(c *config.StoryGuardConfig) { c.WindowHours = 0 },
-		"max":     func(c *config.StoryGuardConfig) { c.MaxPerStory = 0 },
-		"shared":  func(c *config.StoryGuardConfig) { c.MinSharedTokens = 0 },
-		"overlap": func(c *config.StoryGuardConfig) { c.OverlapThreshold = 1.2 },
-		"generic": func(c *config.StoryGuardConfig) { c.GenericTokenShare = 1 },
+		"window":                 func(c *config.StoryGuardConfig) { c.WindowHours = 0 },
+		"max":                    func(c *config.StoryGuardConfig) { c.MaxPerStory = 0 },
+		"shared":                 func(c *config.StoryGuardConfig) { c.MinSharedTokens = 0 },
+		"overlap":                func(c *config.StoryGuardConfig) { c.OverlapThreshold = 1.2 },
+		"generic":                func(c *config.StoryGuardConfig) { c.GenericTokenShare = 1 },
+		"verbatim above one":     func(c *config.StoryGuardConfig) { c.VerbatimOverlapThreshold = 1.2 },
+		"verbatim below overlap": func(c *config.StoryGuardConfig) { c.VerbatimOverlapThreshold = 0.5 },
 	} {
 		c := ok
 		mutate(&c)

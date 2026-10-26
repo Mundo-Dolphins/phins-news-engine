@@ -92,3 +92,24 @@ func TestBestMatch(t *testing.T) {
 		t.Fatal("BestMatch must not depend on Enabled/MaxPerStory")
 	}
 }
+
+func TestVerbatim(t *testing.T) {
+	p := Policy{Enabled: true, MaxPerStory: 2, MinSharedTokens: 4, OverlapThreshold: 0.65, VerbatimOverlap: 0.75}
+	recent := []Recent{
+		{ArticleID: "tweet", SourceID: "twitter:wire", Tokens: tokens("Isotopes release LB, sign DE from their own practice squad 📸 Sam Navarro")},
+		{ArticleID: "mine", SourceID: "rss:outlet", Tokens: tokens("Poupart: four winners, four losers from the Week 5 loss")},
+	}
+	got, ids := p.Verbatim(tokens("[USA Today: Isotopes Wire] - Isotopes release LB, sign DE from their own practice squad"), "rss:sportspyder", recent)
+	if !got || len(ids) != 1 || ids[0] != "tweet" {
+		t.Fatalf("Verbatim = %v %v, want a match with the tweet", got, ids)
+	}
+	if got, _ := p.Verbatim(tokens("Isotopes release LB, sign DE from their own practice squad"), "twitter:wire", recent); got {
+		t.Fatal("same-source repeats must not count as verbatim")
+	}
+	if got, _ := p.Verbatim(tokens("Poupart: instant takeaways after the Week 5 loss against Cincinnati"), "rss:outlet", recent); got {
+		t.Fatal("a different piece must not match")
+	}
+	if got, _ := (Policy{Enabled: true}).Verbatim(tokens("Isotopes release LB, sign DE from their own practice squad"), "x", recent); got {
+		t.Fatal("zero VerbatimOverlap disables the rule")
+	}
+}

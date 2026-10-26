@@ -1564,6 +1564,10 @@ type StoryGuardConfig struct {
 	MaxPerStory      int     `yaml:"max_per_story"`
 	MinSharedTokens  int     `yaml:"min_shared_tokens"`
 	OverlapThreshold float64 `yaml:"overlap_threshold"`
+	// VerbatimOverlapThreshold withholds a title that another source already
+	// carries at this stricter overlap, regardless of max_per_story; 0
+	// disables it.
+	VerbatimOverlapThreshold float64 `yaml:"verbatim_overlap_threshold"`
 	// GenericTokenShare ignores tokens present in more than this share of
 	// recent titles; 0 disables the filter.
 	GenericTokenShare float64 `yaml:"generic_token_share"`
@@ -1592,6 +1596,12 @@ func (c StoryGuardConfig) Validate() error {
 	if c.GenericTokenShare < 0 || c.GenericTokenShare >= 1 {
 		return fmt.Errorf("generic_token_share must be within [0,1)")
 	}
+	if c.VerbatimOverlapThreshold < 0 || c.VerbatimOverlapThreshold > 1 {
+		return fmt.Errorf("verbatim_overlap_threshold must be within [0,1]")
+	}
+	if c.VerbatimOverlapThreshold > 0 && c.VerbatimOverlapThreshold < c.OverlapThreshold {
+		return fmt.Errorf("verbatim_overlap_threshold must not be below overlap_threshold")
+	}
 	for _, pat := range c.ExemptTitlePatterns {
 		if _, err := regexp.Compile("(?i)" + pat); err != nil {
 			return fmt.Errorf("exempt_title_patterns: %q: %w", pat, err)
@@ -1613,6 +1623,7 @@ func (c StoryGuardConfig) Policy() storyguard.Policy {
 		MaxPerStory:       c.MaxPerStory,
 		MinSharedTokens:   c.MinSharedTokens,
 		OverlapThreshold:  c.OverlapThreshold,
+		VerbatimOverlap:   c.VerbatimOverlapThreshold,
 		GenericTokenShare: c.GenericTokenShare,
 	}
 }

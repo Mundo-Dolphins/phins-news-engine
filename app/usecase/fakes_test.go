@@ -667,6 +667,14 @@ func (r *fakeClusterPublicationRepository) Reserve(_ context.Context, res out.Cl
 	}
 }
 
+func (r *fakeClusterPublicationRepository) PublishedSourceIDs(_ context.Context, clusterID, excludeArticleID string) ([]string, error) {
+	row, ok := r.rows[clusterID]
+	if !ok || r.state[clusterID] == "released" || row.ArticleID == excludeArticleID {
+		return nil, nil
+	}
+	return []string{row.SourceID}, nil
+}
+
 func (r *fakeClusterPublicationRepository) Confirm(_ context.Context, clusterID, articleID string, _ int64, _ time.Time) error {
 	if r.confirmErr != nil {
 		return r.confirmErr

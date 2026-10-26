@@ -805,6 +805,26 @@ func (p *ProcessCycle) evaluateClusterGate(ctx context.Context, a article.Articl
 			}
 		}
 	}
+	// related_coverage is a rewording of a story the cluster already carries,
+	// so the gate denies it. An official source is the exception (the team
+	// speaking about its own news is never withheld for being late), unless
+	// another official platform already carries the cluster: the same post
+	// mirrored to Instagram or YouTube adds nothing.
+	if outcome == clustergate.OutcomeDeniedDuplicate && role == clustering.MemberRoleRelatedCoverage &&
+		isOfficialAuthority(p.sourcePolicyResolver.Resolve(a.Source.ID.String()).Authority) {
+		if reader, ok := p.clusterPublications.(out.ClusterPublishedSourceReader); ok {
+			sources, err := reader.PublishedSourceIDs(ctx, a.ClusterID, a.ID)
+			if err != nil {
+				return "", fmt.Errorf("process cycle: list published sources for cluster %s: %w", a.ClusterID, err)
+			}
+			for _, sid := range sources {
+				if isOfficialAuthority(p.sourcePolicyResolver.Resolve(sid).Authority) {
+					return clustergate.OutcomeDeniedDuplicate, nil
+				}
+			}
+		}
+		return clustergate.OutcomeAllowedExempt, nil
+	}
 	return outcome, nil
 }
 
@@ -1723,10 +1743,14 @@ func (p *ProcessCycle) storyRepeated(ctx context.Context, a article.Article, tex
 	}
 	recent := make([]storyguard.Recent, len(stories))
 	for i, s := range stories {
-		recent[i] = storyguard.Recent{ArticleID: s.ArticleID, Title: s.Title, Tokens: p.titleTokens.get(s.ArticleID, s.Title, p.cascade.Normalization.Text)}
+		recent[i] = storyguard.Recent{ArticleID: s.ArticleID, SourceID: s.SourceID, Title: s.Title, Tokens: p.titleTokens.get(s.ArticleID, s.Title, p.cascade.Normalization.Text)}
 	}
-	exceeded, matched := policy.Exceeded(storyguard.Tokenize(a.Title, p.cascade.Normalization.Text), recent)
-	return exceeded, matched, nil
+	tokens := storyguard.Tokenize(a.Title, p.cascade.Normalization.Text)
+	if exceeded, matched := policy.Exceeded(tokens, recent); exceeded {
+		return true, matched, nil
+	}
+	repeated, matched := policy.Verbatim(tokens, a.Source.ID.String(), recent)
+	return repeated, matched, nil
 }
 
 // retainStoryRepeat saves a as StatusRetainedNoPublish because its story
