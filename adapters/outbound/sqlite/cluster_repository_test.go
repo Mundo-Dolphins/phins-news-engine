@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -819,6 +820,59 @@ func TestClusterRepository_FindCandidatesByEventKeys_LimitBounds(t *testing.T) {
 	}
 	if len(got) != 2 {
 		t.Fatalf("FindCandidatesByEventKeys() returned %d candidates, want 2 (limit)", len(got))
+	}
+}
+
+// TestClusterRepository_FindCandidatesByEventKeys_BigClusterDoesNotCrowdOutOthers
+// guards the saturation seen in production (2026-10-25: 352 of 635 create
+// decisions had a nearly full candidate list): a cluster with many members
+// matching a shared key used to take every slot, so an older cluster of the
+// same story never reached clustering.Compare.
+func TestClusterRepository_FindCandidatesByEventKeys_BigClusterDoesNotCrowdOutOthers(t *testing.T) {
+	db := newTestDB(t)
+	articles := sqliteadapter.NewArticleRepository(db)
+	repo := sqliteadapter.NewClusterRepository(db)
+	ctx := context.Background()
+
+	base := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+	key := "shared-key"
+	add := func(id, clusterID string, at time.Time, first bool) {
+		t.Helper()
+		mustSaveArticleWithPublishedAt(t, articles, id, at)
+		if first {
+			if err := repo.CreateCluster(ctx, clusterID, id, clustering.StatusOpen, at); err != nil {
+				t.Fatalf("CreateCluster(%s): %v", clusterID, err)
+			}
+		} else if err := repo.AddMember(ctx, clusterID, id, clustering.MemberRoleRelatedCoverage, 0.8, at); err != nil {
+			t.Fatalf("AddMember(%s): %v", id, err)
+		}
+		if err := repo.SaveRepresentation(ctx, sampleRepresentation(id), "rules-v1", at); err != nil {
+			t.Fatalf("SaveRepresentation(%s): %v", id, err)
+		}
+		if err := repo.SaveEventKeys(ctx, id, clusterID, []string{key}, at); err != nil {
+			t.Fatalf("SaveEventKeys(%s): %v", id, err)
+		}
+	}
+	// Two older single-article clusters, then a big cluster that is newer.
+	add("old-1", "cluster-old-1", base, true)
+	add("old-2", "cluster-old-2", base.Add(time.Minute), true)
+	for i := 0; i < 8; i++ {
+		add(fmt.Sprintf("big-%d", i), "cluster-big", base.Add(time.Duration(10+i)*time.Minute), i == 0)
+	}
+
+	got, err := repo.FindCandidatesByEventKeys(ctx, []string{key}, base.Add(-time.Hour), "", 5)
+	if err != nil {
+		t.Fatalf("FindCandidatesByEventKeys() error = %v", err)
+	}
+	perCluster := map[string]int{}
+	for _, c := range got {
+		perCluster[c.ClusterID]++
+	}
+	if perCluster["cluster-old-1"] != 1 || perCluster["cluster-old-2"] != 1 {
+		t.Errorf("candidates per cluster = %v, want both older clusters represented", perCluster)
+	}
+	if perCluster["cluster-big"] > 3 {
+		t.Errorf("cluster-big supplied %d candidates, want at most 3", perCluster["cluster-big"])
 	}
 }
 

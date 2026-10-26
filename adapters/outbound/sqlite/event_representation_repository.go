@@ -61,6 +61,12 @@ func (r *ClusterRepository) SaveEventKeys(ctx context.Context, articleID, cluste
 	return nil
 }
 
+// maxCandidatesPerCluster caps how many members of one cluster may enter the
+// candidate list. Without it a cluster with many members matching a shared key
+// (the team's generic key is shared by hundreds of articles) fills the whole
+// limit and older clusters of the same story never reach clustering.Compare.
+const maxCandidatesPerCluster = 3
+
 // FindCandidatesByEventKeys implements ports/out.ClusterRepository. It
 // filters entirely in SQL — the event_key IN (...) index lookup, a
 // published_at time window, excludeArticleID, and LIMIT — before any
@@ -85,15 +91,23 @@ func (r *ClusterRepository) FindCandidatesByEventKeys(ctx context.Context, keys 
 	}
 
 	query := fmt.Sprintf(`
-		SELECT ek.article_id, ek.cluster_id, er.representation_json, MIN(ek.strength) AS best_strength
-		FROM event_keys ek
-		JOIN articles a ON a.id = ek.article_id
-		JOIN event_representations er ON er.article_id = ek.article_id
-		WHERE ek.event_key IN (%s)
-		  AND a.published_at >= ?
-		  %s
-		GROUP BY ek.article_id
-		ORDER BY best_strength ASC, a.published_at DESC
+		WITH per_article AS (
+			SELECT ek.article_id, ek.cluster_id, er.representation_json, MIN(ek.strength) AS best_strength, a.published_at AS published_at
+			FROM event_keys ek
+			JOIN articles a ON a.id = ek.article_id
+			JOIN event_representations er ON er.article_id = ek.article_id
+			WHERE ek.event_key IN (%s)
+			  AND a.published_at >= ?
+			  %s
+			GROUP BY ek.article_id
+		), ranked AS (
+			SELECT *, ROW_NUMBER() OVER (PARTITION BY cluster_id ORDER BY best_strength ASC, published_at DESC) AS rn
+			FROM per_article
+		)
+		SELECT article_id, cluster_id, representation_json, best_strength
+		FROM ranked
+		WHERE rn <= ?
+		ORDER BY best_strength ASC, published_at DESC
 		LIMIT ?
 	`, strings.Join(placeholders, ","), excludeClause)
 
@@ -101,7 +115,7 @@ func (r *ClusterRepository) FindCandidatesByEventKeys(ctx context.Context, keys 
 	if excludeArticleID != "" {
 		args = append(args, excludeArticleID)
 	}
-	args = append(args, limit)
+	args = append(args, maxCandidatesPerCluster, limit)
 
 	rows, err := executor(ctx, r.db).QueryContext(ctx, query, args...)
 	if err != nil {
