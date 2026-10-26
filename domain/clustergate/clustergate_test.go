@@ -25,7 +25,7 @@ func TestDecide_AcquiredAlwaysReservesInitialRegardlessOfRoleOrPolicy(t *testing
 func TestDecide_NotAcquired_ExemptRolesAlwaysAllowed(t *testing.T) {
 	exempt := []clustering.MemberRole{
 		clustering.MemberRoleFirstReport, clustering.MemberRoleAnalysis,
-		clustering.MemberRoleReaction, clustering.MemberRolePrimarySource, clustering.MemberRoleRelatedCoverage,
+		clustering.MemberRoleReaction, clustering.MemberRolePrimarySource,
 	}
 	for _, role := range exempt {
 		if got := clustergate.Decide(false, role, sourcepolicy.CodeStandard); got != clustergate.OutcomeAllowedExempt {
@@ -54,7 +54,7 @@ func TestDecide_NotAcquired_NonExemptRoleWithAuthorizedUpdateCode_Allowed(t *tes
 func TestDecide_NotAcquired_NonExemptRoleWithoutAuthorizedCode_Denied(t *testing.T) {
 	nonExempt := []clustering.MemberRole{
 		clustering.MemberRoleConfirmation, clustering.MemberRoleSubstantialUpdate,
-		clustering.MemberRoleCorrection, clustering.MemberRoleDuplicate,
+		clustering.MemberRoleCorrection, clustering.MemberRoleDuplicate, clustering.MemberRoleRelatedCoverage,
 	}
 	deniedCodes := []sourcepolicy.DecisionCode{
 		sourcepolicy.CodeStandard, sourcepolicy.CodeRetainClusterMember,

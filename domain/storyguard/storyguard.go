@@ -28,6 +28,13 @@ type Policy struct {
 	MinSharedTokens int
 	// OverlapThreshold is the minimum shared/min(len(a), len(b)) ratio.
 	OverlapThreshold float64
+	// VerbatimOverlap, when above zero, is a stricter overlap at which a title
+	// that another source already carries (a reporter's tweet and the outlet
+	// piece it links, a wire headline reposted by an aggregator) is withheld
+	// whatever MaxPerStory says: a second source repeating the headline adds
+	// nothing. Same-source titles never count, so two pieces by one author
+	// stay independent. Zero disables the rule.
+	VerbatimOverlap float64
 	// GenericTokenShare, when above zero, makes Exceeded ignore tokens that
 	// appear in more than this share of recent titles ("isotopes", the
 	// opponent's name in game week): they say what the channel is about, not
@@ -59,12 +66,18 @@ type Recent struct {
 	Tokens    []string
 	// ClusterID is set by callers that match against clusters.
 	ClusterID string
+	// SourceID is the source that published the article; Verbatim needs it.
+	SourceID string
 }
 
 // SameStory reports whether two token sets describe the same story: enough
 // distinct shared tokens and a high overlap relative to the shorter title, so
 // a short headline contained in a long one still matches.
 func (p Policy) SameStory(a, b []string) bool {
+	return p.sameStory(a, b, p.OverlapThreshold)
+}
+
+func (p Policy) sameStory(a, b []string, threshold float64) bool {
 	if conflictingNumbers(a, b) {
 		return false
 	}
@@ -76,7 +89,7 @@ func (p Policy) SameStory(a, b []string) bool {
 	if shared < p.MinSharedTokens || smaller == 0 {
 		return false
 	}
-	return float64(shared)/float64(smaller) >= p.OverlapThreshold
+	return float64(shared)/float64(smaller) >= threshold
 }
 
 // BestMatch returns the entry of recent that tokens tells the same story as,
@@ -132,6 +145,27 @@ func (p Policy) Exceeded(tokens []string, recent []Recent) (bool, []string) {
 		}
 	}
 	return len(matched) >= p.MaxPerStory, matched
+}
+
+// Verbatim reports whether another source (not sourceID) already carries a
+// title that overlaps tokens by at least VerbatimOverlap, and returns the
+// article IDs that matched. It needs Enabled and a positive VerbatimOverlap.
+func (p Policy) Verbatim(tokens []string, sourceID string, recent []Recent) (bool, []string) {
+	if !p.Enabled || p.VerbatimOverlap <= 0 {
+		return false, nil
+	}
+	generic := genericTokens(recent, p.GenericTokenShare)
+	tokens = without(tokens, generic)
+	var matched []string
+	for _, r := range recent {
+		if r.SourceID == "" || r.SourceID == sourceID {
+			continue
+		}
+		if p.sameStory(tokens, without(r.Tokens, generic), p.VerbatimOverlap) {
+			matched = append(matched, r.ArticleID)
+		}
+	}
+	return len(matched) > 0, matched
 }
 
 func distinctCount(tokens []string) int {

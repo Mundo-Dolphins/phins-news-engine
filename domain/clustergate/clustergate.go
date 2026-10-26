@@ -62,11 +62,14 @@ func Decide(acquired bool, role clustering.MemberRole, policyCode sourcepolicy.D
 // than a republication of the news itself (per the confirmed
 // scope), plus primary_source (never assigned by clustering.DecideJoin
 // today — see that constant's own doc comment — but semantically the same
-// "authoritative voice" case as first_report).
+// "authoritative voice" case as first_report). related_coverage is NOT
+// exempt: it is what the lexical join assigns to the same story reworded by
+// another outlet, which is a republication (119 of them reached the channel
+// between 2026-10-07 and 10-26); callers re-admit it for official sources.
 func isExempt(role clustering.MemberRole) bool {
 	switch role {
 	case clustering.MemberRoleFirstReport, clustering.MemberRoleAnalysis,
-		clustering.MemberRoleReaction, clustering.MemberRolePrimarySource, clustering.MemberRoleRelatedCoverage:
+		clustering.MemberRoleReaction, clustering.MemberRolePrimarySource:
 		return true
 	default:
 		return false
