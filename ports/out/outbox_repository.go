@@ -24,12 +24,31 @@ type OutboxItem struct {
 	SentAt          time.Time
 	AmbiguousReason string
 	Lane            publishing.PublicationLane
+	// Destination is where this row must be delivered. The zero value
+	// means Telegram.
+	Destination publishing.Destination
 }
 
 // LaneOutboxRepository is optional during the compatibility rollout. The
 // legacy Enqueue method always means normal.
 type LaneOutboxRepository interface {
 	EnqueueLane(ctx context.Context, articleID, payload string, lane publishing.PublicationLane, now time.Time) error
+}
+
+// DestinationOutboxRepository is the multi-destination extension of
+// OutboxRepository (ADR 0031). The legacy Enqueue/EnqueueLane methods always
+// mean Telegram.
+type DestinationOutboxRepository interface {
+	// EnqueueDestination inserts a pending row for (articleID, destination)
+	// if none exists; idempotent like Enqueue.
+	EnqueueDestination(ctx context.Context, articleID, payload string, lane publishing.PublicationLane, destination publishing.Destination, now time.Time) error
+	// DestinationOf returns the destination of outbox row id.
+	DestinationOf(ctx context.Context, id int64) (publishing.Destination, error)
+	// OpenDestinations returns every destination that has at least one row
+	// not yet in a terminal state (pending, retryable, leased,
+	// sent_unconfirmed or quarantined), used to fail wiring when a
+	// destination has work but no publisher.
+	OpenDestinations(ctx context.Context) ([]publishing.Destination, error)
 }
 
 type LaneCountRepository interface {

@@ -35,7 +35,7 @@ in the module. The main groups of tables:
 | Identity and dedup | `seen_items`, `exact_fingerprints`, `article_aliases`, `article_dedup_terms` | [DEDUPLICATION.md](DEDUPLICATION.md), layers 1 to 3 |
 | Clustering | `event_clusters`, `event_cluster_members`, `event_keys`, `event_representations`, `event_clustering_decisions`, `event_cluster_representative_history`, `event_cluster_publications` | layers 4 and 5 |
 | Source policy | `source_policy_decisions`, `source_policy_cooldowns` | gates A and B |
-| Publication | `publication_outbox`, `publication_attempts` | [ADR 0030](adr/0030-outbox-delivery-guarantee.md) |
+| Publication | `publication_outbox`, `publication_attempts` | [ADR 0030](adr/0030-outbox-delivery-guarantee.md), [ADR 0031](adr/0031-multi-destination-outbox.md) |
 | Editorial and training | `model_registry`, `dictionary_registry`, `dictionary_history`, `human_labels`, `human_label_conflicts`, `editorial_examples`, `editorial_review_decisions`, `editorial_cycle_sessions`, `editorial_cycle_session_candidates`, `training_runs`, `editorial_shadow_comparisons`, `editorial_label_proposals`, `hard_example_candidates`, `review_queue` | offline tools, shadow and canary reports |
 | Dictionary, entities and event rules | `dictionary_candidate_terms`, `classifier_dictionary_*`, `entity_*`, `event_rule_proposals`, `unknown_entity_occurrences`, `knowledge_*_cache`, `web_search_cache` | offline tools |
 | Bookkeeping | `schema_migrations` | the migrator |

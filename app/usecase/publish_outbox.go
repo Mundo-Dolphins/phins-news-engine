@@ -40,7 +40,7 @@ type PublishOutbox struct {
 	outbox     out.OutboxRepository
 	decisions  out.DecisionRepository
 	uow        out.UnitOfWork
-	publisher  out.Publisher
+	publishers map[publishing.Destination]out.Publisher
 	backoff    publishing.BackoffPolicy
 	policy     publishing.PolicyConfig
 	workerID   string
@@ -88,7 +88,7 @@ func NewPublishOutbox(
 		outbox:     outbox,
 		decisions:  decisions,
 		uow:        uow,
-		publisher:  publisher,
+		publishers: map[publishing.Destination]out.Publisher{publishing.DestinationTelegram: publisher},
 		backoff:    backoff,
 		policy:     policy,
 		workerID:   workerID,
@@ -103,6 +103,45 @@ func NewPublishOutbox(
 		reconcile:       reconcile,
 		channelImporter: channelImporter,
 	}
+}
+
+// RegisterPublisher adds the publisher for a non-Telegram destination
+// (ADR 0031). The Telegram publisher is the constructor's and cannot be
+// replaced. It is wiring-time only: call it before the first Run.
+func (p *PublishOutbox) RegisterPublisher(destination publishing.Destination, publisher out.Publisher) error {
+	if err := publishing.ValidateDestination(destination); err != nil {
+		return fmt.Errorf("publish outbox: register publisher: %w", err)
+	}
+	destination = destination.Normalized()
+	if publisher == nil {
+		return fmt.Errorf("publish outbox: register publisher: nil publisher for destination %q", destination)
+	}
+	if _, exists := p.publishers[destination]; exists {
+		return fmt.Errorf("publish outbox: register publisher: destination %q already has a publisher", destination)
+	}
+	p.publishers[destination] = publisher
+	return nil
+}
+
+// ValidateWiring fails when the outbox already holds unfinished work for a
+// destination with no registered publisher, so a misconfigured host stops at
+// startup instead of wedging at the first claim. It is a no-op for
+// repositories without destination support.
+func (p *PublishOutbox) ValidateWiring(ctx context.Context) error {
+	dr, ok := p.outbox.(out.DestinationOutboxRepository)
+	if !ok {
+		return nil
+	}
+	open, err := dr.OpenDestinations(ctx)
+	if err != nil {
+		return fmt.Errorf("publish outbox: list open destinations: %w", err)
+	}
+	for _, d := range open {
+		if _, ok := p.publishers[d.Normalized()]; !ok {
+			return fmt.Errorf("publish outbox: outbox has unfinished %q rows but no publisher is registered for that destination", d)
+		}
+	}
+	return nil
 }
 
 // Run implements in.PublishOutbox.
@@ -129,17 +168,34 @@ func (p *PublishOutbox) Run(ctx context.Context) (in.PublishOutboxResult, error)
 	}
 	result.Claimed = len(items)
 
-	for i, item := range items {
+	for _, item := range items {
+		result.ForDestination(item.Destination).Claimed++
+	}
+	queue := items
+	for len(queue) > 0 {
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
-		if err := p.publishOne(ctx, runID, item, &result); err != nil {
+		item := queue[0]
+		queue = queue[1:]
+		if err := p.tracked(&result, item.Destination, func() error { return p.publishOne(ctx, runID, item, &result) }); err != nil {
 			var rateLimitStop *telegramRateLimitBatchStop
 			if errors.As(err, &rateLimitStop) {
-				if err := p.deferRemainingAfterTelegramRateLimit(ctx, runID, items[i+1:], rateLimitStop.retryAt, &result); err != nil {
+				// The rate limit is Telegram's: defer the remaining Telegram
+				// rows, but let other destinations keep draining.
+				var telegramRest, otherRest []out.OutboxItem
+				for _, rest := range queue {
+					if rest.Destination.Normalized() == publishing.DestinationTelegram {
+						telegramRest = append(telegramRest, rest)
+					} else {
+						otherRest = append(otherRest, rest)
+					}
+				}
+				if err := p.deferRemainingAfterTelegramRateLimit(ctx, runID, telegramRest, rateLimitStop.retryAt, &result); err != nil {
 					return result, err
 				}
-				break
+				queue = otherRest
+				continue
 			}
 			return result, err
 		}
@@ -156,10 +212,41 @@ func (p *PublishOutbox) Run(ctx context.Context) (in.PublishOutboxResult, error)
 		"cooldown_confirmed", result.CooldownConfirmed,
 		"cooldown_released", result.CooldownReleased,
 	)
+	for _, d := range publishing.KnownDestinations() {
+		if c, ok := result.ByDestination[d]; ok {
+			p.logger.Info(
+				"publish outbox destination completed",
+				"run_id", runID, "destination", d,
+				"claimed", c.Claimed, "published", c.Published, "retried", c.Retried,
+				"discarded", c.Discarded, "expired", c.Expired, "deferred", c.Deferred,
+				"ambiguous_detected", c.AmbiguousDetected,
+			)
+		}
+	}
 	return result, nil
 }
 
+// tracked runs fn and attributes the counter deltas it produced to
+// destination in result.ByDestination.
+func (p *PublishOutbox) tracked(result *in.PublishOutboxResult, destination publishing.Destination, fn func() error) error {
+	before := *result
+	err := fn()
+	c := result.ForDestination(destination)
+	c.Published += result.Published - before.Published
+	c.Retried += result.Retried - before.Retried
+	c.Discarded += result.Discarded - before.Discarded
+	c.Expired += result.Expired - before.Expired
+	c.Deferred += result.Deferred - before.Deferred
+	c.AmbiguousDetected += result.AmbiguousDetected - before.AmbiguousDetected
+	return err
+}
+
 func (p *PublishOutbox) publishOne(ctx context.Context, runID string, item out.OutboxItem, result *in.PublishOutboxResult) error {
+	destination := item.Destination.Normalized()
+	publisher, ok := p.publishers[destination]
+	if !ok {
+		return fmt.Errorf("publish outbox: outbox item %d (article %s) targets destination %q but no publisher is registered for it", item.ID, item.ArticleID, destination)
+	}
 	a, err := p.articles.FindByID(ctx, item.ArticleID)
 	if err != nil {
 		return fmt.Errorf("publish outbox: find article %s: %w", item.ArticleID, err)
@@ -174,23 +261,29 @@ func (p *PublishOutbox) publishOne(ctx context.Context, runID string, item out.O
 		(item.ExpiresAt.IsZero() && !publishing.DecideStored(a, now)) {
 		return p.expireItem(ctx, runID, item, a, result)
 	}
-	decision, err := p.evaluatePolicy(ctx, a, item.Lane, now)
-	if err != nil {
-		return fmt.Errorf("publish outbox: evaluate policy for %s: %w", a.ID, err)
-	}
-	if !decision.Allow {
-		return p.deferItem(ctx, runID, item, a, decision, result)
-	}
+	// The editorial publication policy (burst, same-topic, quiet hours) and
+	// the article lifecycle belong to the primary (Telegram) delivery; other
+	// destinations are delivered on their own row without touching either.
+	primary := destination == publishing.DestinationTelegram
+	if primary {
+		decision, err := p.evaluatePolicy(ctx, a, item.Lane, now)
+		if err != nil {
+			return fmt.Errorf("publish outbox: evaluate policy for %s: %w", a.ID, err)
+		}
+		if !decision.Allow {
+			return p.deferItem(ctx, runID, item, a, decision, result)
+		}
 
-	a.Status = article.StatusPublishing
-	if err := p.articles.Save(ctx, a); err != nil {
-		return fmt.Errorf("publish outbox: mark %s publishing: %w", a.ID, err)
+		a.Status = article.StatusPublishing
+		if err := p.articles.Save(ctx, a); err != nil {
+			return fmt.Errorf("publish outbox: mark %s publishing: %w", a.ID, err)
+		}
 	}
 
 	// The network call happens with no database transaction open — never
 	// hold a SQLite transaction across a slow, blocking external call.
 	start := p.clock.Now()
-	messageID, publishErr := p.publisher.Publish(ctx, a)
+	messageID, publishErr := publisher.Publish(ctx, a)
 	duration := p.clock.Now().Sub(start)
 
 	var ambiguous *out.AmbiguousError
@@ -210,12 +303,19 @@ const (
 	PublishExpiredEventType = "outbox_expired"
 	// PublishExpiredReasonCode distinguishes expiry from a Telegram failure.
 	PublishExpiredReasonCode = "publish_expired"
+	// DestinationEventPrefix prefixes the audit events of non-Telegram
+	// deliveries ("publish_destination_delivered", ...), so Telegram counters
+	// built on "publish"/"publish_failed"/"outbox_expired" stay unchanged.
+	DestinationEventPrefix = "publish_destination_"
 )
 
 // expireItem closes the pre-network freshness race in one short transaction.
 // It records no Attempt because the item never reached Telegram.
 func (p *PublishOutbox) expireItem(ctx context.Context, runID string, item out.OutboxItem, a article.Article, result *in.PublishOutboxResult) error {
 	now := p.clock.Now()
+	if item.Destination.Normalized() != publishing.DestinationTelegram {
+		return p.expireSecondaryItem(ctx, runID, item, a, now, result)
+	}
 	fromStatus := a.Status
 	a.Status = article.StatusDiscarded
 	a.StatusReason = PublishExpiredReasonCode
@@ -245,7 +345,29 @@ func (p *PublishOutbox) expireItem(ctx context.Context, runID string, item out.O
 	if err != nil {
 		return fmt.Errorf("publish outbox: persist expiration for %s: %w", a.ID, err)
 	}
-	p.logger.Info("outbox item expired before publish", "run_id", runID, "article_id", a.ID, "outbox_id", item.ID, "lane", item.Lane.Normalized(), "reason", PublishExpiredReasonCode)
+	p.logger.Info("outbox item expired before publish", "run_id", runID, "article_id", a.ID, "outbox_id", item.ID, "destination", item.Destination.Normalized(), "lane", item.Lane.Normalized(), "reason", PublishExpiredReasonCode)
+	result.Expired++
+	return nil
+}
+
+// expireSecondaryItem expires a non-Telegram row: only that row dies. The
+// article, its cluster gate and its cooldown belong to the Telegram delivery.
+func (p *PublishOutbox) expireSecondaryItem(ctx context.Context, runID string, item out.OutboxItem, a article.Article, now time.Time, result *in.PublishOutboxResult) error {
+	destination := item.Destination.Normalized()
+	err := p.uow.Do(ctx, func(txCtx context.Context) error {
+		if err := p.outbox.ExpireLeased(txCtx, item.ID, PublishExpiredReasonCode, now); err != nil {
+			return fmt.Errorf("expire outbox item: %w", err)
+		}
+		return p.decisions.Append(txCtx, out.Event{
+			ArticleID: a.ID, OccurredAt: now, FromStatus: a.Status, ToStatus: a.Status,
+			EventType: DestinationEventPrefix + "expired", ReasonCode: PublishExpiredReasonCode,
+			ReasonDetail: fmt.Sprintf("destination=%s outbox_id=%d", destination, item.ID),
+		})
+	})
+	if err != nil {
+		return fmt.Errorf("publish outbox: persist %s expiration for %s: %w", destination, a.ID, err)
+	}
+	p.logger.Info("outbox item expired before publish", "run_id", runID, "article_id", a.ID, "outbox_id", item.ID, "destination", destination, "destination", item.Destination.Normalized(), "lane", item.Lane.Normalized(), "reason", PublishExpiredReasonCode)
 	result.Expired++
 	return nil
 }
@@ -270,7 +392,7 @@ func (p *PublishOutbox) expireOverdue(ctx context.Context, runID string, result 
 		if err != nil {
 			return fmt.Errorf("publish outbox: find expired article %s: %w", item.ArticleID, err)
 		}
-		if err := p.expireItem(ctx, runID, item, a, result); err != nil {
+		if err := p.tracked(result, item.Destination, func() error { return p.expireItem(ctx, runID, item, a, result) }); err != nil {
 			return err
 		}
 	}
@@ -330,7 +452,7 @@ func (p *PublishOutbox) deferItem(ctx context.Context, runID string, item out.Ou
 	}); err != nil {
 		return fmt.Errorf("publish outbox: append deferred event for %s: %w", a.ID, err)
 	}
-	p.logger.Info("publish deferred", "run_id", runID, "article_id", a.ID, "lane", item.Lane.Normalized(), "reason", decision.Reason, "retry_at", decision.RetryAt)
+	p.logger.Info("publish deferred", "run_id", runID, "article_id", a.ID, "destination", item.Destination.Normalized(), "lane", item.Lane.Normalized(), "reason", decision.Reason, "retry_at", decision.RetryAt)
 	result.Deferred++
 	return nil
 }
@@ -386,12 +508,17 @@ func (p *PublishOutbox) recordSentThenFinalize(ctx context.Context, runID string
 // attempt happened in that call).
 func (p *PublishOutbox) finalizeDelivered(ctx context.Context, runID string, item out.OutboxItem, a article.Article, messageID string, duration time.Duration, result *in.PublishOutboxResult) error {
 	now := p.clock.Now()
-	a.Status = article.StatusPublished
-	a.StatusReason = ""
+	primary := item.Destination.Normalized() == publishing.DestinationTelegram
+	if primary {
+		a.Status = article.StatusPublished
+		a.StatusReason = ""
+	}
 
 	err := p.uow.Do(ctx, func(txCtx context.Context) error {
-		if err := p.articles.Save(txCtx, a); err != nil {
-			return fmt.Errorf("save article: %w", err)
+		if primary {
+			if err := p.articles.Save(txCtx, a); err != nil {
+				return fmt.Errorf("save article: %w", err)
+			}
 		}
 		// out.ErrLeaseLost here rolls the whole finalize transaction back:
 		// better to leave the item for Reconcile (which has the recorded
@@ -405,6 +532,12 @@ func (p *PublishOutbox) finalizeDelivered(ctx context.Context, runID string, ite
 			Outcome: publishing.AttemptSucceeded, Duration: duration, ExternalMessageID: messageID,
 		}); err != nil {
 			return fmt.Errorf("record attempt: %w", err)
+		}
+		if !primary {
+			return p.decisions.Append(txCtx, out.Event{
+				ArticleID: a.ID, OccurredAt: now, FromStatus: a.Status, ToStatus: a.Status,
+				EventType: DestinationEventPrefix + "delivered", ReasonDetail: fmt.Sprintf("destination=%s outbox_id=%d", item.Destination.Normalized(), item.ID),
+			})
 		}
 		if a.ClusterID != "" {
 			if err := p.clusterPublications.Confirm(txCtx, a.ClusterID, a.ID, item.ID, now); err != nil {
@@ -424,8 +557,8 @@ func (p *PublishOutbox) finalizeDelivered(ctx context.Context, runID string, ite
 	if err != nil {
 		return fmt.Errorf("publish outbox: persist delivered for %s: %w", a.ID, err)
 	}
-	p.logger.Info("article published", "run_id", runID, "article_id", a.ID, "cluster_id", a.ClusterID,
-		"source", a.Source.ID, "lane", item.Lane.Normalized(), "latency_ms", duration.Milliseconds(), "retry_count", item.AttemptCount)
+	p.logger.Info("article published", "run_id", runID, "article_id", a.ID, "cluster_id", a.ClusterID, "destination", item.Destination.Normalized(),
+		"source", a.Source.ID, "destination", item.Destination.Normalized(), "lane", item.Lane.Normalized(), "latency_ms", duration.Milliseconds(), "retry_count", item.AttemptCount)
 	result.Published++
 	return nil
 }
@@ -450,7 +583,7 @@ func (p *PublishOutbox) recordAmbiguous(ctx context.Context, runID string, item 
 		return fmt.Errorf("publish outbox: record ambiguous attempt for %s: %w", a.ID, err)
 	}
 	p.logger.Warn("publish outcome ambiguous, holding for reconciliation",
-		"run_id", runID, "article_id", a.ID, "outbox_id", item.ID, "lane", item.Lane.Normalized(), "reason", reason)
+		"run_id", runID, "article_id", a.ID, "outbox_id", item.ID, "destination", item.Destination.Normalized(), "lane", item.Lane.Normalized(), "reason", reason)
 	result.AmbiguousDetected++
 	return nil
 }
@@ -462,11 +595,14 @@ func (p *PublishOutbox) recordFailure(ctx context.Context, runID string, item ou
 	nextAttempt := item.AttemptCount + 1
 	dead := permanent || p.backoff.Exhausted(nextAttempt)
 
-	a.Status = article.StatusPendingRetry
-	if dead {
-		a.Status = article.StatusDiscarded
+	primary := item.Destination.Normalized() == publishing.DestinationTelegram
+	if primary {
+		a.Status = article.StatusPendingRetry
+		if dead {
+			a.Status = article.StatusDiscarded
+		}
+		a.StatusReason = publishErr.Error()
 	}
-	a.StatusReason = publishErr.Error()
 
 	nextAvailableAt := p.backoff.NextAvailableAt(now, nextAttempt)
 	var rateLimited *out.RateLimitedError
@@ -481,13 +617,15 @@ func (p *PublishOutbox) recordFailure(ctx context.Context, runID string, item ou
 	}
 
 	err := p.uow.Do(ctx, func(txCtx context.Context) error {
-		if err := p.articles.Save(txCtx, a); err != nil {
-			return fmt.Errorf("save article: %w", err)
+		if primary {
+			if err := p.articles.Save(txCtx, a); err != nil {
+				return fmt.Errorf("save article: %w", err)
+			}
 		}
 		if err := p.outbox.MarkRetryable(txCtx, item.ID, publishErr.Error(), nextAvailableAt, dead, now); err != nil {
 			return fmt.Errorf("mark retryable: %w", err)
 		}
-		if dead && a.ClusterID != "" {
+		if dead && primary && a.ClusterID != "" {
 			if err := p.clusterPublications.Release(txCtx, a.ClusterID, a.ID, now); err != nil {
 				return fmt.Errorf("release cluster publication gate: %w", err)
 			}
@@ -503,6 +641,13 @@ func (p *PublishOutbox) recordFailure(ctx context.Context, runID string, item ou
 		}); err != nil {
 			return fmt.Errorf("record attempt: %w", err)
 		}
+		if !primary {
+			return p.decisions.Append(txCtx, out.Event{
+				ArticleID: a.ID, OccurredAt: now, FromStatus: a.Status, ToStatus: a.Status,
+				EventType:    DestinationEventPrefix + "failed",
+				ReasonDetail: fmt.Sprintf("destination=%s outbox_id=%d: %s", item.Destination.Normalized(), item.ID, publishErr.Error()),
+			})
+		}
 		return p.decisions.Append(txCtx, out.Event{
 			ArticleID: a.ID, OccurredAt: now, FromStatus: article.StatusPublishing,
 			ToStatus: a.Status, EventType: "publish_failed", ReasonDetail: publishErr.Error(),
@@ -514,12 +659,12 @@ func (p *PublishOutbox) recordFailure(ctx context.Context, runID string, item ou
 
 	if dead {
 		result.Discarded++
-		p.logger.Warn("outbox item discarded", "run_id", runID, "article_id", a.ID, "lane", item.Lane.Normalized(), "permanent", permanent, "attempts", nextAttempt)
+		p.logger.Warn("outbox item discarded", "run_id", runID, "article_id", a.ID, "destination", item.Destination.Normalized(), "lane", item.Lane.Normalized(), "permanent", permanent, "attempts", nextAttempt)
 	} else {
 		result.Retried++
-		p.logger.Info("publish retry scheduled", "run_id", runID, "article_id", a.ID, "lane", item.Lane.Normalized(), "attempts", nextAttempt, "next_available_at", nextAvailableAt)
+		p.logger.Info("publish retry scheduled", "run_id", runID, "article_id", a.ID, "destination", item.Destination.Normalized(), "lane", item.Lane.Normalized(), "attempts", nextAttempt, "next_available_at", nextAvailableAt)
 	}
-	if rateLimited != nil {
+	if rateLimited != nil && primary {
 		return &telegramRateLimitBatchStop{retryAt: nextAvailableAt}
 	}
 	return nil
@@ -564,7 +709,7 @@ func (p *PublishOutbox) Reconcile(ctx context.Context) (in.ReconcileResult, erro
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
-		if item.SentMessageID == "" && p.channelImporter != nil && !historyFetched {
+		if item.Destination.Normalized() == publishing.DestinationTelegram && item.SentMessageID == "" && p.channelImporter != nil && !historyFetched {
 			messages, fetchErr = p.channelImporter.ExportChannelMessages(ctx, out.TelegramImportRequest{
 				ChannelRef: p.reconcile.ChannelRef, Limit: p.reconcile.HistoryLimit,
 			})
@@ -582,6 +727,12 @@ func (p *PublishOutbox) reconcileOne(ctx context.Context, item out.OutboxItem, n
 	a, err := p.articles.FindByID(ctx, item.ArticleID)
 	if err != nil {
 		return fmt.Errorf("reconcile outbox: find article %s: %w", item.ArticleID, err)
+	}
+
+	if item.SentMessageID == "" && item.Destination.Normalized() != publishing.DestinationTelegram {
+		// Channel history is the Telegram user session's; nothing can verify
+		// another destination, and a blind resend is never allowed (ADR 0030).
+		return p.quarantineItem(ctx, item, fmt.Sprintf("reconciliation_unavailable: no reconciler for destination %s", item.Destination.Normalized()), result)
 	}
 
 	if item.SentMessageID != "" {
@@ -670,7 +821,7 @@ func (p *PublishOutbox) quarantineItem(ctx context.Context, item out.OutboxItem,
 		return fmt.Errorf("reconcile outbox: quarantine %d: %w", item.ID, err)
 	}
 	p.logger.Warn("ambiguous delivery quarantined, needs manual reconciliation",
-		"outbox_id", item.ID, "article_id", item.ArticleID, "reason", reason)
+		"outbox_id", item.ID, "article_id", item.ArticleID, "destination", item.Destination.Normalized(), "reason", reason)
 	result.Quarantined++
 	return nil
 }

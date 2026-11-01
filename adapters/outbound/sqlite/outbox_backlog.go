@@ -44,7 +44,7 @@ func (r *OutboxRepository) BacklogSnapshot(ctx context.Context, now time.Time, w
 	err := withTx(ctx, r.db, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
 			SELECT status, lane, COUNT(1) FROM publication_outbox
-			WHERE status IN ('pending','retryable','leased','sent_unconfirmed','quarantined')
+			WHERE destination = 'telegram' AND status IN ('pending','retryable','leased','sent_unconfirmed','quarantined')
 			GROUP BY status, lane ORDER BY status, lane`)
 		if err != nil {
 			return fmt.Errorf("sqlite: backlog statuses: %w", err)
@@ -67,7 +67,7 @@ func (r *OutboxRepository) BacklogSnapshot(ctx context.Context, now time.Time, w
 		var oldest sqliteNullTime
 		err = tx.QueryRowContext(ctx, `
 			SELECT created_at FROM publication_outbox
-			WHERE status IN ('pending','retryable') ORDER BY created_at ASC LIMIT 1`).Scan(&oldest)
+			WHERE destination = 'telegram' AND status IN ('pending','retryable') ORDER BY created_at ASC LIMIT 1`).Scan(&oldest)
 		if err != nil && err != sql.ErrNoRows {
 			return fmt.Errorf("sqlite: backlog oldest pending: %w", err)
 		}
@@ -75,18 +75,18 @@ func (r *OutboxRepository) BacklogSnapshot(ctx context.Context, now time.Time, w
 			snap.OldestPendingAgeSeconds = int64(now.Sub(oldest.Time) / time.Second)
 		}
 
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(1) FROM publication_outbox WHERE created_at >= ?`, sinceDefault).Scan(&snap.Enqueued); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(1) FROM publication_outbox WHERE destination = 'telegram' AND created_at >= ?`, sinceDefault).Scan(&snap.Enqueued); err != nil {
 			return fmt.Errorf("sqlite: backlog enqueued: %w", err)
 		}
 		if err := tx.QueryRowContext(ctx, `
-			SELECT COUNT(1) FROM publication_outbox WHERE status='delivered' AND sent_at >= ? AND sent_at <= ?`, since, until).Scan(&snap.Delivered); err != nil {
+			SELECT COUNT(1) FROM publication_outbox WHERE destination = 'telegram' AND status='delivered' AND sent_at >= ? AND sent_at <= ?`, since, until).Scan(&snap.Delivered); err != nil {
 			return fmt.Errorf("sqlite: backlog delivered: %w", err)
 		}
 		// updated_at holds either format (see sinceDefault): the indexed
 		// bound is a cheap superset, the exact cut is made on parsed times.
 		supRows, err := tx.QueryContext(ctx, `
 			SELECT updated_at FROM publication_outbox
-			WHERE status='dead' AND updated_at >= ? AND last_error LIKE ? LIMIT ?`,
+			WHERE destination = 'telegram' AND status='dead' AND updated_at >= ? AND last_error LIKE ? LIMIT ?`,
 			sinceDefault, supersededErrorPrefix+"%", maxBacklogLagSamples)
 		if err != nil {
 			return fmt.Errorf("sqlite: backlog superseded: %w", err)
@@ -113,7 +113,7 @@ func (r *OutboxRepository) BacklogSnapshot(ctx context.Context, now time.Time, w
 		lagRows, err := tx.QueryContext(ctx, `
 			SELECT a.published_at, o.sent_at
 			FROM publication_outbox o JOIN articles a ON a.id = o.article_id
-			WHERE o.status='delivered' AND o.sent_at >= ? AND o.sent_at <= ? AND a.published_at IS NOT NULL
+			WHERE o.destination = 'telegram' AND o.status='delivered' AND o.sent_at >= ? AND o.sent_at <= ? AND a.published_at IS NOT NULL
 			ORDER BY o.sent_at DESC LIMIT ?`, since, until, maxBacklogLagSamples)
 		if err != nil {
 			return fmt.Errorf("sqlite: backlog lag: %w", err)
