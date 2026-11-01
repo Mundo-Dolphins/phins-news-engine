@@ -123,6 +123,7 @@ from a throwaway module; CI runs it on every change.
 | `fetcherwiring.Extensions` (`engine.Options.Fetchers`) | `Categories`: a `fetcherwiring.CategoryBuilder` for a fetch category the library does not implement (`website`, `twitter`, `instagram`). An enabled category with no builder is reported as such in the capability log, never skipped silently. `Scraper`: builds the `out.Scraper` used as the RSS fallback. |
 | `engine.Options.ServiceName` | The outbox claim owner and the name in the start and stop log lines. |
 | `engine.Options.ChannelImporter` | Builds an optional `out.TelegramChannelImporter`, a history client provided by the host, used to reconcile sends whose outcome is unknown ([ADR 0021](docs/adr/0021-channel-history-client-port.md)). |
+| `engine.Options.Publishers` | Registers an `out.Publisher` per extra outbox destination (`bluesky`), next to the built-in Telegram one. Startup fails if the outbox holds unfinished rows for an unregistered destination ([ADR 0031](docs/adr/0031-multi-destination-outbox.md)). |
 | `cli.Root`, `cli.Add`, `cli.Execute` | The tools command tree; `cli.Add` registers host commands. |
 | `cli.SetProgramName`, `cli.SetServiceBinaryName`, `cli.SetDefaultDictionaryPath` | Names and defaults used by the tools. |
 | `shared.SetScraperFactory`, `shared.SetRemoteOps`, `shared.SetTelegramImportClient`, `shared.SetFetcherExtensions` (package `cli/cmd/shared`) | Factories that the tools commands call. Each one has a clear "nothing registered" error. |

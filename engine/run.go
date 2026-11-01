@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/dictionary"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/editorial"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/editorialveto"
+	"github.com/Mundo-Dolphins/phins-news-engine/domain/publishing"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/sourcepolicy"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/training"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/clock"
@@ -51,6 +53,12 @@ type Options struct {
 	Fetchers    fetcherwiring.Extensions
 	// ChannelImporter builds the optional Telegram history client; nil result = reconciliation by history unavailable.
 	ChannelImporter func(cfg *config.Config, logger out.Logger) out.TelegramChannelImporter
+	// Publishers registers delivery adapters for non-Telegram outbox
+	// destinations (ADR 0031), keyed by destination. Telegram is always the
+	// built-in publisher and cannot be replaced here. Run fails at startup
+	// if the outbox already holds unfinished rows for a destination that is
+	// not registered.
+	Publishers map[publishing.Destination]out.Publisher
 }
 
 // DefaultServiceName is the service name used when Options.ServiceName is
@@ -63,6 +71,29 @@ func (o Options) serviceName() string {
 		return name
 	}
 	return DefaultServiceName
+}
+
+// registerPublishers adds the host's non-Telegram publishers in a stable
+// order and then verifies every destination with pending work has one.
+func registerPublishers(ctx context.Context, publishOutbox *usecase.PublishOutbox, publishers map[publishing.Destination]out.Publisher) error {
+	destinations := make([]string, 0, len(publishers))
+	for d := range publishers {
+		destinations = append(destinations, string(d))
+	}
+	sort.Strings(destinations)
+	for _, d := range destinations {
+		if err := publishOutbox.RegisterPublisher(publishing.Destination(d), publishers[publishing.Destination(d)]); err != nil {
+			return fmt.Errorf("wire publishers: %w", err)
+		}
+	}
+	if ctx.Err() != nil {
+		// Shutting down already: the scheduler reports the cancellation.
+		return nil
+	}
+	if err := publishOutbox.ValidateWiring(ctx); err != nil {
+		return fmt.Errorf("wire publishers: %w", err)
+	}
+	return nil
 }
 
 // Run is the scheduler service: it loads configPath, wires every adapter and
@@ -311,6 +342,9 @@ func Run(ctx context.Context, configPath string, profile config.Profile, logger 
 		realClock, logger, clusterPublications, sourcePolicyCooldowns,
 		cfg.Publication.Reconciliation.Settings(cfg.Telegram.ChannelID, urlCfg, urlResolvers), channelImporter,
 	)
+	if err := registerPublishers(ctx, publishOutbox, opts.Publishers); err != nil {
+		return err
+	}
 	runRetention := usecase.NewRunRetention(articles, decisions, outbox, clusters, labels, checkpointer, cfg.Retention.Windows(), realClock, logger)
 	closeInactiveClusters := usecase.NewCloseInactiveClusters(clusters, realClock, logger, cfg.ClusterLifecycle.Settings())
 

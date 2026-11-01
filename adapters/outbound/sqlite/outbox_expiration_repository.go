@@ -21,9 +21,10 @@ func NewOutboxExpirationRepository(db *sql.DB) *OutboxExpirationRepository {
 
 var _ appout.OutboxExpirationRepository = (*OutboxExpirationRepository)(nil)
 
-// ListExpirationCandidates returns only old pending/retryable rows.
+// ListExpirationCandidates returns only old pending/retryable Telegram rows:
+// expiring one discards its article, which other destinations must not do.
 func (r *OutboxExpirationRepository) ListExpirationCandidates(ctx context.Context, filter appout.OutboxExpirationFilter) ([]appout.OutboxExpirationCandidate, error) {
-	where := []string{"po.status IN ('pending','retryable')"}
+	where := []string{"po.destination = 'telegram'", "po.status IN ('pending','retryable')"}
 	expiredBefore := filter.ExpiredBefore
 	if expiredBefore.IsZero() {
 		expiredBefore = filter.PublishedBefore
@@ -81,7 +82,7 @@ func (r *OutboxExpirationRepository) ListExpirationCandidates(ctx context.Contex
 func (r *OutboxExpirationRepository) ExpireClaimable(ctx context.Context, outboxID int64, articleID, reason string, now time.Time) error {
 	result, err := executor(ctx, r.db).ExecContext(ctx, `
 		UPDATE publication_outbox SET status = 'dead', last_error = ?, claimed_at = NULL, claimed_by = '', updated_at = ?
-		WHERE id = ? AND article_id = ? AND status IN ('pending','retryable')`, reason, sqliteTime(now), outboxID, articleID)
+		WHERE id = ? AND article_id = ? AND destination = 'telegram' AND status IN ('pending','retryable')`, reason, sqliteTime(now), outboxID, articleID)
 	if err != nil {
 		return fmt.Errorf("sqlite: expire outbox item %d: %w", outboxID, err)
 	}

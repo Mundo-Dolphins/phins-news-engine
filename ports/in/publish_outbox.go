@@ -1,6 +1,10 @@
 package in
 
-import "context"
+import (
+	"context"
+
+	"github.com/Mundo-Dolphins/phins-news-engine/domain/publishing"
+)
 
 // PublishOutboxResult summarizes the outcome of one outbox-drain pass.
 type PublishOutboxResult struct {
@@ -23,6 +27,35 @@ type PublishOutboxResult struct {
 	// source-policy cooldown reservation was actually released
 	// (SourcePolicyCooldownRepository.Release returned affected=true).
 	CooldownReleased int
+	// ByDestination breaks the counters above down per outbox destination.
+	// Only destinations that claimed or processed a row appear.
+	ByDestination map[publishing.Destination]*DestinationCounts
+}
+
+// DestinationCounts is the per-destination slice of PublishOutboxResult.
+type DestinationCounts struct {
+	Claimed           int
+	Published         int
+	Retried           int
+	Discarded         int
+	Expired           int
+	Deferred          int
+	AmbiguousDetected int
+}
+
+// ForDestination returns the (created on demand) counters for destination;
+// an empty destination means Telegram.
+func (r *PublishOutboxResult) ForDestination(destination publishing.Destination) *DestinationCounts {
+	destination = destination.Normalized()
+	if r.ByDestination == nil {
+		r.ByDestination = make(map[publishing.Destination]*DestinationCounts)
+	}
+	c, ok := r.ByDestination[destination]
+	if !ok {
+		c = &DestinationCounts{}
+		r.ByDestination[destination] = c
+	}
+	return c
 }
 
 // ReconcileResult summarizes one standalone Reconcile pass — the same

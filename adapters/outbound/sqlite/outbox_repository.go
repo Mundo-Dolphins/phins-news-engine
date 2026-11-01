@@ -40,6 +40,7 @@ func (r *OutboxRepository) SetLiveTTL(ttl time.Duration) { r.liveTTL = ttl }
 
 var (
 	_ appout.OutboxRepository               = (*OutboxRepository)(nil)
+	_ appout.DestinationOutboxRepository    = (*OutboxRepository)(nil)
 	_ appout.TerminalSupersessionRepository = (*OutboxRepository)(nil)
 )
 
@@ -56,6 +57,7 @@ func (r *OutboxRepository) SupersedeClaimableMatch(ctx context.Context, matchID,
 			FROM publication_outbox po
 			JOIN articles a ON a.id = po.article_id
 			WHERE po.status IN ('pending','retryable')
+			  AND po.destination = 'telegram'
 			  AND po.lane = 'live'
 			  AND a.status = 'pending_publication'
 			  AND po.article_id != ?
@@ -78,7 +80,7 @@ func (r *OutboxRepository) SupersedeClaimableMatch(ctx context.Context, matchID,
 			return err
 		}
 		for _, item := range items {
-			if _, err := tx.ExecContext(ctx, `UPDATE publication_outbox SET status='dead', last_error=?, claimed_at=NULL, claimed_by='', updated_at=? WHERE article_id=? AND status IN ('pending','retryable')`, "superseded_by_final:"+finalArticleID, sqliteTime(now), item.ArticleID); err != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE publication_outbox SET status='dead', last_error=?, claimed_at=NULL, claimed_by='', updated_at=? WHERE article_id=? AND destination='telegram' AND status IN ('pending','retryable')`, "superseded_by_final:"+finalArticleID, sqliteTime(now), item.ArticleID); err != nil {
 				return fmt.Errorf("sqlite: supersede outbox item for %s: %w", item.ArticleID, err)
 			}
 			if _, err := tx.ExecContext(ctx, `UPDATE articles SET status='discarded', status_reason=?, updated_at=? WHERE id=? AND status='pending_publication'`, "superseded_by_final:"+finalArticleID, sqliteTime(now), item.ArticleID); err != nil {
@@ -108,25 +110,34 @@ func (r *OutboxRepository) Enqueue(ctx context.Context, articleID, payload strin
 }
 
 func (r *OutboxRepository) EnqueueLane(ctx context.Context, articleID, payload string, lane publishing.PublicationLane, now time.Time) error {
+	return r.EnqueueDestination(ctx, articleID, payload, lane, publishing.DestinationTelegram, now)
+}
+
+// EnqueueDestination implements ports/out.DestinationOutboxRepository.
+func (r *OutboxRepository) EnqueueDestination(ctx context.Context, articleID, payload string, lane publishing.PublicationLane, destination publishing.Destination, now time.Time) error {
+	if err := publishing.ValidateDestination(destination); err != nil {
+		return fmt.Errorf("sqlite: enqueue outbox item for %s: %w", articleID, err)
+	}
+	destination = destination.Normalized()
 	lane = lane.Normalized()
 	var liveExpiry any
 	if lane == publishing.LaneLive && r.liveTTL > 0 {
 		liveExpiry = sqliteTime(now.Add(r.liveTTL))
 	}
 	_, err := executor(ctx, r.db).ExecContext(ctx, `
-		INSERT OR IGNORE INTO publication_outbox (article_id, payload, lane, available_at, expires_at)
-		SELECT ?, ?, ?, ?, CASE
+		INSERT OR IGNORE INTO publication_outbox (article_id, destination, payload, lane, available_at, expires_at)
+		SELECT ?, ?, ?, ?, ?, CASE
 			WHEN a.published_at IS NOT NULL AND a.freshness_max_age_used > 0
 			THEN strftime('%Y-%m-%dT%H:%M:%fZ', a.published_at, printf('+%d seconds', a.freshness_max_age_used))
 			ELSE NULL
 		END
 		FROM articles a WHERE a.id = ?
-		`, articleID, payload, string(lane), sqliteTime(now), articleID)
+		`, articleID, string(destination), payload, string(lane), sqliteTime(now), articleID)
 	if err != nil {
 		return fmt.Errorf("sqlite: enqueue outbox item for %s: %w", articleID, err)
 	}
 	if lane == publishing.LaneLive && r.liveTTL > 0 {
-		_, err = executor(ctx, r.db).ExecContext(ctx, `UPDATE publication_outbox SET expires_at=? WHERE article_id=? AND lane='live' AND status='pending'`, liveExpiry, articleID)
+		_, err = executor(ctx, r.db).ExecContext(ctx, `UPDATE publication_outbox SET expires_at=? WHERE article_id=? AND destination=? AND lane='live' AND status='pending'`, liveExpiry, articleID, string(destination))
 	}
 	return err
 }
@@ -200,7 +211,7 @@ func (r *OutboxRepository) ClaimBatch(ctx context.Context, workerID string, limi
 					  AND NOT EXISTS (
 						SELECT 1 FROM publication_outbox prior
 						JOIN articles pa ON pa.id = prior.article_id
-						WHERE prior.lane = 'live' AND prior.status IN ('pending','retryable','leased')
+						WHERE prior.lane = 'live' AND prior.destination = po.destination AND prior.status IN ('pending','retryable','leased')
 						  AND json_extract(pa.metadata, '$.match_id') = json_extract(a.metadata, '$.match_id')
 						  AND json_extract(a.metadata, '$.match_id') IS NOT NULL
 						  AND prior.id < po.id
@@ -218,7 +229,7 @@ func (r *OutboxRepository) ClaimBatch(ctx context.Context, workerID string, limi
 
 		rows, err := tx.QueryContext(ctx, `
 			SELECT po.id, po.article_id, po.payload, po.status, po.available_at, po.expires_at, po.claimed_at, po.claimed_by, po.attempt_count, po.last_error,
-			       po.lane,
+			       po.lane, po.destination,
 			       po.sent_message_id, po.sent_at, po.ambiguous_reason
 			FROM publication_outbox po
 			JOIN articles a ON a.id = po.article_id
@@ -268,7 +279,7 @@ func (r *OutboxRepository) ClaimExpired(ctx context.Context, workerID string, li
 		}
 		rows, err := tx.QueryContext(ctx, `
 			SELECT id, article_id, payload, status, available_at, expires_at, claimed_at, claimed_by, attempt_count, last_error,
-			       lane,
+			       lane, destination,
 			       sent_message_id, sent_at, ambiguous_reason
 			FROM publication_outbox
 			WHERE status = 'leased' AND claimed_by = ? AND claimed_at = ? AND expires_at IS NOT NULL AND expires_at <= ?
@@ -293,9 +304,9 @@ func (r *OutboxRepository) ClaimExpired(ctx context.Context, workerID string, li
 	return items, nil
 }
 
-// scanOutboxItem scans one row of the standard 14-column outbox projection
+// scanOutboxItem scans one row of the standard outbox projection
 // (id, article_id, payload, status, available_at, expires_at, claimed_at, claimed_by,
-// attempt_count, last_error, sent_message_id, sent_at, ambiguous_reason)
+// attempt_count, last_error, lane, destination, sent_message_id, sent_at, ambiguous_reason)
 // into an appout.OutboxItem.
 func scanOutboxItem(row rowScanner) (appout.OutboxItem, error) {
 	var it appout.OutboxItem
@@ -304,17 +315,18 @@ func scanOutboxItem(row rowScanner) (appout.OutboxItem, error) {
 	var expiresAt sqliteNullTime
 	var claimedAt sqliteNullTime
 	var sentMessageID sql.NullString
-	var lane string
+	var lane, destination string
 	var sentAt sqliteNullTime
 	var ambiguousReason sql.NullString
 	if err := row.Scan(
 		&it.ID, &it.ArticleID, &it.Payload, &status, &availableAt, &expiresAt, &claimedAt, &it.ClaimedBy, &it.AttemptCount, &it.LastError,
-		&lane, &sentMessageID, &sentAt, &ambiguousReason,
+		&lane, &destination, &sentMessageID, &sentAt, &ambiguousReason,
 	); err != nil {
 		return appout.OutboxItem{}, err
 	}
 	it.Status = publishing.OutboxStatus(status)
 	it.Lane = publishing.PublicationLane(lane).Normalized()
+	it.Destination = publishing.Destination(destination).Normalized()
 	if availableAt.Valid {
 		it.AvailableAt = availableAt.Time
 	}
@@ -459,7 +471,7 @@ func (r *OutboxRepository) ListQuarantined(ctx context.Context, limit int) ([]ap
 func (r *OutboxRepository) listByStatus(ctx context.Context, status, orderCol string, limit int) ([]appout.OutboxItem, error) {
 	rows, err := executor(ctx, r.db).QueryContext(ctx, fmt.Sprintf(`
 		SELECT id, article_id, payload, status, available_at, expires_at, claimed_at, claimed_by, attempt_count, last_error,
-		       lane,
+		       lane, destination,
 		       sent_message_id, sent_at, ambiguous_reason
 		FROM publication_outbox
 		WHERE status = ?
@@ -525,7 +537,9 @@ func (r *OutboxRepository) Repair(ctx context.Context, id int64, articleID strin
 	return nil
 }
 
-// StatusCounts implements ports/out.OutboxRepository. OldestAge is the
+// StatusCounts implements ports/out.OutboxRepository. It counts Telegram
+// rows only (the `telegram outbox status` view); other destinations are
+// not summarized here yet (ADR 0031). OldestAge is the
 // age, as of now, of the oldest row's created_at in that status — a
 // coarse but dependency-free "how long has something been stuck"
 // indicator for the CLI status command; it deliberately does not try to
@@ -557,7 +571,7 @@ func (r *OutboxRepository) StatusCounts(ctx context.Context, now time.Time) (map
 	err := withTx(ctx, r.db, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
 			SELECT status, COUNT(1), SUM(CASE WHEN expires_at IS NOT NULL AND expires_at <= ? THEN 1 ELSE 0 END)
-			FROM publication_outbox GROUP BY status
+			FROM publication_outbox WHERE destination = 'telegram' GROUP BY status
 		`, sqliteTime(now))
 		if err != nil {
 			return fmt.Errorf("sqlite: status counts: %w", err)
@@ -583,7 +597,7 @@ func (r *OutboxRepository) StatusCounts(ctx context.Context, now time.Time) (map
 		for _, status := range statuses {
 			var oldest sqliteNullTime
 			if err := tx.QueryRowContext(ctx, `
-					SELECT created_at FROM publication_outbox WHERE status = ? ORDER BY created_at ASC LIMIT 1
+					SELECT created_at FROM publication_outbox WHERE destination = 'telegram' AND status = ? ORDER BY created_at ASC LIMIT 1
 				`, status).Scan(&oldest); err != nil {
 				return fmt.Errorf("sqlite: oldest outbox item for status %s: %w", status, err)
 			}
@@ -644,6 +658,7 @@ func (r *OutboxRepository) CountSucceededSince(ctx context.Context, since time.T
 	var count int
 	if err := executor(ctx, r.db).QueryRowContext(ctx, `
 		SELECT COUNT(1) FROM publication_attempts WHERE outcome = 'succeeded' AND attempted_at >= ?
+		AND outbox_id NOT IN (SELECT id FROM publication_outbox WHERE destination != 'telegram')
 	`, sqliteTime(since)).Scan(&count); err != nil {
 		return 0, fmt.Errorf("sqlite: count succeeded attempts since %s: %w", since, err)
 	}
@@ -652,7 +667,7 @@ func (r *OutboxRepository) CountSucceededSince(ctx context.Context, since time.T
 
 func (r *OutboxRepository) CountSucceededSinceLane(ctx context.Context, lane publishing.PublicationLane, since time.Time) (int, error) {
 	var count int
-	err := executor(ctx, r.db).QueryRowContext(ctx, `SELECT COUNT(*) FROM publication_attempts pa JOIN publication_outbox po ON po.id=pa.outbox_id WHERE pa.outcome='succeeded' AND pa.attempted_at >= ? AND po.lane=?`, sqliteTime(since), lane.Normalized()).Scan(&count)
+	err := executor(ctx, r.db).QueryRowContext(ctx, `SELECT COUNT(*) FROM publication_attempts pa JOIN publication_outbox po ON po.id=pa.outbox_id WHERE pa.outcome='succeeded' AND pa.attempted_at >= ? AND po.lane=? AND po.destination='telegram'`, sqliteTime(since), lane.Normalized()).Scan(&count)
 	return count, err
 }
 
@@ -664,6 +679,7 @@ func (r *OutboxRepository) CountSucceededByPrimaryEntitySince(ctx context.Contex
 		FROM publication_attempts pa
 		JOIN articles a ON a.id = pa.article_id
 		WHERE pa.outcome = 'succeeded' AND pa.attempted_at >= ? AND a.primary_entity = ?
+		  AND pa.outbox_id NOT IN (SELECT id FROM publication_outbox WHERE destination != 'telegram')
 	`, sqliteTime(since), entity).Scan(&count); err != nil {
 		return 0, fmt.Errorf("sqlite: count succeeded attempts for entity %q since %s: %w", entity, since, err)
 	}
@@ -672,6 +688,36 @@ func (r *OutboxRepository) CountSucceededByPrimaryEntitySince(ctx context.Contex
 
 func (r *OutboxRepository) CountSucceededByPrimaryEntitySinceLane(ctx context.Context, lane publishing.PublicationLane, entity string, since time.Time) (int, error) {
 	var count int
-	err := executor(ctx, r.db).QueryRowContext(ctx, `SELECT COUNT(*) FROM publication_attempts pa JOIN publication_outbox po ON po.id=pa.outbox_id JOIN articles a ON a.id=pa.article_id WHERE pa.outcome='succeeded' AND pa.attempted_at >= ? AND po.lane=? AND a.primary_entity=?`, sqliteTime(since), lane.Normalized(), entity).Scan(&count)
+	err := executor(ctx, r.db).QueryRowContext(ctx, `SELECT COUNT(*) FROM publication_attempts pa JOIN publication_outbox po ON po.id=pa.outbox_id JOIN articles a ON a.id=pa.article_id WHERE pa.outcome='succeeded' AND pa.attempted_at >= ? AND po.lane=? AND po.destination='telegram' AND a.primary_entity=?`, sqliteTime(since), lane.Normalized(), entity).Scan(&count)
 	return count, err
+}
+
+// DestinationOf implements ports/out.DestinationOutboxRepository.
+func (r *OutboxRepository) DestinationOf(ctx context.Context, id int64) (publishing.Destination, error) {
+	var d string
+	if err := executor(ctx, r.db).QueryRowContext(ctx, `SELECT destination FROM publication_outbox WHERE id = ?`, id).Scan(&d); err != nil {
+		return "", fmt.Errorf("sqlite: destination of outbox item %d: %w", id, err)
+	}
+	return publishing.Destination(d).Normalized(), nil
+}
+
+// OpenDestinations implements ports/out.DestinationOutboxRepository.
+func (r *OutboxRepository) OpenDestinations(ctx context.Context) ([]publishing.Destination, error) {
+	rows, err := executor(ctx, r.db).QueryContext(ctx, `
+		SELECT DISTINCT destination FROM publication_outbox
+		WHERE status IN ('pending','retryable','leased','sent_unconfirmed','quarantined')
+		ORDER BY destination`)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: list open outbox destinations: %w", err)
+	}
+	defer rows.Close()
+	var out []publishing.Destination
+	for rows.Next() {
+		var d string
+		if err := rows.Scan(&d); err != nil {
+			return nil, fmt.Errorf("sqlite: scan outbox destination: %w", err)
+		}
+		out = append(out, publishing.Destination(d))
+	}
+	return out, rows.Err()
 }

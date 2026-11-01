@@ -87,6 +87,33 @@ func (r *RepairOutbox) Run(ctx context.Context, outboxID int64, action publishin
 	}
 
 	now := r.clock.Now()
+	// A non-Telegram row is repaired on its own: the article, cluster gate
+	// and cooldown belong to the Telegram delivery (ADR 0031).
+	destination := publishing.DestinationTelegram
+	if dr, ok := r.outbox.(out.DestinationOutboxRepository); ok {
+		destination, err = dr.DestinationOf(ctx, outboxID)
+		if err != nil {
+			return fmt.Errorf("repair outbox %d: %w", outboxID, err)
+		}
+	}
+	if destination != publishing.DestinationTelegram {
+		err = r.uow.Do(ctx, func(txCtx context.Context) error {
+			if err := r.outbox.Repair(txCtx, outboxID, articleID, action, operatorReason, now); err != nil {
+				return err
+			}
+			return r.decisions.Append(txCtx, out.Event{
+				ArticleID: articleID, OccurredAt: now, FromStatus: a.Status, ToStatus: a.Status,
+				EventType: "outbox_manual_repair", ReasonCode: string(action),
+				ReasonDetail: fmt.Sprintf("destination=%s: %s", destination, operatorReason),
+			})
+		})
+		if err != nil {
+			return fmt.Errorf("repair outbox %d: %w", outboxID, err)
+		}
+		r.logger.Warn("outbox item manually repaired", "outbox_id", outboxID, "article_id", articleID,
+			"destination", destination, "action", action)
+		return nil
+	}
 	// out.Event carries FromStatus/ToStatus for article status transitions.
 	// deliver/discard really do move the article to a terminal status, so
 	// they record it; retry leaves the article alone (the next publish

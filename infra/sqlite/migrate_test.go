@@ -1500,3 +1500,88 @@ func TestMigrate_0028DoesNotBackfillFromShadowModeWouldPublishSpecial(t *testing
 		t.Errorf("source_policy_cooldowns rows for (s1, c1) = %d, want 0 (would_publish_special must never drive the backfill)", count)
 	}
 }
+
+// TestMigrate_0046OutboxDestination proves the multi-destination rebuild
+// (ADR 0031): existing rows keep their id and columns and read back as
+// 'telegram', the unique constraint becomes (article_id, destination), and
+// referencing rows still resolve.
+func TestMigrate_0046OutboxDestination(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	db, err := sqlite.Open(path, 5*time.Second)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+
+	applyMigrationsThrough(t, ctx, db, "0045_event_rule_proposals.sql")
+
+	seeds := []string{
+		`INSERT INTO articles (id, original_url, canonical_url, fetched_at, status) VALUES ('a1','u1','u1',CURRENT_TIMESTAMP,'published')`,
+		`INSERT INTO articles (id, original_url, canonical_url, fetched_at, status) VALUES ('a2','u2','u2',CURRENT_TIMESTAMP,'pending_publication')`,
+		`INSERT INTO publication_outbox (id, article_id, available_at, status, lane, expires_at, sent_message_id, sent_at) VALUES (11,'a1',CURRENT_TIMESTAMP,'delivered','live','2030-01-01T00:00:00Z','m1','2026-01-01T00:00:00Z')`,
+		`INSERT INTO publication_outbox (id, article_id, available_at, status) VALUES (22,'a2',CURRENT_TIMESTAMP,'pending')`,
+		`INSERT INTO publication_attempts (id, outbox_id, article_id, attempted_at, outcome) VALUES (7,11,'a1',CURRENT_TIMESTAMP,'succeeded')`,
+	}
+	for _, seed := range seeds {
+		if _, err := db.ExecContext(ctx, seed); err != nil {
+			t.Fatalf("seed %q: %v", seed, err)
+		}
+	}
+
+	if err := sqlite.Migrate(ctx, db, migrations.FS); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+
+	rows, err := db.QueryContext(ctx, `SELECT id, destination, status, lane, sent_message_id FROM publication_outbox ORDER BY id`)
+	if err != nil {
+		t.Fatalf("select outbox: %v", err)
+	}
+	type row struct {
+		id                             int64
+		destination, status, lane, mid string
+	}
+	var got []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.id, &r.destination, &r.status, &r.lane, &r.mid); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		got = append(got, r)
+	}
+	rows.Close()
+	want := []row{{11, "telegram", "delivered", "live", "m1"}, {22, "telegram", "pending", "normal", ""}}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("rows after 0046 = %+v, want %+v", got, want)
+	}
+
+	var attemptOutbox int64
+	if err := db.QueryRowContext(ctx, `SELECT po.id FROM publication_attempts pa JOIN publication_outbox po ON po.id = pa.outbox_id WHERE pa.id = 7`).Scan(&attemptOutbox); err != nil || attemptOutbox != 11 {
+		t.Fatalf("attempt join = %d, %v; want 11", attemptOutbox, err)
+	}
+
+	// A second row for the same article is allowed on another destination...
+	if _, err := db.ExecContext(ctx, `INSERT INTO publication_outbox (article_id, destination, available_at) VALUES ('a2','bluesky',CURRENT_TIMESTAMP)`); err != nil {
+		t.Fatalf("insert bluesky row for same article: %v", err)
+	}
+	// ...but not a duplicate (article_id, destination), including via the default.
+	if _, err := db.ExecContext(ctx, `INSERT INTO publication_outbox (article_id, destination, available_at) VALUES ('a2','bluesky',CURRENT_TIMESTAMP)`); err == nil {
+		t.Error("duplicate (article_id, destination) accepted")
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO publication_outbox (article_id, available_at) VALUES ('a2',CURRENT_TIMESTAMP)`); err == nil {
+		t.Error("duplicate default-destination row accepted")
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO publication_outbox (article_id, destination, available_at) VALUES ('a1','mastodon',CURRENT_TIMESTAMP)`); err == nil {
+		t.Error("unknown destination accepted")
+	}
+
+	var fkViolations int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(1) FROM pragma_foreign_key_check()`).Scan(&fkViolations); err != nil || fkViolations != 0 {
+		t.Errorf("foreign_key_check = %d, %v; want 0", fkViolations, err)
+	}
+
+	// Re-running the migrator is a no-op.
+	if err := sqlite.Migrate(ctx, db, migrations.FS); err != nil {
+		t.Fatalf("second Migrate() error = %v", err)
+	}
+}

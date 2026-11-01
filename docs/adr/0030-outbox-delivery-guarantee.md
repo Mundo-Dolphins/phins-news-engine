@@ -17,7 +17,9 @@ delivery is not achievable and is never claimed.
 
 **Outbox states.** `publication_outbox.status` is one of `pending`,
 `leased`, `sent_unconfirmed`, `delivered`, `retryable`, `quarantined` or
-`dead`. The unique `article_id` is the publication key.
+`dead`. The unique `(article_id, destination)` pair is the publication key
+([ADR 0031](0031-multi-destination-outbox.md)); the rules below apply to each
+row on its own.
 
 **Evidence first.** After a confirmed success, the returned message ID is
 written first, in a single statement that moves the row to
