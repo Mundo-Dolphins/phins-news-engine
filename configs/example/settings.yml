@@ -226,6 +226,13 @@ media:
   allow_private_hosts: false
   retention_days: 7
   max_retention_days: 7
+# Operator alerts (ADR 0037): event handler problems and non-Telegram outbox
+# rows that end dead or quarantined. They go to the news chat unless chat_id
+# names another one; repeats of the same alert are suppressed for dedup_hours.
+alerts:
+  chat_id: ""
+  dedup_hours: 24
+  disabled: false
 publication:
   max_attempts: 6
   base_backoff_seconds: 30

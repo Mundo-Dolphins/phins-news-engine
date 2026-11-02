@@ -55,6 +55,8 @@ type EventClaim struct {
 type EventClaimFilter struct {
 	Handler string
 	State   EventClaimState
+	// ArticleID restricts to the claims taken for one article.
+	ArticleID string
 	// Limit caps the rows returned, newest first; zero means no cap.
 	Limit int
 }

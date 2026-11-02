@@ -55,6 +55,7 @@ type PublishOutbox struct {
 	reconcile       ReconciliationConfig
 	eventClaims     out.EventClaimRepository    // nil: event claims are not settled from outbox outcomes
 	channelImporter out.TelegramChannelImporter // nil: reconciliation-by-history unavailable, ambiguous items with no message_id quarantine immediately
+	alerter         out.Alerter                 // nil: dead and quarantined non-Telegram rows are only logged
 }
 
 type telegramRateLimitBatchStop struct {
@@ -109,6 +110,37 @@ func NewPublishOutbox(
 // SetEventClaims is called by the composition root. Its zero value (nil) is
 // safe: event claims are then never settled from outbox outcomes.
 func (p *PublishOutbox) SetEventClaims(claims out.EventClaimRepository) { p.eventClaims = claims }
+
+// SetAlerter is called by the composition root. Its zero value (nil) is safe:
+// dead and quarantined non-Telegram rows are then only logged.
+func (p *PublishOutbox) SetAlerter(alerter out.Alerter) { p.alerter = alerter }
+
+// alertItem tells the operator a non-Telegram row ended dead or quarantined
+// (ADR 0037). Telegram is the news channel itself; its failures already show
+// up there. Delivery problems are logged, never returned.
+func (p *PublishOutbox) alertItem(ctx context.Context, kind string, item out.OutboxItem, lastError string) {
+	destination := item.Destination.Normalized()
+	if p.alerter == nil || destination == publishing.DestinationTelegram {
+		return
+	}
+	details := fmt.Sprintf("destination: %s\narticle: %s\noutbox id: %d\nlast error: %s", destination, item.ArticleID, item.ID, lastError)
+	if p.eventClaims != nil {
+		claims, err := p.eventClaims.List(ctx, out.EventClaimFilter{ArticleID: item.ArticleID, Limit: 3})
+		if err != nil {
+			p.logger.Warn("alert: look up event claims failed", "article_id", item.ArticleID, "error", err.Error())
+		}
+		for _, c := range claims {
+			details += fmt.Sprintf("\nclaim: %s/%s (%s)", c.Handler, c.Key, c.State)
+		}
+	}
+	sendAlert(ctx, p.alerter, p.logger, out.Alert{
+		Source:   "outbox",
+		Severity: out.AlertCritical,
+		Title:    fmt.Sprintf("Publication to %s is %s", destination, kind),
+		Details:  details,
+		DedupKey: fmt.Sprintf("outbox:%s:%s:%s", destination, kind, reasonKey(lastError)),
+	})
+}
 
 // RegisterPublisher adds the publisher for a non-Telegram destination
 // (ADR 0031). The Telegram publisher is the constructor's and cannot be
@@ -711,6 +743,7 @@ func (p *PublishOutbox) recordFailure(ctx context.Context, runID string, item ou
 
 	if dead {
 		result.Discarded++
+		p.alertItem(ctx, "dead", item, publishErr.Error())
 		p.logger.Warn("outbox item discarded", "run_id", runID, "article_id", a.ID, "destination", item.Destination.Normalized(), "lane", item.Lane.Normalized(), "permanent", permanent, "attempts", nextAttempt)
 	} else {
 		result.Retried++
@@ -915,5 +948,6 @@ func (p *PublishOutbox) quarantineItem(ctx context.Context, item out.OutboxItem,
 	p.logger.Warn("ambiguous delivery quarantined, needs manual reconciliation",
 		"outbox_id", item.ID, "article_id", item.ArticleID, "destination", item.Destination.Normalized(), "reason", reason)
 	result.Quarantined++
+	p.alertItem(ctx, "quarantined", item, reason)
 	return nil
 }
