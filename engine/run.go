@@ -14,6 +14,7 @@ import (
 
 	"github.com/Mundo-Dolphins/phins-news-engine/adapters/inbound/scheduler"
 	"github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/espnscoreboard"
+	"github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/mediafs"
 	sqliteadapter "github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqlite"
 	"github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqliteentityproposal"
 	"github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/telegram"
@@ -344,13 +345,24 @@ func Run(ctx context.Context, configPath string, profile config.Profile, logger 
 		processCycle.SetMatchStateProvider(matchState)
 		logger.Info("espn scoreboard match-state provider enabled", "team", cfg.EspnScoreboard.TeamAbbreviation)
 	}
+	var mediaStore *mediafs.Store
+	if cfg.Media.Enabled() {
+		mediaStore, err = mediafs.New(mediafs.Config{
+			Dir: cfg.Media.Dir, AllowedHosts: cfg.Media.AllowedHosts, MaxBytes: cfg.Media.MaxBytes,
+			Timeout: cfg.Media.Timeout(), UserAgent: cfg.Media.UserAgent,
+			Policy: netguard.PolicyFor(cfg.Media.AllowPrivateHosts), Logger: logger,
+		})
+		if err != nil {
+			return fmt.Errorf("wire media store: %w", err)
+		}
+	}
 	if len(opts.EventHandlers) > 0 {
 		eventSettings := make(map[string]usecase.EventHandlerSettings, len(cfg.Events))
 		for name, c := range cfg.Events {
 			eventSettings[name] = usecase.EventHandlerSettings{Enabled: c.Enabled, Config: c.Config}
 		}
 		dispatcher, err := usecase.NewEventDispatcher(opts.EventHandlers, eventSettings,
-			usecase.EventDeps{Clock: realClock, Logger: logger, MatchState: matchState, Claims: eventClaims}, opts.EventHandlerTimeout)
+			usecase.EventDeps{Clock: realClock, Logger: logger, MatchState: matchState, Claims: eventClaims, Media: eventMedia(mediaStore)}, opts.EventHandlerTimeout)
 		if err != nil {
 			return err
 		}
@@ -369,6 +381,9 @@ func Run(ctx context.Context, configPath string, profile config.Profile, logger 
 		return err
 	}
 	runRetention := usecase.NewRunRetention(articles, decisions, outbox, clusters, labels, checkpointer, cfg.Retention.Windows(), realClock, logger)
+	if mediaStore != nil {
+		runRetention.SetMediaRetention(mediaStore, outbox, cfg.Media.Retention())
+	}
 	closeInactiveClusters := usecase.NewCloseInactiveClusters(clusters, realClock, logger, cfg.ClusterLifecycle.Settings())
 
 	sched := scheduler.New(
@@ -441,4 +456,14 @@ func leagueFallbackWarning(cfg *config.Config) string {
 		return "league entities and the online entity fallback are both enabled: league players are no longer sent to the fallback, so representations can differ from a run without league entities"
 	}
 	return ""
+}
+
+// eventMedia returns store as the handlers' media port, or a true nil
+// interface when the store is not configured (a nil *Store inside the
+// interface would defeat the handlers' nil check).
+func eventMedia(store *mediafs.Store) out.EventMediaStore {
+	if store == nil {
+		return nil
+	}
+	return store
 }

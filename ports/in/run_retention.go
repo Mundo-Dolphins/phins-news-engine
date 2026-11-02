@@ -24,6 +24,12 @@ type RetentionResult struct {
 	AuditEventsDeleted      int
 	AttemptsDeleted         int
 	ClustersDeleted         int
+	// MediaDeleted and MediaBytesDeleted count the media-store files removed;
+	// MediaProtected counts expired files kept because an open outbox row
+	// still references them (ADR 0036).
+	MediaDeleted      int
+	MediaBytesDeleted int64
+	MediaProtected    int
 	// EditorialExamplesRetained is the total number of durable editorial
 	// example revisions (training.EditorialExample rows) retained after
 	// this run — active and superseded alike. It is strictly

@@ -110,6 +110,7 @@ type Config struct {
 	OfflineTraining    OfflineTrainingConfig         `yaml:"offline_training"`
 	EspnScoreboard     EspnScoreboardConfig          `yaml:"espn_scoreboard"`
 	Events             map[string]EventHandlerConfig `yaml:"events"`
+	Media              MediaConfig                   `yaml:"media"`
 }
 
 // SQLiteConfig configures the operational SQLite database.
@@ -2384,6 +2385,82 @@ func (c RetentionConfig) Windows() in.RetentionWindows {
 	}
 }
 
+// MaxMediaRetentionDays is the default ceiling for media.retention_days.
+const MaxMediaRetentionDays = 7
+
+// MediaConfig configures the media store (ADR 0036): where event handlers'
+// images are downloaded, which hosts they may come from, and how long files
+// are kept. Disabled unless Dir is set.
+type MediaConfig struct {
+	// Dir is the store directory; empty disables the media store. The host
+	// normally puts it under its data directory.
+	Dir string `yaml:"dir"`
+	// AllowedHosts are the only hosts images may be downloaded from.
+	AllowedHosts []string `yaml:"allowed_hosts"`
+	MaxBytes     int64    `yaml:"max_bytes"`
+	// TimeoutSeconds bounds one download.
+	TimeoutSeconds int    `yaml:"timeout_seconds"`
+	UserAgent      string `yaml:"user_agent"`
+	// AllowPrivateHosts lets downloads reach loopback and private networks;
+	// for tests and lab setups only.
+	AllowPrivateHosts bool `yaml:"allow_private_hosts"`
+	// RetentionDays is how long files are kept (default 7).
+	RetentionDays int `yaml:"retention_days"`
+	// MaxRetentionDays is the ceiling RetentionDays may not exceed
+	// (default 7, so images are never kept longer than a week unless the host
+	// raises it on purpose).
+	MaxRetentionDays int `yaml:"max_retention_days"`
+}
+
+// Enabled reports whether the media store is configured.
+func (c MediaConfig) Enabled() bool { return strings.TrimSpace(c.Dir) != "" }
+
+// Validate is a no-op when the store is disabled.
+func (c MediaConfig) Validate() error {
+	if !c.Enabled() {
+		return nil
+	}
+	hosts := 0
+	for _, h := range c.AllowedHosts {
+		if strings.TrimSpace(h) != "" {
+			hosts++
+		}
+	}
+	if hosts == 0 {
+		return fmt.Errorf("allowed_hosts must list at least one host when dir is set")
+	}
+	if c.MaxBytes < 0 || c.TimeoutSeconds < 0 || c.RetentionDays < 0 || c.MaxRetentionDays < 0 {
+		return fmt.Errorf("max_bytes, timeout_seconds, retention_days and max_retention_days must not be negative")
+	}
+	if c.Retention() > c.MaxRetention() {
+		return fmt.Errorf("retention_days (%d) exceeds max_retention_days (%d)", c.Retention()/(24*time.Hour), c.MaxRetention()/(24*time.Hour))
+	}
+	return nil
+}
+
+// Retention returns RetentionDays, or 7 days when unset.
+func (c MediaConfig) Retention() time.Duration {
+	days := c.RetentionDays
+	if days == 0 {
+		days = MaxMediaRetentionDays
+	}
+	return time.Duration(days) * 24 * time.Hour
+}
+
+// MaxRetention returns MaxRetentionDays, or 7 days when unset.
+func (c MediaConfig) MaxRetention() time.Duration {
+	days := c.MaxRetentionDays
+	if days == 0 {
+		days = MaxMediaRetentionDays
+	}
+	return time.Duration(days) * 24 * time.Hour
+}
+
+// Timeout returns TimeoutSeconds as a duration; zero means the adapter's default.
+func (c MediaConfig) Timeout() time.Duration {
+	return time.Duration(c.TimeoutSeconds) * time.Second
+}
+
 // ClusterLifecycleConfig configures the maintenance job that closes
 // inactive event_clusters rows.
 // CloseAfterHours + Retention.ClustersDays*24 must stay >= the widest
@@ -2845,6 +2922,7 @@ func (c Config) Validate() error {
 		{"offline_training", c.OfflineTraining.Validate},
 		{"espn_scoreboard", c.EspnScoreboard.Validate},
 		{"events", c.validateEvents},
+		{"media", c.Media.Validate},
 	}
 	for _, s := range sections {
 		if err := s.fn(); err != nil {

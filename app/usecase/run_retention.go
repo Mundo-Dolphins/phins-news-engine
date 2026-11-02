@@ -3,8 +3,10 @@ package usecase
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/article"
+	"github.com/Mundo-Dolphins/phins-news-engine/domain/publishing"
 	"github.com/Mundo-Dolphins/phins-news-engine/ports/in"
 	"github.com/Mundo-Dolphins/phins-news-engine/ports/out"
 )
@@ -40,6 +42,10 @@ type RunRetention struct {
 	windows      in.RetentionWindows
 	clock        out.Clock
 	logger       out.Logger
+
+	media          out.MediaSweeper
+	openPayloads   out.OpenPayloadRepository
+	mediaRetention time.Duration
 }
 
 // NewRunRetention builds a RunRetention use case.
@@ -65,6 +71,40 @@ func NewRunRetention(
 		clock:        clock,
 		logger:       logger,
 	}
+}
+
+// SetMediaRetention enables the media-store step (ADR 0036): files older than
+// retention are deleted, except those referenced by an outbox row that is
+// still pending, leased, retryable or sent_unconfirmed. Without it, or with a
+// non-positive retention, the step is skipped. The caller is responsible for
+// bounding retention (config.MediaConfig does).
+func (r *RunRetention) SetMediaRetention(media out.MediaSweeper, payloads out.OpenPayloadRepository, retention time.Duration) {
+	r.media, r.openPayloads, r.mediaRetention = media, payloads, retention
+}
+
+// sweepMedia deletes expired media files. It lists the open outbox payloads
+// first and does nothing if that fails: without the list, no file is known to
+// be unreferenced.
+func (r *RunRetention) sweepMedia(ctx context.Context, now time.Time, result *in.RetentionResult) error {
+	raw, err := r.openPayloads.ListOpenPayloads(ctx)
+	if err != nil {
+		return fmt.Errorf("list open payloads: %w", err)
+	}
+	keep := make(map[string]struct{})
+	for _, p := range raw {
+		payload, err := publishing.ParseMessagePayload(p)
+		if err != nil {
+			// An undecodable payload cannot be read by a publisher either, but
+			// refuse to guess which files it meant.
+			return fmt.Errorf("open payload: %w", err)
+		}
+		for _, img := range payload.Images {
+			keep[img.Path] = struct{}{}
+		}
+	}
+	res, err := r.media.DeleteOlderThan(ctx, now.Add(-r.mediaRetention), keep)
+	result.MediaDeleted, result.MediaBytesDeleted, result.MediaProtected = res.Deleted, res.BytesDeleted, res.Protected
+	return err
 }
 
 // Run implements in.RunRetention.
@@ -102,6 +142,12 @@ func (r *RunRetention) Run(ctx context.Context) (in.RetentionResult, error) {
 	}
 	result.RejectedArticlesDeleted = rejectedDeleted
 
+	if r.media != nil && r.openPayloads != nil && r.mediaRetention > 0 {
+		if err := r.sweepMedia(ctx, now, &result); err != nil {
+			return result, fmt.Errorf("run retention: media: %w", err)
+		}
+	}
+
 	editorialExamplesRetained, err := r.labels.CountEditorialExamples(ctx)
 	if err != nil {
 		r.logger.Warn("count editorial examples failed", "error", err.Error())
@@ -120,6 +166,8 @@ func (r *RunRetention) Run(ctx context.Context) (in.RetentionResult, error) {
 		"audit_events_deleted", result.AuditEventsDeleted,
 		"attempts_deleted", result.AttemptsDeleted,
 		"clusters_deleted", result.ClustersDeleted,
+		"media_deleted", result.MediaDeleted,
+		"media_protected", result.MediaProtected,
 		"editorial_examples_retained", result.EditorialExamplesRetained,
 	)
 	return result, nil

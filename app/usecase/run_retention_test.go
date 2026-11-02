@@ -9,6 +9,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/app/usecase"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/article"
 	"github.com/Mundo-Dolphins/phins-news-engine/ports/in"
+	"github.com/Mundo-Dolphins/phins-news-engine/ports/out"
 )
 
 type fakeCheckpointer struct {
@@ -139,5 +140,104 @@ func TestRunRetention_EditorialExamplesCountFailureDoesNotFailRun(t *testing.T) 
 	}
 	if result.EditorialExamplesRetained != 0 {
 		t.Errorf("result.EditorialExamplesRetained = %d, want 0 (count failed, so it stays at its zero value)", result.EditorialExamplesRetained)
+	}
+}
+
+type fakeSweeper struct {
+	cutoff time.Time
+	keep   map[string]struct{}
+	calls  int
+	res    out.MediaSweepResult
+	err    error
+}
+
+func (s *fakeSweeper) DeleteOlderThan(_ context.Context, cutoff time.Time, keep map[string]struct{}) (out.MediaSweepResult, error) {
+	s.calls++
+	s.cutoff, s.keep = cutoff, keep
+	return s.res, s.err
+}
+
+type fakeOpenPayloads struct {
+	payloads []string
+	err      error
+}
+
+func (r fakeOpenPayloads) ListOpenPayloads(context.Context) ([]string, error) {
+	return r.payloads, r.err
+}
+
+func newMediaRetention(sweeper *fakeSweeper, payloads fakeOpenPayloads, retention time.Duration, now time.Time) *usecase.RunRetention {
+	uc := usecase.NewRunRetention(&fakeArticleRepo{}, &fakeDecisionRepo{}, &fakeOutboxRepo{}, &fakeClusterRepo{}, &fakeLabelRepo{}, &fakeCheckpointer{}, in.RetentionWindows{}, fakeClock{now: now}, fakeLogger{})
+	uc.SetMediaRetention(sweeper, payloads, retention)
+	return uc
+}
+
+func TestRunRetention_Media_SweepsOlderThanRetentionAndProtectsOpenRows(t *testing.T) {
+	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
+	sweeper := &fakeSweeper{res: out.MediaSweepResult{Deleted: 4, BytesDeleted: 400, Protected: 1}}
+	payloads := fakeOpenPayloads{payloads: []string{
+		`{"text":"a","images":[{"path":"one.jpg","mime":"image/jpeg"},{"path":"two.png","mime":"image/png"}]}`,
+		`{}`,
+		`{"title":"legacy telegram row","canonical_url":"https://example.test/a"}`,
+		`{"text":"b","images":[{"path":"one.jpg","mime":"image/jpeg"}]}`,
+	}}
+	uc := newMediaRetention(sweeper, payloads, 7*24*time.Hour, now)
+
+	result, err := uc.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := now.Add(-7 * 24 * time.Hour); !sweeper.cutoff.Equal(want) {
+		t.Errorf("cutoff = %v, want %v", sweeper.cutoff, want)
+	}
+	if len(sweeper.keep) != 2 {
+		t.Errorf("keep = %v, want one.jpg and two.png", sweeper.keep)
+	}
+	for _, p := range []string{"one.jpg", "two.png"} {
+		if _, ok := sweeper.keep[p]; !ok {
+			t.Errorf("keep is missing %s", p)
+		}
+	}
+	if result.MediaDeleted != 4 || result.MediaBytesDeleted != 400 || result.MediaProtected != 1 {
+		t.Errorf("result = %+v", result)
+	}
+}
+
+func TestRunRetention_Media_DoesNotSweepWhenOpenRowsCannotBeListed(t *testing.T) {
+	listErr := errors.New("db locked")
+	for name, payloads := range map[string]fakeOpenPayloads{
+		"list fails":          {err: listErr},
+		"payload undecodable": {payloads: []string{"not json"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			sweeper := &fakeSweeper{}
+			uc := newMediaRetention(sweeper, payloads, 7*24*time.Hour, time.Now())
+			if _, err := uc.Run(context.Background()); err == nil {
+				t.Fatal("Run() error = nil, want the media step to fail")
+			}
+			if sweeper.calls != 0 {
+				t.Fatalf("sweeper called %d times with an unknown reference set", sweeper.calls)
+			}
+		})
+	}
+}
+
+func TestRunRetention_Media_SweepErrorIsReported(t *testing.T) {
+	sweepErr := errors.New("permission denied")
+	uc := newMediaRetention(&fakeSweeper{err: sweepErr}, fakeOpenPayloads{}, 7*24*time.Hour, time.Now())
+	if _, err := uc.Run(context.Background()); !errors.Is(err, sweepErr) {
+		t.Fatalf("Run() error = %v, want wrapped %v", err, sweepErr)
+	}
+}
+
+func TestRunRetention_Media_SkippedWhenNotConfigured(t *testing.T) {
+	sweeper := &fakeSweeper{}
+	uc := newMediaRetention(sweeper, fakeOpenPayloads{}, 0, time.Now())
+	if _, err := uc.Run(context.Background()); err != nil || sweeper.calls != 0 {
+		t.Fatalf("Run() = %v, sweeps = %d; want no sweep without a retention", err, sweeper.calls)
+	}
+	plain := usecase.NewRunRetention(&fakeArticleRepo{}, &fakeDecisionRepo{}, &fakeOutboxRepo{}, &fakeClusterRepo{}, &fakeLabelRepo{}, &fakeCheckpointer{}, in.RetentionWindows{}, fakeClock{now: time.Now()}, fakeLogger{})
+	if _, err := plain.Run(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }

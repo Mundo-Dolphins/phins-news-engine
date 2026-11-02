@@ -2914,3 +2914,35 @@ func TestStoryGuardConfig_Validate(t *testing.T) {
 		}
 	}
 }
+
+func TestMediaConfig_Validate(t *testing.T) {
+	if err := (config.MediaConfig{}).Validate(); err != nil {
+		t.Errorf("disabled store: Validate() = %v, want nil", err)
+	}
+	valid := config.MediaConfig{Dir: "data/media", AllowedHosts: []string{"pbs.twimg.com"}}
+	if err := valid.Validate(); err != nil {
+		t.Errorf("Validate() = %v, want nil", err)
+	}
+	if got := valid.Retention(); got != 7*24*time.Hour {
+		t.Errorf("default retention = %v, want 7 days", got)
+	}
+
+	for name, mutate := range map[string]func(*config.MediaConfig){
+		"no hosts":                func(c *config.MediaConfig) { c.AllowedHosts = []string{" "} },
+		"negative size":           func(c *config.MediaConfig) { c.MaxBytes = -1 },
+		"retention above the cap": func(c *config.MediaConfig) { c.RetentionDays = 8 },
+		"retention above own cap": func(c *config.MediaConfig) { c.RetentionDays = 4; c.MaxRetentionDays = 3 },
+	} {
+		c := valid
+		mutate(&c)
+		if err := c.Validate(); err == nil {
+			t.Errorf("%s: Validate() = nil, want error", name)
+		}
+	}
+
+	longer := valid
+	longer.RetentionDays, longer.MaxRetentionDays = 14, 14
+	if err := longer.Validate(); err != nil {
+		t.Errorf("host-raised cap: Validate() = %v, want nil", err)
+	}
+}

@@ -8,7 +8,7 @@ report a vulnerability, follow the [security policy](../SECURITY.md).
 Every outbound HTTP client in the library uses the shared helpers in
 `infra/netguard`. The rules below apply to the feed fetchers (`infra/rssclient`,
 and the `rss`, `reddit` and `youtube` adapters built on it), the Bluesky,
-ESPN scoreboard and Telegram adapters, `infra/llmclient`, `infra/websearch`
+ESPN scoreboard and Telegram adapters, the media store (`adapters/outbound/mediafs`, [ADR 0036](adr/0036-media-store.md)), `infra/llmclient`, `infra/websearch`
 (SearXNG and Tavily), `infra/wikidata` and the roster download in
 `infra/nflverse/rostersync`.
 
