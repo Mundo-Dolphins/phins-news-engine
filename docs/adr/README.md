@@ -19,6 +19,7 @@ today.
 | [0032](0032-message-payload.md) | Message payload on the outbox (text and images) |
 | [0033](0033-event-handlers.md) | Event handlers: plugins that run before deduplication |
 | [0034](0034-event-claims.md) | Event claims: transactional idempotency store for handlers |
+| [0035](0035-bluesky-publisher.md) | Bluesky publisher: write client and reconciliation |
 
 The numbering has gaps. The engine was extracted from a larger project
 whose other records cover operations and deployment-specific choices and

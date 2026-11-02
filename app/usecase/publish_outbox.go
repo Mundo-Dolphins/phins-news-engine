@@ -782,9 +782,14 @@ func (p *PublishOutbox) reconcileOne(ctx context.Context, item out.OutboxItem, n
 	}
 
 	if item.SentMessageID == "" && item.Destination.Normalized() != publishing.DestinationTelegram {
-		// Channel history is the Telegram user session's; nothing can verify
-		// another destination, and a blind resend is never allowed (ADR 0030).
-		return p.quarantineItem(ctx, item, fmt.Sprintf("reconciliation_unavailable: no reconciler for destination %s", item.Destination.Normalized()), result)
+		// Channel history is the Telegram user session's. Another destination
+		// is verified only through its publisher's own DestinationReconciler;
+		// without one a blind resend is never allowed (ADR 0030).
+		reconciler, ok := p.publishers[item.Destination.Normalized()].(out.DestinationReconciler)
+		if !ok {
+			return p.quarantineItem(ctx, item, fmt.Sprintf("reconciliation_unavailable: no reconciler for destination %s", item.Destination.Normalized()), result)
+		}
+		return p.reconcileWithDestination(ctx, reconciler, item, a, now, result)
 	}
 
 	if item.SentMessageID != "" {
@@ -824,6 +829,41 @@ func (p *PublishOutbox) reconcileOne(ctx context.Context, item out.OutboxItem, n
 		return p.reconcileNegative(ctx, item, a, now, result)
 	default:
 		return p.quarantineItem(ctx, item, "channel_history_inconclusive", result)
+	}
+}
+
+// reconcileWithDestination resolves a sent_unconfirmed row with no recorded
+// message ID through the destination publisher's own history lookup. The
+// outcomes mirror the Telegram path: a match finalizes, a confident
+// non-match schedules a retry, anything else quarantines.
+func (p *PublishOutbox) reconcileWithDestination(ctx context.Context, reconciler out.DestinationReconciler, item out.OutboxItem, a article.Article, now time.Time, result *in.ReconcileResult) error {
+	payload, err := publishing.ParseMessagePayload(item.Payload)
+	if err != nil {
+		return p.quarantineItem(ctx, item, "reconciliation_unavailable: unreadable payload", result)
+	}
+	messageID, matched, covered, err := reconciler.FindSent(ctx, out.SentLookup{
+		Article: a, Payload: payload, SentAt: item.SentAt, ClockSkew: p.reconcile.ClockSkew,
+	})
+	if err != nil {
+		p.logger.Warn("destination history reconciliation failed", "outbox_id", item.ID, "article_id", a.ID,
+			"destination", item.Destination.Normalized(), "error", err.Error())
+		return p.quarantineItem(ctx, item, "destination_history_lookup_failed", result)
+	}
+	switch {
+	case matched:
+		if err := p.outbox.RecordSentUnconfirmed(ctx, item.ID, messageID, "reconciled_from_destination_history", now); err != nil {
+			return fmt.Errorf("reconcile outbox: record matched message id for %s: %w", a.ID, err)
+		}
+		if err := p.finalizeDelivered(ctx, "reconcile", item, a, messageID, 0, &in.PublishOutboxResult{}); err != nil {
+			return err
+		}
+		p.logger.Info("ambiguous delivery reconciled positive (destination history)", "outbox_id", item.ID, "article_id", a.ID)
+		result.ReconciledPositive++
+		return nil
+	case covered:
+		return p.reconcileNegative(ctx, item, a, now, result)
+	default:
+		return p.quarantineItem(ctx, item, "destination_history_inconclusive", result)
 	}
 }
 

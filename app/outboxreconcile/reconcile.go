@@ -69,3 +69,33 @@ func MatchInHistory(
 	}
 	return "", false, !oldestSeen.After(cutoff)
 }
+
+// Post is one entry of a destination's own post history, reduced to what
+// reconciliation compares.
+type Post struct {
+	ID       string
+	Text     string
+	PostedAt time.Time
+}
+
+// MatchPost is MatchInHistory for destinations that expose their own posts
+// with the exact text (Bluesky). A post matches when its text equals text
+// and its PostedAt is no earlier than sentAt.Add(-clockSkew). The covered
+// result carries the same meaning and the same rules as MatchInHistory: only
+// (_, false, true) is a confirmed non-delivery.
+func MatchPost(posts []Post, text string, sentAt time.Time, clockSkew time.Duration) (id string, matched, covered bool) {
+	cutoff := sentAt.Add(-clockSkew)
+	var oldestSeen time.Time
+	for _, p := range posts {
+		if oldestSeen.IsZero() || p.PostedAt.Before(oldestSeen) {
+			oldestSeen = p.PostedAt
+		}
+		if p.Text == text && !p.PostedAt.Before(cutoff) {
+			return p.ID, true, true
+		}
+	}
+	if oldestSeen.IsZero() {
+		return "", false, false
+	}
+	return "", false, !oldestSeen.After(cutoff)
+}

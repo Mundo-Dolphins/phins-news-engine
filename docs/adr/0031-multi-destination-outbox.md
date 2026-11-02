@@ -57,10 +57,13 @@ unthrottled.
   never discards the article or releases a gate.
 - A Telegram `429` defers the remaining Telegram rows of the batch; rows for
   other destinations keep draining.
-- Reconciliation uses the Telegram user session. For another destination a
-  `sent_unconfirmed` row with a recorded message ID is finalised from that
-  local evidence; one without is quarantined for `outbox repair`. The channel
-  history is never searched on its behalf, and nothing is blindly resent.
+- Reconciliation uses the Telegram user session for Telegram rows. For
+  another destination a `sent_unconfirmed` row with a recorded message ID is
+  finalised from that local evidence. One without is resolved through the
+  destination publisher's own `out.DestinationReconciler`, when it has one
+  (the Bluesky publisher does, [ADR 0035](0035-bluesky-publisher.md)), and
+  is otherwise quarantined for `outbox repair`. The Telegram channel history
+  is never searched on its behalf, and nothing is blindly resent.
 - Operator views (`outbox status`, `backlog`, `expire`) and the supersession
   of live-lane rows cover Telegram rows only. Per-destination operator views
   are future work.
