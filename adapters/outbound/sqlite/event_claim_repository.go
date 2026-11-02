@@ -213,3 +213,89 @@ func (r *EventClaimRepository) ReconcileWithOutbox(ctx context.Context, now time
 	}
 	return published, failed, nil
 }
+
+var _ appout.EventClaimOperations = (*EventClaimRepository)(nil)
+
+// OutboxRows implements ports/out.EventClaimOperations.
+func (r *EventClaimRepository) OutboxRows(ctx context.Context, articleID string) ([]appout.EventClaimOutboxRow, error) {
+	if articleID == "" {
+		return nil, nil
+	}
+	rows, err := executor(ctx, r.db).QueryContext(ctx,
+		`SELECT destination, status, attempt_count, last_error FROM publication_outbox WHERE article_id = ? ORDER BY id`, articleID)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: list outbox rows of article %s: %w", articleID, err)
+	}
+	defer rows.Close()
+	var out []appout.EventClaimOutboxRow
+	for rows.Next() {
+		var o appout.EventClaimOutboxRow
+		if err := rows.Scan(&o.Destination, &o.Status, &o.Attempts, &o.LastError); err != nil {
+			return nil, fmt.Errorf("sqlite: scan outbox row: %w", err)
+		}
+		out = append(out, o)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sqlite: list outbox rows of article %s: %w", articleID, err)
+	}
+	return out, nil
+}
+
+// RetryFailed implements ports/out.EventClaimOperations. Everything runs in
+// one transaction, so a refusal changes nothing and a retry never leaves a
+// claimed claim without a pending row.
+func (r *EventClaimRepository) RetryFailed(ctx context.Context, handler, key string, now time.Time) (int, error) {
+	var requeued int
+	err := withTx(ctx, r.db, func(tx *sql.Tx) error {
+		var state, articleID string
+		err := tx.QueryRowContext(ctx,
+			`SELECT state, article_id FROM event_claims WHERE handler = ? AND claim_key = ?`, handler, key).Scan(&state, &articleID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("sqlite: retry event claim %s/%s: %w", handler, key, appout.ErrEventClaimNotFound)
+		}
+		if err != nil {
+			return fmt.Errorf("sqlite: retry event claim %s/%s: %w", handler, key, err)
+		}
+		if appout.EventClaimState(state) != appout.EventClaimFailed {
+			return fmt.Errorf("sqlite: retry event claim %s/%s is %s: %w", handler, key, state, appout.ErrEventClaimNotFailed)
+		}
+		var inFlight int
+		if err := tx.QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM publication_outbox
+			WHERE article_id = ? AND status IN ('pending','leased','retryable','sent_unconfirmed','quarantined')`,
+			articleID).Scan(&inFlight); err != nil {
+			return fmt.Errorf("sqlite: retry event claim %s/%s: %w", handler, key, err)
+		}
+		if inFlight > 0 {
+			return fmt.Errorf("sqlite: retry event claim %s/%s: %w", handler, key, appout.ErrEventClaimInFlight)
+		}
+		res, err := tx.ExecContext(ctx, `
+			UPDATE publication_outbox
+			SET status = 'pending', available_at = ?, attempt_count = 0, expires_at = NULL,
+				claimed_at = NULL, claimed_by = '', sent_message_id = '', ambiguous_reason = '',
+				quarantined_at = NULL, updated_at = ?
+			WHERE article_id = ? AND status = 'dead'`,
+			sqliteTime(now), sqliteTime(now), articleID)
+		if err != nil {
+			return fmt.Errorf("sqlite: retry event claim %s/%s: re-enqueue: %w", handler, key, err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("sqlite: rows affected: %w", err)
+		}
+		if n == 0 {
+			return fmt.Errorf("sqlite: retry event claim %s/%s: %w", handler, key, appout.ErrEventClaimNothingToRetry)
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE event_claims SET state = 'claimed', updated_at = ? WHERE handler = ? AND claim_key = ? AND state = 'failed'`,
+			sqliteTime(now), handler, key); err != nil {
+			return fmt.Errorf("sqlite: retry event claim %s/%s: %w", handler, key, err)
+		}
+		requeued = int(n)
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return requeued, nil
+}

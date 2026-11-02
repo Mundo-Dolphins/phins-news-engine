@@ -94,3 +94,39 @@ type EventClaimRepository interface {
 	// unaware of handlers. It returns how many claims moved.
 	ReconcileWithOutbox(ctx context.Context, now time.Time) (published, failed int, err error)
 }
+
+var (
+	// ErrEventClaimNotFailed is returned by RetryFailed for a claim that is
+	// not in the failed state.
+	ErrEventClaimNotFailed = errors.New("event claim is not failed")
+	// ErrEventClaimInFlight is returned by RetryFailed when an outbox row of
+	// the claim's article is still being worked on, or needs `outbox repair`.
+	ErrEventClaimInFlight = errors.New("event claim has an in-flight outbox row")
+	// ErrEventClaimNothingToRetry is returned by RetryFailed when the failed
+	// claim has no dead outbox row to re-enqueue (for example its action was
+	// never persisted). Release the claim instead.
+	ErrEventClaimNothingToRetry = errors.New("event claim has no dead outbox row to retry")
+)
+
+// EventClaimOutboxRow is the outbox state of one destination of a claim's
+// article, as the operator CLI shows it.
+type EventClaimOutboxRow struct {
+	Destination string
+	Status      string
+	Attempts    int
+	LastError   string
+}
+
+// EventClaimOperations is what the operator CLI needs beyond the handler-facing
+// EventClaimRepository (ADR 0034). It is a separate interface so host
+// implementations of EventClaimRepository are unaffected.
+type EventClaimOperations interface {
+	// OutboxRows returns the outbox rows of an article, oldest first.
+	OutboxRows(ctx context.Context, articleID string) ([]EventClaimOutboxRow, error)
+	// RetryFailed re-enqueues the dead outbox rows of a failed claim's
+	// article (same destination and payload, attempts reset) and sets the
+	// claim back to claimed, in one transaction. It returns how many rows
+	// were re-enqueued. ErrEventClaimNotFound, ErrEventClaimNotFailed,
+	// ErrEventClaimInFlight and ErrEventClaimNothingToRetry are the refusals.
+	RetryFailed(ctx context.Context, handler, key string, now time.Time) (requeued int, err error)
+}
