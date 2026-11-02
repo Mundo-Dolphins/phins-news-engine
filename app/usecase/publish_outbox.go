@@ -279,10 +279,26 @@ func (p *PublishOutbox) publishOne(ctx context.Context, runID string, item out.O
 		}
 	}
 
+	var payload publishing.MessagePayload
+	payloadPublisher, payloadAware := publisher.(out.PayloadPublisher)
+	if payloadAware {
+		var perr error
+		if payload, perr = publishing.ParseMessagePayload(item.Payload); perr != nil {
+			// Retrying cannot repair a malformed payload.
+			return p.recordFailure(ctx, runID, item, a, &out.PermanentError{Err: perr}, 0, result)
+		}
+	}
+
 	// The network call happens with no database transaction open — never
 	// hold a SQLite transaction across a slow, blocking external call.
 	start := p.clock.Now()
-	messageID, publishErr := publisher.Publish(ctx, a)
+	var messageID string
+	var publishErr error
+	if payloadAware {
+		messageID, publishErr = payloadPublisher.PublishPayload(ctx, a, payload)
+	} else {
+		messageID, publishErr = publisher.Publish(ctx, a)
+	}
 	duration := p.clock.Now().Sub(start)
 
 	var ambiguous *out.AmbiguousError

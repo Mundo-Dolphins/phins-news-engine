@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/article"
+	"github.com/Mundo-Dolphins/phins-news-engine/domain/publishing"
 )
 
 // Publisher publishes an accepted article to the outside world (Telegram),
@@ -12,6 +13,19 @@ import (
 // publication_attempts.external_message_id.
 type Publisher interface {
 	Publish(ctx context.Context, a article.Article) (messageID string, err error)
+}
+
+// PayloadPublisher is the optional payload-aware extension of Publisher (ADR
+// 0032). A publisher that implements it receives the outbox row's
+// publishing.MessagePayload alongside the article, and uses the payload's
+// text and images instead of deriving content from the article whenever the
+// payload is not empty (payload.IsEmpty() is false). With an empty payload it
+// must behave exactly like Publish. A publisher that does not implement it
+// (the Telegram one) is called through Publish and never sees the payload.
+// PermanentError, RateLimitedError and AmbiguousError apply unchanged.
+type PayloadPublisher interface {
+	Publisher
+	PublishPayload(ctx context.Context, a article.Article, payload publishing.MessagePayload) (messageID string, err error)
 }
 
 // PermanentError wraps a Publish error that will never succeed on retry

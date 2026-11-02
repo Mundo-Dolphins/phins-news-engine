@@ -176,3 +176,39 @@ func TestOutboxRepository_CountSucceededPerDestination(t *testing.T) {
 		}
 	}
 }
+
+func TestOutboxRepository_EnqueueDestination_ValidatesAndPersistsMessagePayload(t *testing.T) {
+	db := newTestDB(t)
+	mustSaveArticle(t, sqliteadapter.NewArticleRepository(db), "a1")
+	repo := sqliteadapter.NewOutboxRepository(db)
+	ctx := context.Background()
+	past := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	for _, bad := range []string{
+		`{"text":"hi","images":[{"path":"","mime":"image/png"}]}`,
+		`{"text":"hi","images":[{"path":"/abs.png","mime":"image/png"}]}`,
+		`{"text":"hi","images":[{"path":"../x.png","mime":"image/png"}]}`,
+		"not json",
+	} {
+		if err := repo.EnqueueDestination(ctx, "a1", bad, publishing.LaneNormal, publishing.DestinationBluesky, past); err == nil {
+			t.Errorf("payload %q accepted", bad)
+		}
+	}
+
+	want := publishing.MessagePayload{Text: "hi", Images: []publishing.ImageRef{{Path: "w8.png", MIME: "image/png", Alt: "alt"}}}
+	raw, err := want.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.EnqueueDestination(ctx, "a1", raw, publishing.LaneNormal, publishing.DestinationBluesky, past); err != nil {
+		t.Fatal(err)
+	}
+	items, err := repo.ClaimBatch(ctx, "w", 10, time.Minute, past.Add(time.Hour))
+	if err != nil || len(items) != 1 {
+		t.Fatalf("claimed %v, %v; want 1 item", items, err)
+	}
+	got, err := publishing.ParseMessagePayload(items[0].Payload)
+	if err != nil || got.Text != want.Text || len(got.Images) != 1 || got.Images[0] != want.Images[0] {
+		t.Fatalf("stored payload = %+v, %v; want %+v", got, err, want)
+	}
+}

@@ -119,6 +119,9 @@ func (r *OutboxRepository) EnqueueDestination(ctx context.Context, articleID, pa
 	if err := publishing.ValidateDestination(destination); err != nil {
 		return fmt.Errorf("sqlite: enqueue outbox item for %s: %w", articleID, err)
 	}
+	if err := publishing.ValidatePayload(payload); err != nil {
+		return fmt.Errorf("sqlite: enqueue outbox item for %s: %w", articleID, err)
+	}
 	destination = destination.Normalized()
 	lane = lane.Normalized()
 	var liveExpiry any
