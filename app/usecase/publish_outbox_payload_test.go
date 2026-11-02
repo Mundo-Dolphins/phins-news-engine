@@ -19,7 +19,7 @@ type payloadPublisher struct {
 
 func (p *payloadPublisher) PublishPayload(_ context.Context, a article.Article, payload publishing.MessagePayload) (string, error) {
 	p.payloads = append(p.payloads, payload)
-	return p.fakePublisher.Publish(context.Background(), a)
+	return p.Publish(context.Background(), a)
 }
 
 func runPayloadRow(t *testing.T, raw string, bsky out.Publisher) (*fakeOutboxRepo, error) {
