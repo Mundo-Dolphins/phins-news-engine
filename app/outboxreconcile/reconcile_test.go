@@ -92,3 +92,31 @@ func TestMatchInHistory_CoverageExactlyAtCutoffCounts(t *testing.T) {
 		t.Fatalf("MatchInHistory() = (%q, %v, %v), want (\"\", false, true) when oldest message lands exactly on the cutoff", id, matched, covered)
 	}
 }
+
+func TestMatchPost(t *testing.T) {
+	sentAt := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	skew := 2 * time.Minute
+	tests := []struct {
+		name        string
+		posts       []outboxreconcile.Post
+		wantID      string
+		wantMatched bool
+		wantCovered bool
+	}{
+		{"match", []outboxreconcile.Post{{ID: "p2", Text: "hola", PostedAt: sentAt}, {ID: "p1", Text: "x", PostedAt: sentAt.Add(-time.Hour)}}, "p2", true, true},
+		{"match exactly at the skew cutoff", []outboxreconcile.Post{{ID: "p1", Text: "hola", PostedAt: sentAt.Add(-skew)}}, "p1", true, true},
+		{"same text older than the window is not a match", []outboxreconcile.Post{{ID: "p1", Text: "hola", PostedAt: sentAt.Add(-skew - time.Second)}}, "", false, true},
+		{"covered non-match", []outboxreconcile.Post{{ID: "p1", Text: "otro", PostedAt: sentAt.Add(-time.Hour)}}, "", false, true},
+		{"too shallow", []outboxreconcile.Post{{ID: "p1", Text: "otro", PostedAt: sentAt}}, "", false, false},
+		{"empty", nil, "", false, false},
+		{"text must match exactly", []outboxreconcile.Post{{ID: "p1", Text: "hola ", PostedAt: sentAt}}, "", false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			id, matched, covered := outboxreconcile.MatchPost(tt.posts, "hola", sentAt, skew)
+			if id != tt.wantID || matched != tt.wantMatched || covered != tt.wantCovered {
+				t.Fatalf("MatchPost() = (%q, %v, %v), want (%q, %v, %v)", id, matched, covered, tt.wantID, tt.wantMatched, tt.wantCovered)
+			}
+		})
+	}
+}

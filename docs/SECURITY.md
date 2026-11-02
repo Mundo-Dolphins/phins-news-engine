@@ -19,7 +19,7 @@ negative, the client uses its own default:
 
 | Client | Default timeout |
 |---|---|
-| RSS/Atom feeds, Bluesky, Telegram | 30 s |
+| RSS/Atom feeds, Bluesky (read and publisher), Telegram | 30 s |
 | ESPN scoreboard, SearXNG, Tavily | 10 s |
 | LLM chat completions | 5 min (local models can be slow) |
 | Roster download | 60 s |
@@ -36,7 +36,7 @@ and states the limit. The body is never silently truncated.
 | Client | Cap |
 |---|---|
 | RSS/Atom feeds, Bluesky | `http.max_response_bytes`; 10 MiB if unset (1 MiB for Bluesky) |
-| Telegram, LLM chat completions | 1 MiB |
+| Telegram, Bluesky publisher, LLM chat completions | 1 MiB |
 | SearXNG, Tavily | 2 MiB |
 | ESPN scoreboard | 4 MiB (a full week of events can exceed 1 MiB) |
 | Wikidata | `MaxResponseBytes`; 16 MiB if unset (entity documents are large) |
@@ -115,7 +115,8 @@ matters.
 | Wikidata | block private | `entity_discovery.wikidata.allow_private_hosts: true` |
 | LLM endpoints, SearXNG, Tavily | allow private | none needed: base URLs are operator infrastructure |
 | Telegram | allow private | none needed: a self-hosted Bot API server is supported |
-| Bluesky, ESPN scoreboard | allow private | none needed: the hosts are fixed public APIs, and only tests override them |
+| Bluesky (read), ESPN scoreboard | allow private | none needed: the hosts are fixed public APIs, and only tests override them |
+| Bluesky publisher | allow private | none needed: the PDS host is host configuration, defaulting to `https://bsky.social` |
 | Roster download | allow private | none needed: the URL is operator-supplied |
 
 If the host refuses a feed URL, the `rss` adapter does not hand that URL to

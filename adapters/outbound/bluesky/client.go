@@ -1,8 +1,11 @@
-// Package bluesky fetches public Bluesky accounts and curated feeds via
-// the AT Protocol's public XRPC endpoints — no authentication, and no
-// bluesky-social/indigo dependency. client.go is the HTTP
-// client; fetcher.go (same package) parses its responses into
-// article.Article.
+// Package bluesky reads public Bluesky accounts and curated feeds via the
+// AT Protocol's public XRPC endpoints (no authentication) and publishes posts
+// to one account — all without the bluesky-social/indigo dependency.
+// client.go is the read HTTP client; fetcher.go (same package) parses its
+// responses into article.Article. publisher.go is the write side (ADR 0035):
+// session.go holds the createSession/refreshSession handling, image.go the
+// blob upload, facets.go and graphemes.go the post text rules, and
+// reconcile.go the lookup that resolves ambiguous sends.
 package bluesky
 
 import (
@@ -92,7 +95,8 @@ type facet struct {
 
 type facetFeature struct {
 	Type string `json:"$type"`
-	URI  string `json:"uri"`
+	URI  string `json:"uri,omitempty"`
+	Tag  string `json:"tag,omitempty"`
 }
 
 type recordEmbed struct {
