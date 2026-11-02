@@ -57,3 +57,11 @@ action (the failure is logged and counted, ADR 0033), the claim stays
 `claimed` with no outbox row; it is visible through `List` and can be released.
 Settling is per article rather than per destination, so an article with a
 delivered Telegram row and a dead Bluesky row settles as `failed`.
+
+## Operator commands
+
+`event claims list|show|retry|release` in the tools binary inspect and repair
+claims; see [the runbook](../EVENT-CLAIMS-RUNBOOK.md). `retry` is the only
+path that moves a `failed` claim back to `claimed`: it re-enqueues the dead
+outbox rows and changes the claim in one transaction, and refuses published
+claims and claims with an in-flight outbox row.

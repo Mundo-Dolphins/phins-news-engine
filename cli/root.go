@@ -16,6 +16,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/cli/cmd/dictionary"
 	"github.com/Mundo-Dolphins/phins-news-engine/cli/cmd/editorial"
 	"github.com/Mundo-Dolphins/phins-news-engine/cli/cmd/entities"
+	"github.com/Mundo-Dolphins/phins-news-engine/cli/cmd/event"
 	"github.com/Mundo-Dolphins/phins-news-engine/cli/cmd/events"
 	"github.com/Mundo-Dolphins/phins-news-engine/cli/cmd/label"
 	"github.com/Mundo-Dolphins/phins-news-engine/cli/cmd/model"
@@ -51,6 +52,7 @@ func init() {
 	root.AddCommand(dictionary.NewCommand())
 	root.AddCommand(entities.NewCommand())
 	root.AddCommand(events.NewCommand())
+	root.AddCommand(event.NewCommand())
 	root.AddCommand(dedup.NewCommand())
 	root.AddCommand(clustering.NewCommand())
 	root.AddCommand(sourcepolicy.NewCommand())
