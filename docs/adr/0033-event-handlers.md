@@ -26,9 +26,9 @@ handlers that exist.
 
 **Context.** `EventContext` lends a clock, a logger, the
 `MatchStateProvider`, the handler's own `config` block and three small
-service ports: `EventClaimStore`, `EventMediaStore` and `EventAlertSink`.
-Those three are nil until the engine wires an implementation (claims, media
-store and alerts are separate pieces of work), so a handler must check them.
+service ports: `EventClaimRepository` (ADR 0034), `EventMediaStore` and
+`EventAlertSink`. The media store and alerts are nil until the engine wires an
+implementation (separate pieces of work), so a handler must check them.
 A handler never receives a database handle.
 
 **Where it runs.** In `ProcessCycle`, once per article that gets past the
@@ -60,7 +60,7 @@ passed to it. A settings entry naming no registered handler is logged.
 With no handlers registered the pipeline is identical to before. Handlers are
 not re-run for an item the seen-items claim already finished, so a handler
 runs once per ingested item and idempotency across different items (the same
-tweet from several accounts) is the claims store's job. Because handlers see
+tweet from several accounts) is the claims store's job (ADR 0034). Because handlers see
 rejected copies, a row can exist for an article whose status is
 `rejected_duplicate`; its publisher resolves content from the payload, not
 from the article's pipeline outcome.

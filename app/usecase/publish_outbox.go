@@ -53,6 +53,7 @@ type PublishOutbox struct {
 	sourcePolicyCooldowns out.SourcePolicyCooldownRepository
 
 	reconcile       ReconciliationConfig
+	eventClaims     out.EventClaimRepository    // nil: event claims are not settled from outbox outcomes
 	channelImporter out.TelegramChannelImporter // nil: reconciliation-by-history unavailable, ambiguous items with no message_id quarantine immediately
 }
 
@@ -104,6 +105,10 @@ func NewPublishOutbox(
 		channelImporter: channelImporter,
 	}
 }
+
+// SetEventClaims is called by the composition root. Its zero value (nil) is
+// safe: event claims are then never settled from outbox outcomes.
+func (p *PublishOutbox) SetEventClaims(claims out.EventClaimRepository) { p.eventClaims = claims }
 
 // RegisterPublisher adds the publisher for a non-Telegram destination
 // (ADR 0031). The Telegram publisher is the constructor's and cannot be
@@ -201,6 +206,8 @@ func (p *PublishOutbox) Run(ctx context.Context) (in.PublishOutboxResult, error)
 		}
 	}
 
+	p.settleEventClaims(ctx)
+
 	p.logger.Info(
 		"publish outbox completed",
 		"run_id", runID,
@@ -224,6 +231,24 @@ func (p *PublishOutbox) Run(ctx context.Context) (in.PublishOutboxResult, error)
 		}
 	}
 	return result, nil
+}
+
+// settleEventClaims moves event claims to published or failed once their
+// article's outbox rows have finished (ADR 0034), so the outbox itself never
+// knows about handlers. A failure is logged, not propagated: the next run
+// retries it.
+func (p *PublishOutbox) settleEventClaims(ctx context.Context) {
+	if p.eventClaims == nil {
+		return
+	}
+	published, failed, err := p.eventClaims.ReconcileWithOutbox(ctx, p.clock.Now())
+	if err != nil {
+		p.logger.Error("settle event claims failed", err)
+		return
+	}
+	if published+failed > 0 {
+		p.logger.Info("event claims settled", "published", published, "failed", failed)
+	}
 }
 
 // tracked runs fn and attributes the counter deltas it produced to

@@ -2,7 +2,6 @@ package out
 
 import (
 	"context"
-	"time"
 
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/article"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/publishing"
@@ -38,18 +37,11 @@ type EventContext struct {
 	MatchState MatchStateProvider
 	// Claims, Media and Alerts are nil until the engine wires them; a handler
 	// that needs one must check.
-	Claims EventClaimStore
+	Claims EventClaimRepository
 	Media  EventMediaStore
 	Alerts EventAlertSink
 	// Config is the handler's own settings block (events.<name>.config).
 	Config map[string]any
-}
-
-// EventClaimStore gives a handler idempotency: a key is claimed once.
-type EventClaimStore interface {
-	// Claim records key for handler and reports whether this call took it
-	// (false: it was already claimed).
-	Claim(ctx context.Context, handler, key string, now time.Time) (claimed bool, err error)
 }
 
 // EventMediaStore downloads an image into the media store.

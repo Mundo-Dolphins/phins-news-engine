@@ -820,3 +820,35 @@ func TestPublishOutbox_RunCallsReconcileBeforeClaiming(t *testing.T) {
 		t.Errorf("outbox.calls = %v, want %v — Reconcile must run before ClaimBatch", outbox.calls, want)
 	}
 }
+
+// fakeEventClaims records ReconcileWithOutbox calls.
+type fakeEventClaims struct {
+	out.EventClaimRepository
+	calls int
+	err   error
+}
+
+func (f *fakeEventClaims) ReconcileWithOutbox(_ context.Context, _ time.Time) (int, int, error) {
+	f.calls++
+	return 0, 0, f.err
+}
+
+func TestPublishOutbox_RunSettlesEventClaims(t *testing.T) {
+	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
+	claims := &fakeEventClaims{}
+	uc := newPublishOutbox(&fakeArticleRepo{}, &fakeOutboxRepo{}, &fakeDecisionRepo{}, &fakeUnitOfWork{}, &fakePublisher{}, fakeClock{now: now}, &fakeClusterPublicationRepository{})
+	uc.SetEventClaims(claims)
+
+	if _, err := uc.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if claims.calls != 1 {
+		t.Fatalf("ReconcileWithOutbox calls = %d, want 1", claims.calls)
+	}
+
+	// A settle failure must not fail the publish run.
+	claims.err = errors.New("db locked")
+	if _, err := uc.Run(context.Background()); err != nil {
+		t.Fatalf("Run() error = %v, want the settle failure to be logged only", err)
+	}
+}

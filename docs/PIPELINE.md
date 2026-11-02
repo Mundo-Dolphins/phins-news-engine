@@ -74,7 +74,10 @@ claim, including copies that step 2 is about to reject as duplicates. They
 return actions (today: enqueue a publication for a destination with its own
 text and images), which are saved in the article's transaction. A handler that
 errors, panics or times out is logged and counted in
-`ProcessCycleResult.Events` and changes nothing else.
+`ProcessCycleResult.Events` and changes nothing else. To post once per real
+event, a handler reserves a key in `event_claims` before it acts
+([ADR 0034](adr/0034-event-claims.md)); step 10 settles each claim as
+published or failed from its outbox rows.
 
 Every decision is appended to `article_processing_events` (event type,
 `from_status`, `to_status`, `reason_code`, `reason_detail`, `cycle_id`), so

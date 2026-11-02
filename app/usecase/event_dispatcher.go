@@ -29,7 +29,7 @@ type EventDeps struct {
 	Clock      out.Clock
 	Logger     out.Logger
 	MatchState out.MatchStateProvider
-	Claims     out.EventClaimStore
+	Claims     out.EventClaimRepository
 	Media      out.EventMediaStore
 	Alerts     out.EventAlertSink
 }

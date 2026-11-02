@@ -131,6 +131,7 @@ func Run(ctx context.Context, configPath string, profile config.Profile, logger 
 	decisions := sqliteadapter.NewDecisionRepository(db)
 	outbox := sqliteadapter.NewOutboxRepository(db)
 	labels := sqliteadapter.NewHumanLabelRepository(db)
+	eventClaims := sqliteadapter.NewEventClaimRepository(db)
 	uow := sqliteadapter.NewUnitOfWork(db)
 	checkpointer := sqliteadapter.NewCheckpointer(db)
 
@@ -349,7 +350,7 @@ func Run(ctx context.Context, configPath string, profile config.Profile, logger 
 			eventSettings[name] = usecase.EventHandlerSettings{Enabled: c.Enabled, Config: c.Config}
 		}
 		dispatcher, err := usecase.NewEventDispatcher(opts.EventHandlers, eventSettings,
-			usecase.EventDeps{Clock: realClock, Logger: logger, MatchState: matchState}, opts.EventHandlerTimeout)
+			usecase.EventDeps{Clock: realClock, Logger: logger, MatchState: matchState, Claims: eventClaims}, opts.EventHandlerTimeout)
 		if err != nil {
 			return err
 		}
@@ -363,6 +364,7 @@ func Run(ctx context.Context, configPath string, profile config.Profile, logger 
 		realClock, logger, clusterPublications, sourcePolicyCooldowns,
 		cfg.Publication.Reconciliation.Settings(cfg.Telegram.ChannelID, urlCfg, urlResolvers), channelImporter,
 	)
+	publishOutbox.SetEventClaims(eventClaims)
 	if err := registerPublishers(ctx, publishOutbox, opts.Publishers); err != nil {
 		return err
 	}
