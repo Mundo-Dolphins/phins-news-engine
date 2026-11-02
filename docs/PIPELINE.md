@@ -56,6 +56,7 @@ editorial score is computed after clustering and source-policy gate B; in
 | 0 | Fetch | `adapters/outbound/compositefetcher` | `fetch`, `fetch_sources`, the source catalog | none; errors are logged per source and the cycle continues |
 | 1 | Validate and normalize | `article.Validate`, `normalization.NormalizeURL` | `normalization` | `rejected_validation` |
 | 1.5 | Identity and seen-items claim | `ingestidentity.Resolve`, `SeenItemsRepository.Claim` | `seen_items` | skip (no article row) |
+| 1.9 | Event handlers | `usecase.EventDispatcher`, `out.EventHandler` | `events.<name>.enabled` | none; side effects only ([ADR 0033](adr/0033-event-handlers.md)) |
 | 2 | Exact dedup | `deduplication.Fingerprint`, alias cascade | `deduplication` | `rejected_duplicate` |
 | 3 | Relevance | `classification.Decide`, `dictionary.Matcher` | `classification`, `dictionary` | `rejected_not_related` |
 | 3.5 | Editorial vetoes | `editorialveto.Evaluate` | `editorial.veto_path` | `rejected_quality` |
@@ -67,6 +68,13 @@ editorial score is computed after clustering and source-policy gate B; in
 | 8b | Cluster publication gate | `clustergate.Decide`, `ClusterPublicationRepository.Reserve` | none, always on | `retained_no_publish` |
 | 9 | Accept and enqueue | `ProcessCycle` | none | `pending_publication` |
 | 10 | Publish | `PublishOutbox` | `publication`, `publication_policy`, `telegram` | `published`, `pending_retry`, `discarded` |
+
+Event handlers (step 1.9) run for every article that gets past the seen-items
+claim, including copies that step 2 is about to reject as duplicates. They
+return actions (today: enqueue a publication for a destination with its own
+text and images), which are saved in the article's transaction. A handler that
+errors, panics or times out is logged and counted in
+`ProcessCycleResult.Events` and changes nothing else.
 
 Every decision is appended to `article_processing_events` (event type,
 `from_status`, `to_status`, `reason_code`, `reason_detail`, `cycle_id`), so

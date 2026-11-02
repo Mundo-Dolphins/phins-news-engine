@@ -76,9 +76,28 @@ type ProcessCycleResult struct {
 	// Superseded counts claimable earlier game publications invalidated by a
 	// terminal final article.
 	Superseded int
+	// Events counts what the event handlers did this cycle (ADR 0033).
+	Events EventHandlerMetrics
 	// ByPlatform breaks Claimed/SeenSkipped/Revised/IdentityCollisions/
 	// ClaimErrors down per source.Type string value.
 	ByPlatform map[string]PlatformIngestMetrics
+}
+
+// EventHandlerMetrics summarizes event-handler activity in one cycle.
+type EventHandlerMetrics struct {
+	// Ran counts Handle calls (handlers that passed Interested).
+	Ran int
+	// Matched counts Handle calls that returned at least one action.
+	Matched int
+	// Enqueued counts publication rows the handlers' actions added.
+	Enqueued int
+	// Errors counts handlers that returned an error, plus actions that
+	// could not be applied.
+	Errors int
+	// Panics counts recovered handler panics.
+	Panics int
+	// Timeouts counts handlers that overran their deadline.
+	Timeouts int
 }
 
 // PlatformIngestMetrics is ProcessCycleResult.ByPlatform's per-platform

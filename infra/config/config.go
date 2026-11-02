@@ -76,39 +76,40 @@ func ResolveProfile(flagValue string) (Profile, error) {
 
 // Config is the fully loaded and validated application configuration.
 type Config struct {
-	SQLite             SQLiteConfig             `yaml:"sqlite"`
-	Scheduler          SchedulerConfig          `yaml:"scheduler"`
-	HTTP               HTTPConfig               `yaml:"http"`
-	ScrapingService    ScrapingServiceConfig    `yaml:"scraping_service"`
-	Fetch              FetchConfig              `yaml:"fetch"`
-	FetchSources       FetchSourcesConfig       `yaml:"fetch_sources"`
-	SourcePolicy       SourcePolicyConfig       `yaml:"source_policy"`
-	Normalization      NormalizationConfig      `yaml:"normalization"`
-	Classification     ClassificationConfig     `yaml:"classification"`
-	Deduplication      DeduplicationConfig      `yaml:"deduplication"`
-	Clustering         ClusteringConfig         `yaml:"clustering"`
-	Editorial          EditorialConfig          `yaml:"editorial"`
-	Freshness          FreshnessConfig          `yaml:"freshness"`
-	Telegram           TelegramConfig           `yaml:"telegram"`
-	PublicationPolicy  PublicationPolicyConfig  `yaml:"publication_policy"`
-	Publication        PublicationConfig        `yaml:"publication"`
-	Retention          RetentionConfig          `yaml:"retention"`
-	ClusterLifecycle   ClusterLifecycleConfig   `yaml:"cluster_lifecycle"`
-	SeenItems          SeenItemsConfig          `yaml:"seen_items"`
-	Model              ModelConfig              `yaml:"model"`
-	Dictionary         DictionaryConfig         `yaml:"dictionary"`
-	DictionaryMining   DictionaryMiningConfig   `yaml:"dictionary_mining"`
-	EditorialCycle     EditorialCycleConfig     `yaml:"editorial_cycle"`
-	EditorialGates     EditorialGatesConfig     `yaml:"editorial_gates"`
-	EditorialCosts     EditorialCostsConfig     `yaml:"editorial_costs"`
-	EditorialRollout   EditorialRolloutConfig   `yaml:"editorial_rollout"`
-	Remote             RemoteConfig             `yaml:"remote"`
-	DictionaryUpdate   DictionaryUpdateConfig   `yaml:"dictionary_update"`
-	EntityDiscovery    EntityDiscoveryConfig    `yaml:"entity_discovery"`
-	EntityExtraction   EntityExtractionConfig   `yaml:"entity_extraction"`
-	CatalogMaintenance CatalogMaintenanceConfig `yaml:"catalog_maintenance"`
-	OfflineTraining    OfflineTrainingConfig    `yaml:"offline_training"`
-	EspnScoreboard     EspnScoreboardConfig     `yaml:"espn_scoreboard"`
+	SQLite             SQLiteConfig                  `yaml:"sqlite"`
+	Scheduler          SchedulerConfig               `yaml:"scheduler"`
+	HTTP               HTTPConfig                    `yaml:"http"`
+	ScrapingService    ScrapingServiceConfig         `yaml:"scraping_service"`
+	Fetch              FetchConfig                   `yaml:"fetch"`
+	FetchSources       FetchSourcesConfig            `yaml:"fetch_sources"`
+	SourcePolicy       SourcePolicyConfig            `yaml:"source_policy"`
+	Normalization      NormalizationConfig           `yaml:"normalization"`
+	Classification     ClassificationConfig          `yaml:"classification"`
+	Deduplication      DeduplicationConfig           `yaml:"deduplication"`
+	Clustering         ClusteringConfig              `yaml:"clustering"`
+	Editorial          EditorialConfig               `yaml:"editorial"`
+	Freshness          FreshnessConfig               `yaml:"freshness"`
+	Telegram           TelegramConfig                `yaml:"telegram"`
+	PublicationPolicy  PublicationPolicyConfig       `yaml:"publication_policy"`
+	Publication        PublicationConfig             `yaml:"publication"`
+	Retention          RetentionConfig               `yaml:"retention"`
+	ClusterLifecycle   ClusterLifecycleConfig        `yaml:"cluster_lifecycle"`
+	SeenItems          SeenItemsConfig               `yaml:"seen_items"`
+	Model              ModelConfig                   `yaml:"model"`
+	Dictionary         DictionaryConfig              `yaml:"dictionary"`
+	DictionaryMining   DictionaryMiningConfig        `yaml:"dictionary_mining"`
+	EditorialCycle     EditorialCycleConfig          `yaml:"editorial_cycle"`
+	EditorialGates     EditorialGatesConfig          `yaml:"editorial_gates"`
+	EditorialCosts     EditorialCostsConfig          `yaml:"editorial_costs"`
+	EditorialRollout   EditorialRolloutConfig        `yaml:"editorial_rollout"`
+	Remote             RemoteConfig                  `yaml:"remote"`
+	DictionaryUpdate   DictionaryUpdateConfig        `yaml:"dictionary_update"`
+	EntityDiscovery    EntityDiscoveryConfig         `yaml:"entity_discovery"`
+	EntityExtraction   EntityExtractionConfig        `yaml:"entity_extraction"`
+	CatalogMaintenance CatalogMaintenanceConfig      `yaml:"catalog_maintenance"`
+	OfflineTraining    OfflineTrainingConfig         `yaml:"offline_training"`
+	EspnScoreboard     EspnScoreboardConfig          `yaml:"espn_scoreboard"`
+	Events             map[string]EventHandlerConfig `yaml:"events"`
 }
 
 // SQLiteConfig configures the operational SQLite database.
@@ -1917,6 +1918,24 @@ func (c TelegramConfig) Timeout() time.Duration {
 	return time.Duration(c.TimeoutSeconds) * time.Second
 }
 
+// EventHandlerConfig is one event handler's settings (events.<name>, ADR
+// 0033). A handler the host registers but the file does not list is disabled.
+// Config is the handler's own block, opaque to the engine.
+type EventHandlerConfig struct {
+	Enabled bool           `yaml:"enabled"`
+	Config  map[string]any `yaml:"config"`
+}
+
+// validateEvents rejects a blank handler name.
+func (c *Config) validateEvents() error {
+	for name := range c.Events {
+		if strings.TrimSpace(name) == "" {
+			return fmt.Errorf("events: handler name must not be blank")
+		}
+	}
+	return nil
+}
+
 // PublicationPolicyConfig configures how many articles the outbox may send
 // in a given window (burst limiting), how many about the same primary
 // entity (same-topic throttling), and an optional quiet-hours window.
@@ -2825,6 +2844,7 @@ func (c Config) Validate() error {
 		{"catalog_maintenance_web_lookup", c.CatalogMaintenance.WebLookup.Validate},
 		{"offline_training", c.OfflineTraining.Validate},
 		{"espn_scoreboard", c.EspnScoreboard.Validate},
+		{"events", c.validateEvents},
 	}
 	for _, s := range sections {
 		if err := s.fn(); err != nil {
