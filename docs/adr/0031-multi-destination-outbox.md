@@ -39,6 +39,15 @@ claimed row with no publisher fails the run loudly instead of being skipped.
 Retry, backoff, lease, ambiguity and quarantine apply to each row on its
 own: a failure on one destination never changes another's row.
 
+**Publication policy per destination.** The same publication policy (burst,
+same-topic, quiet hours) applies to every destination, and burst and
+same-topic counts are taken over that destination's own successful sends
+(`out.DestinationCountRepository`), so a busy Telegram channel never
+throttles Bluesky or the reverse. A deferral of a non-Telegram row is
+audited as `publish_destination_deferred`. A repository that cannot count
+per destination makes a non-Telegram row fail loudly rather than go
+unthrottled.
+
 **What stays Telegram-only.**
 
 - The article lifecycle (`publishing`, `published`, `discarded`), the
@@ -46,8 +55,6 @@ own: a failure on one destination never changes another's row.
   delivery. A non-Telegram row records only its own outbox state, attempt and
   an audit event named `publish_destination_*`; its failure, expiry or repair
   never discards the article or releases a gate.
-- The editorial publication policy (burst, same-topic, quiet hours) governs
-  Telegram sends, and its counters count Telegram attempts only.
 - A Telegram `429` defers the remaining Telegram rows of the batch; rows for
   other destinations keep draining.
 - Reconciliation uses the Telegram user session. For another destination a
