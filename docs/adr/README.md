@@ -16,6 +16,7 @@ today.
 | [0021](0021-channel-history-client-port.md) | Channel-history client port |
 | [0030](0030-outbox-delivery-guarantee.md) | Outbox delivery guarantee for sends with an unknown outcome |
 | [0031](0031-multi-destination-outbox.md) | Multi-destination outbox (Telegram and Bluesky) |
+| [0032](0032-message-payload.md) | Message payload on the outbox (text and images) |
 
 The numbering has gaps. The engine was extracted from a larger project
 whose other records cover operations and deployment-specific choices and
