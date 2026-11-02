@@ -201,7 +201,7 @@ func TestPublish_LoginThenCreateRecord(t *testing.T) {
 	if in["repo"] != testDID || in["collection"] != "app.bsky.feed.post" {
 		t.Errorf("repo/collection = %v/%v", in["repo"], in["collection"])
 	}
-	rec := in["record"].(map[string]any)
+	rec := obj(t, in["record"])
 	if rec["$type"] != "app.bsky.feed.post" || rec["text"] != "Hola Springfield" {
 		t.Errorf("record = %v", rec)
 	}
@@ -222,7 +222,7 @@ func TestPublish_EmptyPayloadUsesArticle(t *testing.T) {
 	if _, err := p.Publish(context.Background(), testArticle); err != nil {
 		t.Fatalf("Publish() error = %v", err)
 	}
-	rec := pds.records[0]["record"].(map[string]any)
+	rec := obj(t, pds.records[0]["record"])
 	if rec["text"] != "Isotopes sign a long snapper\n\nhttps://example.com/story" {
 		t.Errorf("text = %q", rec["text"])
 	}
@@ -431,8 +431,7 @@ func TestPublish_AmbiguousOutcomes(t *testing.T) {
 			return true
 		}},
 		{"dropped connection", func(w http.ResponseWriter, r *http.Request) bool {
-			conn, _, _ := w.(http.Hijacker).Hijack()
-			_ = conn.Close()
+			hijackClose(w)
 			return true
 		}},
 		{"unreadable success body", func(w http.ResponseWriter, r *http.Request) bool {
@@ -471,8 +470,7 @@ func TestPublish_AmbiguousOutcomes(t *testing.T) {
 func TestPublish_FailureBeforeCreateRecordIsNeverAmbiguous(t *testing.T) {
 	pds := newFakePDS(t)
 	pds.uploadBlob = func(w http.ResponseWriter, r *http.Request) bool {
-		conn, _, _ := w.(http.Hijacker).Hijack()
-		_ = conn.Close()
+		hijackClose(w)
 		return true
 	}
 	root := t.TempDir()
@@ -555,32 +553,32 @@ func TestPublish_LinkAppendedAndFaceted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec := pds.records[0]["record"].(map[string]any)
-	text := rec["text"].(string)
+	rec := obj(t, pds.records[0]["record"])
+	text := str(t, rec["text"])
 	if text != "Última hora #Isotopes\n\nhttps://example.com/informe" {
 		t.Fatalf("text = %q", text)
 	}
-	facets := rec["facets"].([]any)
+	facets := arr(t, rec["facets"])
 	if len(facets) != 2 {
 		t.Fatalf("facets = %v", facets)
 	}
 	// Offsets are UTF-8 bytes: "Ú" is two bytes, so the tag starts at byte 14.
-	tag := facets[0].(map[string]any)
-	idx := tag["index"].(map[string]any)
-	start, end := int(idx["byteStart"].(float64)), int(idx["byteEnd"].(float64))
+	tag := obj(t, facets[0])
+	idx := obj(t, tag["index"])
+	start, end := num(t, idx["byteStart"]), num(t, idx["byteEnd"])
 	if text[start:end] != "#Isotopes" {
 		t.Errorf("tag facet covers %q", text[start:end])
 	}
-	if f := tag["features"].([]any)[0].(map[string]any); f["$type"] != "app.bsky.richtext.facet#tag" || f["tag"] != "Isotopes" {
+	if f := obj(t, arr(t, tag["features"])[0]); f["$type"] != "app.bsky.richtext.facet#tag" || f["tag"] != "Isotopes" {
 		t.Errorf("tag feature = %v", f)
 	}
-	link := facets[1].(map[string]any)
-	idx = link["index"].(map[string]any)
-	start, end = int(idx["byteStart"].(float64)), int(idx["byteEnd"].(float64))
+	link := obj(t, facets[1])
+	idx = obj(t, link["index"])
+	start, end = num(t, idx["byteStart"]), num(t, idx["byteEnd"])
 	if text[start:end] != "https://example.com/informe" {
 		t.Errorf("link facet covers %q", text[start:end])
 	}
-	if f := link["features"].([]any)[0].(map[string]any); f["$type"] != "app.bsky.richtext.facet#link" || f["uri"] != "https://example.com/informe" {
+	if f := obj(t, arr(t, link["features"])[0]); f["$type"] != "app.bsky.richtext.facet#link" || f["uri"] != "https://example.com/informe" {
 		t.Errorf("link feature = %v", f)
 	}
 }
@@ -594,13 +592,13 @@ func TestPublish_LinkAlreadyInTextIsNotDuplicated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec := pds.records[0]["record"].(map[string]any)
+	rec := obj(t, pds.records[0]["record"])
 	if rec["text"] != "Mira https://example.com/informe." {
 		t.Errorf("text = %q", rec["text"])
 	}
-	facets := rec["facets"].([]any)
-	idx := facets[0].(map[string]any)["index"].(map[string]any)
-	if got := rec["text"].(string)[int(idx["byteStart"].(float64)):int(idx["byteEnd"].(float64))]; got != "https://example.com/informe" {
+	facets := arr(t, rec["facets"])
+	idx := obj(t, obj(t, facets[0])["index"])
+	if got := str(t, rec["text"])[num(t, idx["byteStart"]):num(t, idx["byteEnd"])]; got != "https://example.com/informe" {
 		t.Errorf("link facet covers %q, want the URL without the trailing dot", got)
 	}
 }
@@ -644,25 +642,25 @@ func TestPublish_ImagesAreUploadedAndEmbeddedWithAlt(t *testing.T) {
 	if pds.count("com.atproto.repo.uploadBlob") != 4 {
 		t.Fatalf("calls = %v, want 4 uploads", pds.calls)
 	}
-	embed := pds.records[0]["record"].(map[string]any)["embed"].(map[string]any)
+	embed := obj(t, obj(t, pds.records[0]["record"])["embed"])
 	if embed["$type"] != "app.bsky.embed.images" {
 		t.Errorf("embed type = %v", embed["$type"])
 	}
-	images := embed["images"].([]any)
+	images := arr(t, embed["images"])
 	if len(images) != 4 {
 		t.Fatalf("embedded images = %d, want 4", len(images))
 	}
 	for i, raw := range images {
-		im := raw.(map[string]any)
+		im := obj(t, raw)
 		if im["alt"] != fmt.Sprintf("Alt número %d", i) {
 			t.Errorf("image %d alt = %v", i, im["alt"])
 		}
-		blob := im["image"].(map[string]any)
+		blob := obj(t, im["image"])
 		if blob["$type"] != "blob" || blob["mimeType"] != "image/png" {
 			t.Errorf("image %d blob = %v", i, blob)
 		}
-		ar := im["aspectRatio"].(map[string]any)
-		if int(ar["width"].(float64)) != 40+i || int(ar["height"].(float64)) != 30 {
+		ar := obj(t, im["aspectRatio"])
+		if num(t, ar["width"]) != 40+i || num(t, ar["height"]) != 30 {
 			t.Errorf("image %d aspectRatio = %v", i, ar)
 		}
 	}
@@ -762,8 +760,8 @@ func TestPublish_OversizedPNGIsReencodedUnderTheLimit(t *testing.T) {
 	if len(pds.blobs) != 1 || len(pds.blobs[0]) > 1_000_000 {
 		t.Fatalf("uploaded %d blobs, first %d bytes; want one under 1,000,000", len(pds.blobs), len(pds.blobs[0]))
 	}
-	img := pds.records[0]["record"].(map[string]any)["embed"].(map[string]any)["images"].([]any)[0].(map[string]any)
-	if mt := img["image"].(map[string]any)["mimeType"]; mt != "image/jpeg" {
+	img := obj(t, arr(t, obj(t, obj(t, pds.records[0]["record"])["embed"])["images"])[0])
+	if mt := obj(t, img["image"])["mimeType"]; mt != "image/jpeg" {
 		t.Errorf("re-encoded blob mimeType = %v, want image/jpeg", mt)
 	}
 	if http.DetectContentType(pds.blobs[0]) != "image/jpeg" {
@@ -893,8 +891,7 @@ func TestAmbiguousPublishThenReconcileFindsThePost(t *testing.T) {
 	// The post lands server-side but the reply is lost; reconciliation finds it.
 	pds := newFakePDS(t)
 	pds.createRecord = func(w http.ResponseWriter, r *http.Request) bool {
-		conn, _, _ := w.(http.Hijacker).Hijack()
-		_ = conn.Close()
+		hijackClose(w)
 		return true
 	}
 	pds.feed = func(w http.ResponseWriter, r *http.Request) {
@@ -922,4 +919,51 @@ func TestAmbiguousPublishThenReconcileFindsThePost(t *testing.T) {
 	if err != nil || !matched || !covered || id != "at://d/p/77" {
 		t.Fatalf("FindSent() = (%q, %v, %v, %v)", id, matched, covered, err)
 	}
+}
+
+func obj(t *testing.T, v any) map[string]any {
+	t.Helper()
+	m, ok := v.(map[string]any)
+	if !ok {
+		t.Fatalf("got %T, want a JSON object", v)
+	}
+	return m
+}
+
+func arr(t *testing.T, v any) []any {
+	t.Helper()
+	a, ok := v.([]any)
+	if !ok {
+		t.Fatalf("got %T, want a JSON array", v)
+	}
+	return a
+}
+
+// hijackClose drops the connection without replying.
+func hijackClose(w http.ResponseWriter) {
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		return
+	}
+	if conn, _, err := hj.Hijack(); err == nil {
+		_ = conn.Close()
+	}
+}
+
+func num(t *testing.T, v any) int {
+	t.Helper()
+	f, ok := v.(float64)
+	if !ok {
+		t.Fatalf("got %T, want a JSON number", v)
+	}
+	return int(f)
+}
+
+func str(t *testing.T, v any) string {
+	t.Helper()
+	s, ok := v.(string)
+	if !ok {
+		t.Fatalf("got %T, want a JSON string", v)
+	}
+	return s
 }
