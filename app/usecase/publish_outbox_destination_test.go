@@ -42,7 +42,7 @@ func twoDestinationSetup(t *testing.T, tgPub, bskyPub *fakePublisher) (*fakeOutb
 		{ID: 2, ArticleID: "a1", Destination: publishing.DestinationBluesky},
 	}}
 	gate := &fakeClusterPublicationRepository{}
-	uc := newPublishOutbox(articles, outbox, &fakeDecisionRepo{}, &fakeUnitOfWork{}, tgPub, fakeClock{now: destNow}, gate)
+	uc := newCountingPublishOutbox(articles, outbox, tgPub, gate)
 	if err := uc.RegisterPublisher(publishing.DestinationBluesky, bskyPub); err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestPublishOutbox_ResultIsBrokenDownByDestination(t *testing.T) {
 		{ID: 1, ArticleID: "a1"}, // zero destination == telegram
 		{ID: 2, ArticleID: "a1", Destination: publishing.DestinationBluesky},
 	}}
-	uc := newPublishOutbox(articles, outbox, &fakeDecisionRepo{}, &fakeUnitOfWork{}, tg, fakeClock{now: destNow}, &fakeClusterPublicationRepository{})
+	uc := newCountingPublishOutbox(articles, outbox, tg, &fakeClusterPublicationRepository{})
 	if err := uc.RegisterPublisher(publishing.DestinationBluesky, bsky); err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestPublishOutbox_TelegramRateLimitOnlyDefersTelegramRows(t *testing.T) {
 		{ID: 2, ArticleID: "a2", Destination: publishing.DestinationBluesky},
 		{ID: 3, ArticleID: "a3"},
 	}}
-	uc := newPublishOutbox(articles, outbox, &fakeDecisionRepo{}, &fakeUnitOfWork{}, tg, fakeClock{now: destNow}, &fakeClusterPublicationRepository{})
+	uc := newCountingPublishOutbox(articles, outbox, tg, &fakeClusterPublicationRepository{})
 	if err := uc.RegisterPublisher(publishing.DestinationBluesky, bsky); err != nil {
 		t.Fatal(err)
 	}
@@ -158,24 +158,69 @@ func TestPublishOutbox_TelegramRateLimitOnlyDefersTelegramRows(t *testing.T) {
 	}
 }
 
-func TestPublishOutbox_SecondaryRowSkipsTelegramPolicy(t *testing.T) {
+// countingOutbox reports per-destination success counts, as the SQLite
+// repository does.
+type countingOutbox struct {
+	*fakeOutboxRepo
+	burst map[publishing.Destination]int
+}
+
+func (c *countingOutbox) CountSucceededSinceDestination(_ context.Context, d publishing.Destination, _ publishing.PublicationLane, _ time.Time) (int, error) {
+	return c.burst[d], nil
+}
+func (c *countingOutbox) CountSucceededByPrimaryEntitySinceDestination(context.Context, publishing.Destination, publishing.PublicationLane, string, time.Time) (int, error) {
+	return 0, nil
+}
+
+func TestPublishOutbox_BurstLimitIsCountedAndAppliedPerDestination(t *testing.T) {
 	tg, bsky := &fakePublisher{}, &fakePublisher{}
 	articles := &fakeArticleRepo{}
 	seedPendingArticle(t, articles, "a1")
-	outbox := &fakeOutboxRepo{
-		claimItems:     []out.OutboxItem{{ID: 2, ArticleID: "a1", Destination: publishing.DestinationBluesky}},
-		succeededSince: 100,
-	}
-	burst := publishing.PolicyConfig{BurstWindow: time.Hour, BurstMaxPerWindow: 1}
-	uc := newPublishOutboxWithPolicy(articles, outbox, tg, burst)
+	seedPendingArticle(t, articles, "a2")
+	base := &fakeOutboxRepo{claimItems: []out.OutboxItem{
+		{ID: 1, ArticleID: "a1"},
+		{ID: 2, ArticleID: "a2", Destination: publishing.DestinationBluesky},
+	}}
+	// Telegram is at its limit; Bluesky has sent nothing.
+	outbox := &countingOutbox{fakeOutboxRepo: base, burst: map[publishing.Destination]int{publishing.DestinationTelegram: 5}}
+	policy := publishing.PolicyConfig{BurstMaxPerWindow: 5, BurstWindow: time.Hour}
+	uc := usecase.NewPublishOutbox(articles, outbox, &fakeDecisionRepo{}, &fakeUnitOfWork{}, tg, testBackoff, policy, "test-worker", 10, time.Minute, fakeClock{now: destNow}, fakeLogger{}, &fakeClusterPublicationRepository{}, &fakeSourcePolicyCooldownRepository{},
+		usecase.ReconciliationConfig{BatchSize: 10}, nil)
 	if err := uc.RegisterPublisher(publishing.DestinationBluesky, bsky); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := uc.Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(bsky.published) != 1 || len(outbox.deferred) != 0 {
-		t.Fatalf("bluesky publishes=%d deferred=%v; the Telegram burst limit must not apply", len(bsky.published), outbox.deferred)
+	if len(base.deferred) != 1 || base.deferred[0] != 1 || len(tg.published) != 0 {
+		t.Fatalf("deferred=%v telegram publishes=%d; telegram must be deferred", base.deferred, len(tg.published))
+	}
+	if len(bsky.published) != 1 {
+		t.Fatalf("bluesky publishes=%d; its own count is 0 so it must publish", len(bsky.published))
+	}
+
+	// Now Bluesky is at its limit too: it is deferred on its own count.
+	outbox.burst[publishing.DestinationBluesky] = 5
+	base.claimItems = []out.OutboxItem{{ID: 2, ArticleID: "a2", Destination: publishing.DestinationBluesky}}
+	base.deferred = nil
+	if _, err := uc.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(base.deferred) != 1 || base.deferred[0] != 2 || len(bsky.published) != 1 {
+		t.Fatalf("deferred=%v bluesky publishes=%d; bluesky must defer at its limit", base.deferred, len(bsky.published))
+	}
+}
+
+func TestPublishOutbox_DestinationWithoutCountSupportFailsLoudly(t *testing.T) {
+	articles := &fakeArticleRepo{}
+	seedPendingArticle(t, articles, "a1")
+	outbox := &fakeOutboxRepo{claimItems: []out.OutboxItem{{ID: 2, ArticleID: "a1", Destination: publishing.DestinationBluesky}}}
+	uc := newPublishOutboxWithPolicy(articles, outbox, &fakePublisher{}, allowAllPolicy)
+	if err := uc.RegisterPublisher(publishing.DestinationBluesky, &fakePublisher{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := uc.Run(context.Background()); err == nil {
+		t.Fatal("Run() succeeded although sends cannot be counted per destination")
 	}
 }
 
@@ -271,5 +316,13 @@ func newPublishOutboxWithImporter(articles *fakeArticleRepo, outbox *fakeOutboxR
 
 func newDestinationPublishOutbox(outbox *destinationOutbox) *usecase.PublishOutbox {
 	return usecase.NewPublishOutbox(&fakeArticleRepo{}, outbox, &fakeDecisionRepo{}, &fakeUnitOfWork{}, &fakePublisher{}, testBackoff, allowAllPolicy, "test-worker", 10, time.Minute, fakeClock{now: destNow}, fakeLogger{}, &fakeClusterPublicationRepository{}, &fakeSourcePolicyCooldownRepository{},
+		usecase.ReconciliationConfig{BatchSize: 10}, nil)
+}
+
+// newCountingPublishOutbox wires the use case over an outbox that can count
+// sends per destination (all zero), as the SQLite repository can.
+func newCountingPublishOutbox(articles *fakeArticleRepo, base *fakeOutboxRepo, pub *fakePublisher, gate *fakeClusterPublicationRepository) *usecase.PublishOutbox {
+	outbox := &countingOutbox{fakeOutboxRepo: base}
+	return usecase.NewPublishOutbox(articles, outbox, &fakeDecisionRepo{}, &fakeUnitOfWork{}, pub, testBackoff, allowAllPolicy, "test-worker", 10, time.Minute, fakeClock{now: destNow}, fakeLogger{}, gate, &fakeSourcePolicyCooldownRepository{},
 		usecase.ReconciliationConfig{BatchSize: 10}, nil)
 }

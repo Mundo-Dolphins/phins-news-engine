@@ -137,3 +137,42 @@ func TestOutboxRepository_OpenDestinationsAndDestinationOf(t *testing.T) {
 		t.Fatalf("DestinationOf = %q, %v", d, err)
 	}
 }
+
+func TestOutboxRepository_CountSucceededPerDestination(t *testing.T) {
+	db := newTestDB(t)
+	mustSaveArticle(t, sqliteadapter.NewArticleRepository(db), "a1")
+	repo := sqliteadapter.NewOutboxRepository(db)
+	ctx := context.Background()
+	past := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	now := past.Add(time.Hour)
+	for _, d := range []publishing.Destination{publishing.DestinationTelegram, publishing.DestinationBluesky} {
+		if err := repo.EnqueueDestination(ctx, "a1", "{}", publishing.LaneNormal, d, past); err != nil {
+			t.Fatal(err)
+		}
+	}
+	items, err := repo.ClaimBatch(ctx, "w", 10, time.Minute, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range items {
+		// two successes on bluesky, one on telegram
+		n := 1
+		if it.Destination == publishing.DestinationBluesky {
+			n = 2
+		}
+		for i := 0; i < n; i++ {
+			if err := repo.RecordAttempt(ctx, appout.Attempt{OutboxID: it.ID, ArticleID: "a1", AttemptedAt: now, Outcome: publishing.AttemptSucceeded}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	since := now.Add(-time.Minute)
+	for d, want := range map[publishing.Destination]int{publishing.DestinationTelegram: 1, publishing.DestinationBluesky: 2} {
+		if n, err := repo.CountSucceededSinceDestination(ctx, d, publishing.LaneNormal, since); err != nil || n != want {
+			t.Errorf("CountSucceededSinceDestination(%s) = %d, %v; want %d", d, n, err, want)
+		}
+		if n, err := repo.CountSucceededByPrimaryEntitySinceDestination(ctx, d, publishing.LaneNormal, "", since); err != nil || n != want {
+			t.Errorf("CountSucceededByPrimaryEntitySinceDestination(%s) = %d, %v; want %d", d, n, err, want)
+		}
+	}
+}

@@ -41,6 +41,7 @@ func (r *OutboxRepository) SetLiveTTL(ttl time.Duration) { r.liveTTL = ttl }
 var (
 	_ appout.OutboxRepository               = (*OutboxRepository)(nil)
 	_ appout.DestinationOutboxRepository    = (*OutboxRepository)(nil)
+	_ appout.DestinationCountRepository     = (*OutboxRepository)(nil)
 	_ appout.TerminalSupersessionRepository = (*OutboxRepository)(nil)
 )
 
@@ -720,4 +721,18 @@ func (r *OutboxRepository) OpenDestinations(ctx context.Context) ([]publishing.D
 		out = append(out, publishing.Destination(d))
 	}
 	return out, rows.Err()
+}
+
+// CountSucceededSinceDestination implements ports/out.DestinationCountRepository.
+func (r *OutboxRepository) CountSucceededSinceDestination(ctx context.Context, destination publishing.Destination, lane publishing.PublicationLane, since time.Time) (int, error) {
+	var count int
+	err := executor(ctx, r.db).QueryRowContext(ctx, `SELECT COUNT(*) FROM publication_attempts pa JOIN publication_outbox po ON po.id=pa.outbox_id WHERE pa.outcome='succeeded' AND pa.attempted_at >= ? AND po.lane=? AND po.destination=?`, sqliteTime(since), lane.Normalized(), string(destination.Normalized())).Scan(&count)
+	return count, err
+}
+
+// CountSucceededByPrimaryEntitySinceDestination implements ports/out.DestinationCountRepository.
+func (r *OutboxRepository) CountSucceededByPrimaryEntitySinceDestination(ctx context.Context, destination publishing.Destination, lane publishing.PublicationLane, entity string, since time.Time) (int, error) {
+	var count int
+	err := executor(ctx, r.db).QueryRowContext(ctx, `SELECT COUNT(*) FROM publication_attempts pa JOIN publication_outbox po ON po.id=pa.outbox_id JOIN articles a ON a.id=pa.article_id WHERE pa.outcome='succeeded' AND pa.attempted_at >= ? AND po.lane=? AND po.destination=? AND a.primary_entity=?`, sqliteTime(since), lane.Normalized(), string(destination.Normalized()), entity).Scan(&count)
+	return count, err
 }

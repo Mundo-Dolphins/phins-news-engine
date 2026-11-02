@@ -261,19 +261,18 @@ func (p *PublishOutbox) publishOne(ctx context.Context, runID string, item out.O
 		(item.ExpiresAt.IsZero() && !publishing.DecideStored(a, now)) {
 		return p.expireItem(ctx, runID, item, a, result)
 	}
-	// The editorial publication policy (burst, same-topic, quiet hours) and
-	// the article lifecycle belong to the primary (Telegram) delivery; other
-	// destinations are delivered on their own row without touching either.
+	// The publication policy (burst, same-topic, quiet hours) applies to every
+	// destination, counted over that destination's own sends. The article
+	// lifecycle belongs to the primary (Telegram) delivery only.
 	primary := destination == publishing.DestinationTelegram
+	decision, err := p.evaluatePolicy(ctx, a, destination, item.Lane, now)
+	if err != nil {
+		return fmt.Errorf("publish outbox: evaluate policy for %s: %w", a.ID, err)
+	}
+	if !decision.Allow {
+		return p.deferItem(ctx, runID, item, a, decision, result)
+	}
 	if primary {
-		decision, err := p.evaluatePolicy(ctx, a, item.Lane, now)
-		if err != nil {
-			return fmt.Errorf("publish outbox: evaluate policy for %s: %w", a.ID, err)
-		}
-		if !decision.Allow {
-			return p.deferItem(ctx, runID, item, a, decision, result)
-		}
-
 		a.Status = article.StatusPublishing
 		if err := p.articles.Save(ctx, a); err != nil {
 			return fmt.Errorf("publish outbox: mark %s publishing: %w", a.ID, err)
@@ -401,7 +400,7 @@ func (p *PublishOutbox) expireOverdue(ctx context.Context, runID string, result 
 
 // evaluatePolicy gathers the counts publishing.Evaluate needs and asks it
 // whether a may publish now.
-func (p *PublishOutbox) evaluatePolicy(ctx context.Context, a article.Article, lane publishing.PublicationLane, now time.Time) (publishing.PolicyDecision, error) {
+func (p *PublishOutbox) evaluatePolicy(ctx context.Context, a article.Article, destination publishing.Destination, lane publishing.PublicationLane, now time.Time) (publishing.PolicyDecision, error) {
 	lane = lane.Normalized()
 	policy := p.policy
 	if lane == publishing.LaneLive && p.policy.Live != nil {
@@ -409,7 +408,13 @@ func (p *PublishOutbox) evaluatePolicy(ctx context.Context, a article.Article, l
 	}
 	var burstCount int
 	var err error
-	if laneCounts, ok := p.outbox.(out.LaneCountRepository); ok {
+	destCounts, hasDest := p.outbox.(out.DestinationCountRepository)
+	if !hasDest && destination != publishing.DestinationTelegram {
+		return publishing.PolicyDecision{}, fmt.Errorf("outbox repository cannot count sends per destination %q", destination)
+	}
+	if hasDest {
+		burstCount, err = destCounts.CountSucceededSinceDestination(ctx, destination, lane, now.Add(-policy.BurstWindow))
+	} else if laneCounts, ok := p.outbox.(out.LaneCountRepository); ok {
 		burstCount, err = laneCounts.CountSucceededSinceLane(ctx, lane, now.Add(-policy.BurstWindow))
 	} else {
 		burstCount, err = p.outbox.CountSucceededSince(ctx, now.Add(-policy.BurstWindow))
@@ -420,7 +425,9 @@ func (p *PublishOutbox) evaluatePolicy(ctx context.Context, a article.Article, l
 
 	var topicCount int
 	if policy.SameTopicApplies(a.PrimaryEntity) {
-		if laneCounts, ok := p.outbox.(out.LaneCountRepository); ok {
+		if hasDest {
+			topicCount, err = destCounts.CountSucceededByPrimaryEntitySinceDestination(ctx, destination, lane, a.PrimaryEntity, now.Add(-policy.SameTopicWindow))
+		} else if laneCounts, ok := p.outbox.(out.LaneCountRepository); ok {
 			topicCount, err = laneCounts.CountSucceededByPrimaryEntitySinceLane(ctx, lane, a.PrimaryEntity, now.Add(-policy.SameTopicWindow))
 		} else {
 			topicCount, err = p.outbox.CountSucceededByPrimaryEntitySince(ctx, a.PrimaryEntity, now.Add(-policy.SameTopicWindow))
@@ -445,9 +452,13 @@ func (p *PublishOutbox) deferItem(ctx context.Context, runID string, item out.Ou
 	if err := p.outbox.Defer(ctx, item.ID, decision.RetryAt, now); err != nil {
 		return fmt.Errorf("publish outbox: defer %s: %w", a.ID, err)
 	}
+	eventType := "publish_deferred"
+	if item.Destination.Normalized() != publishing.DestinationTelegram {
+		eventType = DestinationEventPrefix + "deferred"
+	}
 	if err := p.decisions.Append(ctx, out.Event{
 		ArticleID: a.ID, OccurredAt: now, FromStatus: a.Status, ToStatus: a.Status,
-		EventType: "publish_deferred", ReasonCode: decision.Reason,
+		EventType: eventType, ReasonCode: decision.Reason,
 		ReasonDetail: fmt.Sprintf("deferred until %s: %s", decision.RetryAt.Format(time.RFC3339), decision.Reason),
 	}); err != nil {
 		return fmt.Errorf("publish outbox: append deferred event for %s: %w", a.ID, err)

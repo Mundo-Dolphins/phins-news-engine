@@ -51,6 +51,13 @@ type DestinationOutboxRepository interface {
 	OpenDestinations(ctx context.Context) ([]publishing.Destination, error)
 }
 
+// DestinationCountRepository counts successful sends per destination, the
+// input of the per-destination publication policy (ADR 0031).
+type DestinationCountRepository interface {
+	CountSucceededSinceDestination(ctx context.Context, destination publishing.Destination, lane publishing.PublicationLane, since time.Time) (int, error)
+	CountSucceededByPrimaryEntitySinceDestination(ctx context.Context, destination publishing.Destination, lane publishing.PublicationLane, entity string, since time.Time) (int, error)
+}
+
 type LaneCountRepository interface {
 	CountSucceededSinceLane(ctx context.Context, lane publishing.PublicationLane, since time.Time) (int, error)
 	CountSucceededByPrimaryEntitySinceLane(ctx context.Context, lane publishing.PublicationLane, entity string, since time.Time) (int, error)
