@@ -59,6 +59,13 @@ type Options struct {
 	// if the outbox already holds unfinished rows for a destination that is
 	// not registered.
 	Publishers map[publishing.Destination]out.Publisher
+	// EventHandlers are plugins that react to incoming articles before
+	// deduplication (ADR 0033). Each runs only if settings enable it under
+	// events.<name>.enabled.
+	EventHandlers []out.EventHandler
+	// EventHandlerTimeout bounds one handler call; zero means
+	// usecase.DefaultEventHandlerTimeout.
+	EventHandlerTimeout time.Duration
 }
 
 // DefaultServiceName is the service name used when Options.ServiceName is
@@ -330,9 +337,23 @@ func Run(ctx context.Context, configPath string, profile config.Profile, logger 
 	)
 	processCycle.SetLivePolicy(cfg.PublicationPolicy.LivePolicy())
 	processCycle.SetRecentStories(similarityIndex)
+	var matchState out.MatchStateProvider
 	if cfg.EspnScoreboard.Enabled {
-		processCycle.SetMatchStateProvider(espnscoreboard.NewClient(cfg.EspnScoreboard.TeamAbbreviation, cfg.EspnScoreboard.UserAgent, cfg.EspnScoreboard.Timeout()))
+		matchState = espnscoreboard.NewClient(cfg.EspnScoreboard.TeamAbbreviation, cfg.EspnScoreboard.UserAgent, cfg.EspnScoreboard.Timeout())
+		processCycle.SetMatchStateProvider(matchState)
 		logger.Info("espn scoreboard match-state provider enabled", "team", cfg.EspnScoreboard.TeamAbbreviation)
+	}
+	if len(opts.EventHandlers) > 0 {
+		eventSettings := make(map[string]usecase.EventHandlerSettings, len(cfg.Events))
+		for name, c := range cfg.Events {
+			eventSettings[name] = usecase.EventHandlerSettings{Enabled: c.Enabled, Config: c.Config}
+		}
+		dispatcher, err := usecase.NewEventDispatcher(opts.EventHandlers, eventSettings,
+			usecase.EventDeps{Clock: realClock, Logger: logger, MatchState: matchState}, opts.EventHandlerTimeout)
+		if err != nil {
+			return err
+		}
+		processCycle.SetEventDispatcher(dispatcher)
 	}
 	outbox.SetLiveTTL(time.Duration(cfg.PublicationPolicy.Live.TTLMinutes) * time.Minute)
 	urlCfg, urlResolvers := cfg.Normalization.URL.Policy()

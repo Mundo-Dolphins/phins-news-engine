@@ -206,6 +206,13 @@ espn_scoreboard:
   team_abbreviation: spr
   request_timeout_seconds: 5
   user_agent: "phins-news-engine/1.0"
+# Event handlers a host registers through engine.Options.EventHandlers are
+# off unless listed here. Example:
+#   events:
+#     injury_report:
+#       enabled: true
+#       config: {}
+events: {}
 publication:
   max_attempts: 6
   base_backoff_seconds: 30

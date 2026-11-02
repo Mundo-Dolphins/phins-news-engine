@@ -97,7 +97,13 @@ type ProcessCycle struct {
 
 	recentStories out.RecentStoryRepository
 	titleTokens   titleTokenCache
+
+	events *EventDispatcher // nil: no event handlers, today's behavior
 }
+
+// SetEventDispatcher is called by the composition root. Its zero value (nil)
+// is safe: no handler runs and the pipeline is unchanged.
+func (p *ProcessCycle) SetEventDispatcher(d *EventDispatcher) { p.events = d }
 
 // SetLivePolicy is called by the composition root. Its zero value is safe:
 // all publications remain in the normal lane.
@@ -366,6 +372,12 @@ func (p *ProcessCycle) processOne(ctx context.Context, raw article.Article, cycl
 		if err := p.articles.Save(ctx, a); err != nil {
 			return fmt.Errorf("process cycle: save normalized article %s: %w", a.ID, err)
 		}
+
+		// Step 1.9: event handlers (ADR 0033). They run before any dedup
+		// decision, so a copy dedup is about to reject still reaches them,
+		// and after the article row exists so their outbox rows satisfy the
+		// foreign key. They only add side effects.
+		p.runEventHandlers(ctx, a, now, result)
 
 		// Step 2: exact deduplication cascade — canonical-URL fingerprint,
 		// then the four alias signals, in order. The first match rejects.
@@ -1949,4 +1961,43 @@ func isOfficialAuthority(a sourcepolicy.AuthorityLevel) bool {
 		return true
 	}
 	return false
+}
+
+// runEventHandlers dispatches a to the event handlers and persists the
+// actions they asked for in the caller's transaction. It never returns an
+// error: a handler or action failure is logged and counted, not propagated.
+func (p *ProcessCycle) runEventHandlers(ctx context.Context, a article.Article, now time.Time, result *in.ProcessCycleResult) {
+	if p.events.Len() == 0 {
+		return
+	}
+	for _, na := range p.events.Dispatch(ctx, a, &result.Events) {
+		switch act := na.Action.(type) {
+		case out.EnqueuePublication:
+			if err := p.enqueueEventPublication(ctx, a.ID, act, now); err != nil {
+				result.Events.Errors++
+				p.logger.Error("event handler action failed", err, "handler", na.Handler, "article_id", a.ID, "action", "enqueue_publication")
+				continue
+			}
+			result.Events.Enqueued++
+			p.logger.Info("event handler enqueued publication", "handler", na.Handler, "article_id", a.ID, "destination", string(act.Destination.Normalized()))
+		default:
+			result.Events.Errors++
+			p.logger.Error("event handler returned an unknown action", fmt.Errorf("%T", na.Action), "handler", na.Handler, "article_id", a.ID)
+		}
+	}
+}
+
+func (p *ProcessCycle) enqueueEventPublication(ctx context.Context, articleID string, act out.EnqueuePublication, now time.Time) error {
+	repo, ok := p.outbox.(out.DestinationOutboxRepository)
+	if !ok {
+		return errors.New("outbox does not support destinations")
+	}
+	if err := act.Payload.Validate(); err != nil {
+		return err
+	}
+	payload, err := act.Payload.Marshal()
+	if err != nil {
+		return err
+	}
+	return repo.EnqueueDestination(ctx, articleID, payload, act.Lane, act.Destination, now)
 }
