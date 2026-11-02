@@ -86,7 +86,7 @@ func articleStatus(t *testing.T, db *sql.DB, id string) string {
 
 func TestProcessCycle_NoEventHandlers_ReportsNoEventActivity(t *testing.T) {
 	db := newIntegrationDB(t)
-	a := eventTestArticle(t, "a1", "src-a", "Inactives: Week 7 Dolphins at Jets", "https://example.com/a1")
+	a := eventTestArticle(t, "a1", "src-a", "Inactives: Week 7 Isotopes at Sharks", "https://example.com/a1")
 	pc, _ := newIntegrationProcessCycle(db, fakeFetcher{articles: []article.Article{a}}, fakeClock{now: time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)})
 	result, err := pc.Run(context.Background())
 	if err != nil {
@@ -102,7 +102,7 @@ func TestProcessCycle_NoEventHandlers_ReportsNoEventActivity(t *testing.T) {
 
 func TestProcessCycle_EventHandler_EnqueuesPublicationAndLeavesTelegramAlone(t *testing.T) {
 	h := &fakeEventHandler{name: "inactives", match: "Inactives"}
-	a := eventTestArticle(t, "a1", "src-a", "Inactives: Week 7 Dolphins at Jets", "https://example.com/a1")
+	a := eventTestArticle(t, "a1", "src-a", "Inactives: Week 7 Isotopes at Sharks", "https://example.com/a1")
 	pc, db := eventTestCycle(t, []out.EventHandler{h}, true, 0, a)
 
 	result, err := pc.Run(context.Background())
@@ -138,8 +138,8 @@ func TestProcessCycle_EventHandler_NotInterestedIsNotCalled(t *testing.T) {
 
 func TestProcessCycle_EventHandler_RunsForArticleDedupRejects(t *testing.T) {
 	h := &fakeEventHandler{name: "inactives", match: "Inactives"}
-	first := eventTestArticle(t, "a1", "src-a", "Inactives: Week 7 Dolphins at Jets", "https://example.com/same")
-	copy2 := eventTestArticle(t, "a2", "src-b", "Inactives: Week 7 Dolphins at Jets", "https://example.com/same")
+	first := eventTestArticle(t, "a1", "src-a", "Inactives: Week 7 Isotopes at Sharks", "https://example.com/same")
+	copy2 := eventTestArticle(t, "a2", "src-b", "Inactives: Week 7 Isotopes at Sharks", "https://example.com/same")
 	pc, db := eventTestCycle(t, []out.EventHandler{h}, true, 0, first, copy2)
 
 	result, err := pc.Run(context.Background())
@@ -165,7 +165,7 @@ func TestProcessCycle_EventHandler_RunsForArticleDedupRejects(t *testing.T) {
 
 func TestProcessCycle_EventHandler_DisabledIsNotCalled(t *testing.T) {
 	h := &fakeEventHandler{name: "inactives", match: "Inactives"}
-	a := eventTestArticle(t, "a1", "src-a", "Inactives: Week 7 Dolphins at Jets", "https://example.com/a1")
+	a := eventTestArticle(t, "a1", "src-a", "Inactives: Week 7 Isotopes at Sharks", "https://example.com/a1")
 	pc, db := eventTestCycle(t, []out.EventHandler{h}, false, 0, a)
 	result, err := pc.Run(context.Background())
 	if err != nil {
@@ -191,7 +191,7 @@ func TestProcessCycle_EventHandler_PanicErrorAndTimeoutAreIsolated(t *testing.T)
 		return out.EventResult{Actions: []out.EventAction{out.EnqueuePublication{Destination: publishing.DestinationBluesky, Payload: publishing.MessagePayload{Text: "late"}}}}, nil
 	}}
 	good := &fakeEventHandler{name: "good", match: "Inactives"}
-	a := eventTestArticle(t, "a1", "src-a", "Inactives: Week 7 Dolphins at Jets", "https://example.com/a1")
+	a := eventTestArticle(t, "a1", "src-a", "Inactives: Week 7 Isotopes at Sharks", "https://example.com/a1")
 	pc, db := eventTestCycle(t, []out.EventHandler{panicker, failer, slow, good}, true, 20*time.Millisecond, a)
 
 	result, err := pc.Run(context.Background())
@@ -217,7 +217,7 @@ func TestProcessCycle_EventHandler_InvalidActionIsCountedNotFatal(t *testing.T) 
 			Payload:     publishing.MessagePayload{Text: "x", Images: []publishing.ImageRef{{Path: "/abs.png", MIME: "image/png"}}},
 		}}}, nil
 	}}
-	a := eventTestArticle(t, "a1", "src-a", "Inactives: Week 7 Dolphins at Jets", "https://example.com/a1")
+	a := eventTestArticle(t, "a1", "src-a", "Inactives: Week 7 Isotopes at Sharks", "https://example.com/a1")
 	pc, db := eventTestCycle(t, []out.EventHandler{bad}, true, 0, a)
 	result, err := pc.Run(context.Background())
 	if err != nil {

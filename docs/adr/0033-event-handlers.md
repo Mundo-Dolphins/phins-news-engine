@@ -7,8 +7,8 @@ Accepted
 ## Context
 
 A host sometimes wants to react to a specific incoming article, for example a
-journalist's injury-report image or an official `Inactives: Week 7 Dolphins
-at Jets` post, by publishing its own text and images to a destination
+journalist's injury-report image or an official `Inactives: Week 7 Isotopes
+at Sharks` post, by publishing its own text and images to a destination
 ([ADR 0031](0031-multi-destination-outbox.md),
 [ADR 0032](0032-message-payload.md)). Deduplication throws away repeated
 copies of the same post, and the first copy can fail validation, so the
