@@ -1585,3 +1585,41 @@ func TestMigrate_0046OutboxDestination(t *testing.T) {
 		t.Fatalf("second Migrate() error = %v", err)
 	}
 }
+
+// TestMigrate_0047EventClaims proves the claim table enforces its contract
+// in the schema itself: one row per (handler, claim_key), a closed state set
+// and defaults for the optional columns.
+func TestMigrate_0047EventClaims(t *testing.T) {
+	db, err := sqlite.Open(filepath.Join(t.TempDir(), "test.db"), 5*time.Second)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+
+	if err := sqlite.Migrate(ctx, db, migrations.FS); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+
+	const insert = `INSERT INTO event_claims (handler, claim_key, created_at, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+	if _, err := db.ExecContext(ctx, insert, "h", "k"); err != nil {
+		t.Fatalf("first insert: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, insert, "h", "k"); err == nil {
+		t.Error("duplicate (handler, claim_key) was accepted")
+	}
+	if _, err := db.ExecContext(ctx, insert, "other", "k"); err != nil {
+		t.Errorf("same key under another handler rejected: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO event_claims (handler, claim_key, state, created_at, updated_at) VALUES ('h','bad','nope',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`); err == nil {
+		t.Error("unknown state was accepted")
+	}
+
+	var state, data, articleID string
+	if err := db.QueryRowContext(ctx, `SELECT state, data, article_id FROM event_claims WHERE handler='h' AND claim_key='k'`).Scan(&state, &data, &articleID); err != nil {
+		t.Fatal(err)
+	}
+	if state != "claimed" || data != "{}" || articleID != "" {
+		t.Errorf("defaults = %q, %q, %q; want claimed, {}, empty", state, data, articleID)
+	}
+}
