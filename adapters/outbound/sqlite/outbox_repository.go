@@ -461,6 +461,30 @@ func (r *OutboxRepository) ListSentUnconfirmed(ctx context.Context, limit int, n
 	return r.listByStatus(ctx, "sent_unconfirmed", "sent_at", limit)
 }
 
+// ListOpenPayloads implements ports/out.OpenPayloadRepository.
+func (r *OutboxRepository) ListOpenPayloads(ctx context.Context) ([]string, error) {
+	rows, err := executor(ctx, r.db).QueryContext(ctx, `
+		SELECT payload FROM publication_outbox
+		WHERE status IN ('pending', 'leased', 'retryable', 'sent_unconfirmed')
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: list open outbox payloads: %w", err)
+	}
+	defer rows.Close()
+	var payloads []string
+	for rows.Next() {
+		var payload string
+		if err := rows.Scan(&payload); err != nil {
+			return nil, fmt.Errorf("sqlite: scan open outbox payload: %w", err)
+		}
+		payloads = append(payloads, payload)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sqlite: list open outbox payloads: %w", err)
+	}
+	return payloads, nil
+}
+
 // ListQuarantined implements ports/out.OutboxRepository.
 func (r *OutboxRepository) ListQuarantined(ctx context.Context, limit int) ([]appout.OutboxItem, error) {
 	return r.listByStatus(ctx, "quarantined", "quarantined_at", limit)

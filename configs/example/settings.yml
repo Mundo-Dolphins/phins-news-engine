@@ -213,6 +213,19 @@ espn_scoreboard:
 #       enabled: true
 #       config: {}
 events: {}
+# Media store for the images event handlers attach to messages (ADR 0036).
+# Off while dir is empty; allowed_hosts (for example [pbs.twimg.com]) is then
+# required. Files are deleted after retention_days, which may not exceed
+# max_retention_days.
+media:
+  dir: ""
+  allowed_hosts: []
+  max_bytes: 10485760
+  timeout_seconds: 20
+  user_agent: "phins-news-engine/1.0"
+  allow_private_hosts: false
+  retention_days: 7
+  max_retention_days: 7
 publication:
   max_attempts: 6
   base_backoff_seconds: 30

@@ -212,3 +212,41 @@ func TestOutboxRepository_EnqueueDestination_ValidatesAndPersistsMessagePayload(
 		t.Fatalf("stored payload = %+v, %v; want %+v", got, err, want)
 	}
 }
+
+func TestOutboxRepository_ListOpenPayloads_OnlyRowsThatMayStillBeDelivered(t *testing.T) {
+	db := newTestDB(t)
+	articles := sqliteadapter.NewArticleRepository(db)
+	repo := sqliteadapter.NewOutboxRepository(db)
+	ctx := context.Background()
+	past := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	for status, id := range map[string]string{
+		"pending": "a1", "leased": "a2", "retryable": "a3", "sent_unconfirmed": "a4",
+		"delivered": "a5", "dead": "a6", "quarantined": "a7",
+	} {
+		mustSaveArticle(t, articles, id)
+		payload := `{"text":"` + status + `"}`
+		if err := repo.EnqueueDestination(ctx, id, payload, publishing.LaneNormal, publishing.DestinationBluesky, past); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx, `UPDATE publication_outbox SET status = ? WHERE article_id = ?`, status, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := repo.ListOpenPayloads(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, p := range got {
+		seen[p] = true
+	}
+	for _, status := range []string{"pending", "leased", "retryable", "sent_unconfirmed"} {
+		if !seen[`{"text":"`+status+`"}`] {
+			t.Errorf("payload of a %s row missing from %v", status, got)
+		}
+	}
+	if len(got) != 4 {
+		t.Errorf("got %d payloads %v, want only the 4 open ones", len(got), got)
+	}
+}

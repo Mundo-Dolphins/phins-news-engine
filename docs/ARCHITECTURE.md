@@ -94,7 +94,7 @@ clear error when nothing is registered.
 | Events | `domain/eventsignals`, `domain/clustering`, `domain/clusterlifecycle`, `domain/clustergate`, `infra/clusteringrules`, `infra/entitycatalog`, `infra/leaguecatalog` |
 | Source policy | `domain/sourcepolicy`, `infra/sourcepolicyfile` |
 | Editorial | `domain/editorial`, `domain/editorialveto`, `infra/editorialmodel`, `infra/editorialveto`, `app/editorialtrain`, `app/editorialcycle` |
-| Publication | `domain/publishing`, `app/usecase` (`PublishOutbox`, `RepairOutbox`, `ExpireOutbox`), `app/outboxreconcile`, `adapters/outbound/telegram`, `adapters/outbound/bluesky` (publisher, [ADR 0035](adr/0035-bluesky-publisher.md)) |
+| Publication | `domain/publishing`, `app/usecase` (`PublishOutbox`, `RepairOutbox`, `ExpireOutbox`), `app/outboxreconcile`, `adapters/outbound/telegram`, `adapters/outbound/bluesky` (publisher, [ADR 0035](adr/0035-bluesky-publisher.md)), `adapters/outbound/mediafs` (image download and retention, [ADR 0036](adr/0036-media-store.md)) |
 | Match state | `domain/matchstate`, `adapters/outbound/espnscoreboard` |
 | Storage | `adapters/outbound/sqlite` and the `sqlite*` proposal and cache adapters, `infra/sqlite`, `migrations` |
 | Knowledge (tools only) | `infra/wikidata`, `app/knowledgecache`, `domain/entityidentity`, `app/entitydiscovery` |

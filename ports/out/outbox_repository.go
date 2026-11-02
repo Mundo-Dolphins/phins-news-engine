@@ -51,6 +51,16 @@ type DestinationOutboxRepository interface {
 	OpenDestinations(ctx context.Context) ([]publishing.Destination, error)
 }
 
+// OpenPayloadRepository lists the payloads of outbox rows that may still be
+// delivered, so the media retention step keeps the images they reference
+// (ADR 0036).
+type OpenPayloadRepository interface {
+	// ListOpenPayloads returns the payload column of every row, for every
+	// destination, whose status is pending, leased, retryable or
+	// sent_unconfirmed.
+	ListOpenPayloads(ctx context.Context) ([]string, error)
+}
+
 // DestinationCountRepository counts successful sends per destination, the
 // input of the per-destination publication policy (ADR 0031).
 type DestinationCountRepository interface {

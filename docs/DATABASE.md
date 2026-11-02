@@ -82,6 +82,7 @@ phins-news-engine-tools sqlite integrity --config configs/example/settings.yml
 | Audit events | `audit_events_days` |
 | Publication attempts | `publication_attempts_days` |
 | Closed clusters, counted from `closed_at` | `clusters_days` |
+| Media-store images (only when `media.dir` is set) | `media.retention_days`; files referenced by a pending, leased, retryable or sent_unconfirmed outbox row are kept ([ADR 0036](adr/0036-media-store.md)) |
 | Published articles, human labels, model and dictionary registries | never deleted |
 
 Deleting an article cascades to its aliases, fingerprints and `seen_items`
