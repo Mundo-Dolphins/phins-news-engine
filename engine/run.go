@@ -157,6 +157,18 @@ func Run(ctx context.Context, configPath string, profile config.Profile, logger 
 		Timeout:   cfg.Telegram.Timeout(),
 	})
 
+	var alerter out.Alerter
+	if !cfg.Alerts.Disabled {
+		chatID := cfg.Alerts.ChatID
+		if chatID == "" {
+			chatID = cfg.Telegram.ChannelID
+		}
+		alerter = telegram.NewAlerter(telegram.AlerterConfig{
+			ChatID: chatID, BotToken: cfg.Telegram.BotToken,
+			Timeout: cfg.Telegram.Timeout(), DedupWindow: cfg.Alerts.DedupWindow(),
+		})
+	}
+
 	// channelImporter is only built when reconciliation is enabled, and only
 	// by the host-supplied Options.ChannelImporter (which owns the session
 	// file checks, the non-interactive client construction and their warning
@@ -362,7 +374,7 @@ func Run(ctx context.Context, configPath string, profile config.Profile, logger 
 			eventSettings[name] = usecase.EventHandlerSettings{Enabled: c.Enabled, Config: c.Config}
 		}
 		dispatcher, err := usecase.NewEventDispatcher(opts.EventHandlers, eventSettings,
-			usecase.EventDeps{Clock: realClock, Logger: logger, MatchState: matchState, Claims: eventClaims, Media: eventMedia(mediaStore)}, opts.EventHandlerTimeout)
+			usecase.EventDeps{Clock: realClock, Logger: logger, MatchState: matchState, Claims: eventClaims, Media: eventMedia(mediaStore), Alerts: eventAlerts(alerter, logger)}, opts.EventHandlerTimeout)
 		if err != nil {
 			return err
 		}
@@ -377,6 +389,7 @@ func Run(ctx context.Context, configPath string, profile config.Profile, logger 
 		cfg.Publication.Reconciliation.Settings(cfg.Telegram.ChannelID, urlCfg, urlResolvers), channelImporter,
 	)
 	publishOutbox.SetEventClaims(eventClaims)
+	publishOutbox.SetAlerter(alerter)
 	if err := registerPublishers(ctx, publishOutbox, opts.Publishers); err != nil {
 		return err
 	}
@@ -456,6 +469,15 @@ func leagueFallbackWarning(cfg *config.Config) string {
 		return "league entities and the online entity fallback are both enabled: league players are no longer sent to the fallback, so representations can differ from a run without league entities"
 	}
 	return ""
+}
+
+// eventAlerts returns alerter as the handlers' alert sink, or a true nil
+// when alerts are disabled.
+func eventAlerts(alerter out.Alerter, logger out.Logger) out.EventAlertSink {
+	if alerter == nil {
+		return nil
+	}
+	return usecase.NewEventAlertAdapter(alerter, logger)
 }
 
 // eventMedia returns store as the handlers' media port, or a true nil

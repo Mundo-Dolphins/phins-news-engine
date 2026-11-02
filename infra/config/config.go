@@ -111,6 +111,7 @@ type Config struct {
 	EspnScoreboard     EspnScoreboardConfig          `yaml:"espn_scoreboard"`
 	Events             map[string]EventHandlerConfig `yaml:"events"`
 	Media              MediaConfig                   `yaml:"media"`
+	Alerts             AlertsConfig                  `yaml:"alerts"`
 }
 
 // SQLiteConfig configures the operational SQLite database.
@@ -2461,6 +2462,31 @@ func (c MediaConfig) Timeout() time.Duration {
 	return time.Duration(c.TimeoutSeconds) * time.Second
 }
 
+// AlertsConfig configures operator alerts (ADR 0037). Alerts are on by
+// default and go to the news chat (telegram.channel_id).
+type AlertsConfig struct {
+	// ChatID overrides the chat alerts are sent to; empty means the news chat.
+	ChatID string `yaml:"chat_id"`
+	// DedupHours is how long an alert with the same dedup key is suppressed
+	// (default 24).
+	DedupHours int `yaml:"dedup_hours"`
+	// Disabled turns alerts off; failures are then only logged.
+	Disabled bool `yaml:"disabled"`
+}
+
+// Validate rejects a negative dedup window.
+func (c AlertsConfig) Validate() error {
+	if c.DedupHours < 0 {
+		return fmt.Errorf("dedup_hours must not be negative")
+	}
+	return nil
+}
+
+// DedupWindow returns DedupHours as a duration; zero means the adapter's default.
+func (c AlertsConfig) DedupWindow() time.Duration {
+	return time.Duration(c.DedupHours) * time.Hour
+}
+
 // ClusterLifecycleConfig configures the maintenance job that closes
 // inactive event_clusters rows.
 // CloseAfterHours + Retention.ClustersDays*24 must stay >= the widest
@@ -2923,6 +2949,7 @@ func (c Config) Validate() error {
 		{"espn_scoreboard", c.EspnScoreboard.Validate},
 		{"events", c.validateEvents},
 		{"media", c.Media.Validate},
+		{"alerts", c.Alerts.Validate},
 	}
 	for _, s := range sections {
 		if err := s.fn(); err != nil {

@@ -147,8 +147,8 @@ func (r *EventClaimRepository) List(ctx context.Context, f appout.EventClaimFilt
 	if f.State != "" && !f.State.Valid() {
 		return nil, fmt.Errorf("sqlite: list event claims: unknown state %q", f.State)
 	}
-	query := `SELECT ` + eventClaimColumns + ` FROM event_claims WHERE (? = '' OR handler = ?) AND (? = '' OR state = ?) ORDER BY id DESC`
-	args := []any{f.Handler, f.Handler, string(f.State), string(f.State)}
+	query := `SELECT ` + eventClaimColumns + ` FROM event_claims WHERE (? = '' OR handler = ?) AND (? = '' OR state = ?) AND (? = '' OR article_id = ?) ORDER BY id DESC`
+	args := []any{f.Handler, f.Handler, string(f.State), string(f.State), f.ArticleID, f.ArticleID}
 	if f.Limit > 0 {
 		query += ` LIMIT ?`
 		args = append(args, f.Limit)

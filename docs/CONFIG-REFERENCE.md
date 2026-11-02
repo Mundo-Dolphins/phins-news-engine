@@ -162,6 +162,7 @@ test fails if a new secret field is not covered.
 | `publication_policy.live` | A separate lane for match milestones: `enabled`, `ttl_minutes`, `source_allowlist`, `milestones`, and its own `burst`, `same_topic`, `quiet_hours` |
 | `events.<name>` | Per event handler the host registers through `engine.Options.EventHandlers`: `enabled` (a handler not listed is off) and `config`, a free-form block passed to the handler ([ADR 0033](adr/0033-event-handlers.md)) |
 | `media.*` | Service: media store for event-handler images ([ADR 0036](adr/0036-media-store.md)); off unless `dir` is set. `dir`, `allowed_hosts` (required, the only hosts images may come from), `max_bytes` (10 MiB), `timeout_seconds` (20), `user_agent`, `allow_private_hosts` (false; tests only), `retention_days` (7) and `max_retention_days` (7; `retention_days` may not exceed it) |
+| `alerts.*` | Service: operator alerts to Telegram ([ADR 0037](adr/0037-operator-alerts.md)). `chat_id` (empty: the news chat, `telegram.channel_id`), `dedup_hours` (24; one alert per dedup key per window), `disabled` (false; alerts are then only logged) |
 | `espn_scoreboard.*` | Match-state source for the live lane: `enabled` (false in the example), `team_abbreviation`, `request_timeout_seconds`, `user_agent`. The endpoint is undocumented ([NOTICE](../NOTICE)); a failed poll means articles use the normal lane |
 
 ### Entities, knowledge and LLMs (tools unless noted)
