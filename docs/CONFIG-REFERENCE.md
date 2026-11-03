@@ -78,6 +78,8 @@ test fails if a new secret field is not covered.
 | `scheduler.check_interval_minutes` | `ProcessCycle` interval | 5 |
 | `scheduler.outbox_interval_minutes` | `PublishOutbox` interval | 1 |
 | `scheduler.cleanup_interval_hours` | `CloseInactiveClusters` then `RunRetention` | 24 |
+| `scheduler.timed_event_interval_seconds` | Tick of the timed event handlers ([ADR 0038](adr/0038-timed-event-handlers.md)); 0 means the default | 60 |
+| `scheduler.timed_event_grace_minutes` | How long after its instant a timed event still runs; later it is skipped and alerted; 0 means the default | 15 |
 | `retention.*` | `rejected_articles_days`, `duplicates_days`, `audit_events_days`, `publication_attempts_days`, `clusters_days` (see [DATABASE.md](DATABASE.md#retention)) | 14, 7, 30, 30, 14 |
 | `cluster_lifecycle.*` | `close_after_hours`, `batch_size`, `max_batches_per_run`, `time_budget_seconds`, `close_reason` | 96, 200, 50, 30, `inactivity_ttl` |
 | `seen_items.reclaim_after_minutes` | When an unfinished seen-items claim may be taken over | 10 |
@@ -160,7 +162,7 @@ test fails if a new secret field is not covered.
 | `publication_policy.same_topic` | Same limit per topic, with `exempt_entities` |
 | `publication_policy.quiet_hours` | `enabled`, `start_hour`, `end_hour` |
 | `publication_policy.live` | A separate lane for match milestones: `enabled`, `ttl_minutes`, `source_allowlist`, `milestones`, and its own `burst`, `same_topic`, `quiet_hours` |
-| `events.<name>` | Per event handler the host registers through `engine.Options.EventHandlers`: `enabled` (a handler not listed is off) and `config`, a free-form block passed to the handler ([ADR 0033](adr/0033-event-handlers.md)) |
+| `events.<name>` | Per event handler the host registers through `engine.Options.EventHandlers` or `engine.Options.TimedEventHandlers`: `enabled` (a handler not listed is off) and `config`, a free-form block passed to the handler ([ADR 0033](adr/0033-event-handlers.md), [ADR 0038](adr/0038-timed-event-handlers.md)) |
 | `media.*` | Service: media store for event-handler images ([ADR 0036](adr/0036-media-store.md)); off unless `dir` is set. `dir`, `allowed_hosts` (required, the only hosts images may come from), `max_bytes` (10 MiB), `timeout_seconds` (20), `user_agent`, `allow_private_hosts` (false; tests only), `retention_days` (7) and `max_retention_days` (7; `retention_days` may not exceed it) |
 | `alerts.*` | Service: operator alerts to Telegram ([ADR 0037](adr/0037-operator-alerts.md)). `chat_id` (empty: the news chat, `telegram.channel_id`), `dedup_hours` (24; one alert per dedup key per window), `disabled` (false; alerts are then only logged) |
 | `espn_scoreboard.*` | Match-state source for the live lane: `enabled` (false in the example), `team_abbreviation`, `request_timeout_seconds`, `user_agent`. The endpoint is undocumented ([NOTICE](../NOTICE)); a failed poll means articles use the normal lane |

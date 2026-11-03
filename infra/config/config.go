@@ -142,6 +142,12 @@ type SchedulerConfig struct {
 	CheckIntervalMinutes  int `yaml:"check_interval_minutes"`
 	OutboxIntervalMinutes int `yaml:"outbox_interval_minutes"`
 	CleanupIntervalHours  int `yaml:"cleanup_interval_hours"`
+	// TimedEventIntervalSeconds is how often timed event handlers are asked
+	// what is due (ADR 0038). Zero means 60.
+	TimedEventIntervalSeconds int `yaml:"timed_event_interval_seconds"`
+	// TimedEventGraceMinutes is how long after its instant a timed event
+	// still runs, to survive restarts. Zero means 15.
+	TimedEventGraceMinutes int `yaml:"timed_event_grace_minutes"`
 }
 
 // Validate checks SchedulerConfig has the minimum data required.
@@ -155,7 +161,31 @@ func (c SchedulerConfig) Validate() error {
 	if c.CleanupIntervalHours <= 0 {
 		return fmt.Errorf("cleanup_interval_hours must be positive")
 	}
+	if c.TimedEventIntervalSeconds < 0 {
+		return fmt.Errorf("timed_event_interval_seconds must not be negative")
+	}
+	if c.TimedEventGraceMinutes < 0 {
+		return fmt.Errorf("timed_event_grace_minutes must not be negative")
+	}
 	return nil
+}
+
+// TimedEventInterval returns the timed-event tick interval, defaulting to one
+// minute.
+func (c SchedulerConfig) TimedEventInterval() time.Duration {
+	if c.TimedEventIntervalSeconds == 0 {
+		return time.Minute
+	}
+	return time.Duration(c.TimedEventIntervalSeconds) * time.Second
+}
+
+// TimedEventGrace returns the timed-event catch-up window, defaulting to 15
+// minutes.
+func (c SchedulerConfig) TimedEventGrace() time.Duration {
+	if c.TimedEventGraceMinutes == 0 {
+		return 15 * time.Minute
+	}
+	return time.Duration(c.TimedEventGraceMinutes) * time.Minute
 }
 
 // CheckInterval returns the cycle interval as a time.Duration.
