@@ -9,6 +9,10 @@ scheduler:
   check_interval_minutes: 5
   outbox_interval_minutes: 1
   cleanup_interval_hours: 24
+  # Timed event handlers (ADR 0038): how often they are asked what is due, and
+  # how long after its instant an event still runs (to survive restarts).
+  timed_event_interval_seconds: 60
+  timed_event_grace_minutes: 15
 http:
   timeout_seconds: 10
   max_response_bytes: 2097152

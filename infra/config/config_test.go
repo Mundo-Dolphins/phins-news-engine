@@ -2946,3 +2946,21 @@ func TestMediaConfig_Validate(t *testing.T) {
 		t.Errorf("host-raised cap: Validate() = %v, want nil", err)
 	}
 }
+
+func TestSchedulerConfig_TimedEventDefaultsAndValidation(t *testing.T) {
+	c := config.SchedulerConfig{CheckIntervalMinutes: 5, OutboxIntervalMinutes: 1, CleanupIntervalHours: 24}
+	if c.TimedEventInterval() != time.Minute || c.TimedEventGrace() != 15*time.Minute {
+		t.Fatalf("defaults = %s / %s, want 1m / 15m", c.TimedEventInterval(), c.TimedEventGrace())
+	}
+	c.TimedEventIntervalSeconds, c.TimedEventGraceMinutes = 30, 5
+	if c.TimedEventInterval() != 30*time.Second || c.TimedEventGrace() != 5*time.Minute {
+		t.Fatalf("configured = %s / %s", c.TimedEventInterval(), c.TimedEventGrace())
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	c.TimedEventGraceMinutes = -1
+	if c.Validate() == nil {
+		t.Fatal("negative grace accepted")
+	}
+}

@@ -192,3 +192,27 @@ func (r *orderedRunRetention) Run(context.Context) (in.RetentionResult, error) {
 	r.mu.Unlock()
 	return in.RetentionResult{}, nil
 }
+
+type countingTimedEvents struct {
+	calls atomic.Int32
+}
+
+func (c *countingTimedEvents) Run(context.Context) (in.RunTimedEventsResult, error) {
+	c.calls.Add(1)
+	return in.RunTimedEventsResult{}, nil
+}
+
+func TestScheduler_RunsTimedEventsWhenSet(t *testing.T) {
+	timed := &countingTimedEvents{}
+	s := scheduler.New(&countingProcessCycle{}, &countingPublishOutbox{}, &countingCloseInactiveClusters{}, &countingRunRetention{}, time.Hour, time.Hour, time.Hour, nopLogger{})
+	s.SetTimedEvents(timed, 5*time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if err := s.Run(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Run() error = %v, want deadline exceeded", err)
+	}
+	if got := timed.calls.Load(); got < 2 {
+		t.Fatalf("timed events ran %d times, want an immediate run plus ticks", got)
+	}
+}

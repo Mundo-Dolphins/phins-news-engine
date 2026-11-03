@@ -64,7 +64,11 @@ type Options struct {
 	// deduplication (ADR 0033). Each runs only if settings enable it under
 	// events.<name>.enabled.
 	EventHandlers []out.EventHandler
-	// EventHandlerTimeout bounds one handler call; zero means
+	// TimedEventHandlers are plugins that run by the clock instead of in
+	// reaction to an article (ADR 0038). They share events.<name>.enabled
+	// and the name space of EventHandlers.
+	TimedEventHandlers []out.TimedEventHandler
+	// EventHandlerTimeout bounds one handler call (article or timed); zero means
 	// usecase.DefaultEventHandlerTimeout.
 	EventHandlerTimeout time.Duration
 }
@@ -368,17 +372,43 @@ func Run(ctx context.Context, configPath string, profile config.Profile, logger 
 			return fmt.Errorf("wire media store: %w", err)
 		}
 	}
+	eventSettings := make(map[string]usecase.EventHandlerSettings, len(cfg.Events))
+	for name, c := range cfg.Events {
+		eventSettings[name] = usecase.EventHandlerSettings{Enabled: c.Enabled, Config: c.Config}
+	}
+	eventDeps := usecase.EventDeps{Clock: realClock, Logger: logger, MatchState: matchState, Claims: eventClaims, Media: eventMedia(mediaStore), Alerts: eventAlerts(alerter, logger)}
 	if len(opts.EventHandlers) > 0 {
-		eventSettings := make(map[string]usecase.EventHandlerSettings, len(cfg.Events))
-		for name, c := range cfg.Events {
-			eventSettings[name] = usecase.EventHandlerSettings{Enabled: c.Enabled, Config: c.Config}
+		// Settings that name a timed handler belong to the timed runner; the
+		// dispatcher would otherwise warn that they are not registered.
+		articleSettings := make(map[string]usecase.EventHandlerSettings, len(eventSettings))
+		for name, es := range eventSettings {
+			articleSettings[name] = es
 		}
-		dispatcher, err := usecase.NewEventDispatcher(opts.EventHandlers, eventSettings,
-			usecase.EventDeps{Clock: realClock, Logger: logger, MatchState: matchState, Claims: eventClaims, Media: eventMedia(mediaStore), Alerts: eventAlerts(alerter, logger)}, opts.EventHandlerTimeout)
+		for _, h := range opts.TimedEventHandlers {
+			if h != nil {
+				delete(articleSettings, strings.TrimSpace(h.Name()))
+			}
+		}
+		dispatcher, err := usecase.NewEventDispatcher(opts.EventHandlers, articleSettings, eventDeps, opts.EventHandlerTimeout)
 		if err != nil {
 			return err
 		}
 		processCycle.SetEventDispatcher(dispatcher)
+	}
+	var timedEvents *usecase.TimedEventRunner
+	if len(opts.TimedEventHandlers) > 0 {
+		articleHandlerNames := make([]string, 0, len(opts.EventHandlers))
+		for _, h := range opts.EventHandlers {
+			if h != nil {
+				articleHandlerNames = append(articleHandlerNames, h.Name())
+			}
+		}
+		var err error
+		timedEvents, err = usecase.NewTimedEventRunner(opts.TimedEventHandlers, articleHandlerNames, eventSettings, eventDeps,
+			articles, outbox, uow, opts.EventHandlerTimeout, cfg.Scheduler.TimedEventGrace())
+		if err != nil {
+			return err
+		}
 	}
 	outbox.SetLiveTTL(time.Duration(cfg.PublicationPolicy.Live.TTLMinutes) * time.Minute)
 	urlCfg, urlResolvers := cfg.Normalization.URL.Policy()
@@ -404,6 +434,10 @@ func Run(ctx context.Context, configPath string, profile config.Profile, logger 
 		cfg.Scheduler.CheckInterval(), cfg.Scheduler.OutboxInterval(), cfg.Scheduler.CleanupInterval(),
 		logger,
 	)
+
+	if timedEvents.Len() > 0 {
+		sched.SetTimedEvents(timedEvents, cfg.Scheduler.TimedEventInterval())
+	}
 
 	logger.Info(
 		opts.serviceName()+" starting",

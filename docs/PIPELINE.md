@@ -79,6 +79,17 @@ event, a handler reserves a key in `event_claims` before it acts
 ([ADR 0034](adr/0034-event-claims.md)); step 10 settles each claim as
 published or failed from its outbox rows.
 
+Timed event handlers are not a pipeline step: no article triggers them. A
+fourth scheduler loop (`scheduler.timed_event_interval_seconds`, 60 by
+default) asks each enabled `out.TimedEventHandler` what is due, and
+`usecase.TimedEventRunner` runs it if the instant has been reached and is no
+more than `scheduler.timed_event_grace_minutes` (15) old. The claim
+`(handler, key)` is written in the same transaction as the outbox rows, so a
+restart or a second tick never posts twice; an event found outside the grace
+window is recorded as a failed claim and alerted, never run late. Step 10 then
+publishes and settles the claim like any other
+([ADR 0038](adr/0038-timed-event-handlers.md)).
+
 Every decision is appended to `article_processing_events` (event type,
 `from_status`, `to_status`, `reason_code`, `reason_detail`, `cycle_id`), so
 any outcome can be reconstructed with SQL or with

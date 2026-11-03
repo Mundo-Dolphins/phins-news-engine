@@ -1,6 +1,6 @@
 // Package scheduler is the driving adapter that periodically triggers the
 // application's ProcessCycle, PublishOutbox, CloseInactiveClusters, and
-// RunRetention use cases.
+// RunRetention use cases, plus the timed event handlers when configured.
 package scheduler
 
 import (
@@ -27,6 +27,8 @@ type Scheduler struct {
 	outboxInterval        time.Duration
 	cleanupInterval       time.Duration
 	logger                appout.Logger
+	timedEvents           appin.RunTimedEvents
+	timedEventInterval    time.Duration
 }
 
 // New builds a Scheduler.
@@ -48,6 +50,14 @@ func New(
 		cleanupInterval:       cleanupInterval,
 		logger:                logger,
 	}
+}
+
+// SetTimedEvents adds a fourth loop that runs the timed event handlers
+// (ADR 0038) every interval. Without it the scheduler behaves as before.
+// Call it before Run.
+func (s *Scheduler) SetTimedEvents(r appin.RunTimedEvents, interval time.Duration) {
+	s.timedEvents = r
+	s.timedEventInterval = interval
 }
 
 // Run starts one goroutine per interval — ProcessCycle, PublishOutbox, and
@@ -86,6 +96,18 @@ func (s *Scheduler) Run(ctx context.Context) error {
 			}
 		})
 	}()
+
+	if s.timedEvents != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.runLoop(ctx, s.timedEventInterval, func(ctx context.Context) {
+				if _, err := s.timedEvents.Run(ctx); err != nil && ctx.Err() == nil {
+					s.logger.Error("run timed events failed", err)
+				}
+			})
+		}()
+	}
 
 	wg.Wait()
 	return ctx.Err()

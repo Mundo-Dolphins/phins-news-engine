@@ -22,6 +22,7 @@ today.
 | [0035](0035-bluesky-publisher.md) | Bluesky publisher: write client and reconciliation |
 | [0036](0036-media-store.md) | Media store: safe image download with retention |
 | [0037](0037-operator-alerts.md) | Operator alerts: handler and destination failures to Telegram |
+| [0038](0038-timed-event-handlers.md) | Timed event handlers: run a handler at a scheduled instant |
 
 The numbering has gaps. The engine was extracted from a larger project
 whose other records cover operations and deployment-specific choices and
