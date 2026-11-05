@@ -19,6 +19,8 @@ import (
 
 const group = "claims"
 
+var errBadParams = errors.New("claims: unexpected params type")
+
 var bothModes = []action.Mode{action.ModeLocal, action.ModeProduction}
 
 type listParams struct {
@@ -66,7 +68,10 @@ func Actions() []action.Action {
 }
 
 func runList(ctx context.Context, env action.Env, params any) (action.Result, error) {
-	p := params.(*listParams)
+	p, ok := params.(*listParams)
+	if !ok {
+		return action.Result{}, errBadParams
+	}
 	filter := appout.EventClaimFilter{Handler: p.Handler, State: appout.EventClaimState(p.State)}
 	var since time.Time
 	if p.Since != "" {
@@ -123,7 +128,10 @@ type claimJSON struct {
 }
 
 func runShow(ctx context.Context, env action.Env, params any) (action.Result, error) {
-	p := params.(*keyParams)
+	p, ok := params.(*keyParams)
+	if !ok {
+		return action.Result{}, errBadParams
+	}
 	v, err := eventclaims.Show(ctx, sqliteadapter.NewEventClaimRepository(env.DB), p.Handler, p.Key)
 	if errors.Is(err, appout.ErrEventClaimNotFound) {
 		return action.Result{}, action.NotFound(err)
@@ -139,7 +147,10 @@ func runShow(ctx context.Context, env action.Env, params any) (action.Result, er
 }
 
 func runRetry(ctx context.Context, env action.Env, params any) (action.Result, error) {
-	p := params.(*retryParams)
+	p, ok := params.(*retryParams)
+	if !ok {
+		return action.Result{}, errBadParams
+	}
 	repo := sqliteadapter.NewEventClaimRepository(env.DB)
 	if p.DryRun {
 		dead, err := eventclaims.CheckRetry(ctx, repo, p.Handler, p.Key)
@@ -172,7 +183,10 @@ func retryError(handler, key string, err error) error {
 }
 
 func runRelease(ctx context.Context, env action.Env, params any) (action.Result, error) {
-	p := params.(*keyParams)
+	p, ok := params.(*keyParams)
+	if !ok {
+		return action.Result{}, errBadParams
+	}
 	released, err := sqliteadapter.NewEventClaimRepository(env.DB).Release(ctx, p.Handler, p.Key)
 	if errors.Is(err, appout.ErrEventClaimPublished) {
 		return action.Result{}, action.Conflict(fmt.Errorf("refused, %s/%s is published and would allow a duplicate post", p.Handler, p.Key))
