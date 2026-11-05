@@ -77,6 +77,9 @@ type Options struct {
 // servers (no new jobs), cancel the running jobs, wait for them, then close
 // the databases.
 func Run(ctx context.Context, opts Options) error {
+	// Caller-supplied listeners are ours to close on every path, including
+	// early failures (closing twice after the servers stop is harmless).
+	defer closeAll(opts.Listeners)
 	log := opts.Logger
 	if log == nil {
 		log = slog.Default()
@@ -143,18 +146,16 @@ func Run(ctx context.Context, opts Options) error {
 	envFor := func(actor string) action.Env {
 		return action.Env{DB: opDB, Config: cfg, Mode: mode, Now: now, Log: log, Actor: actor}
 	}
+	streamsDone := make(chan struct{})
 	handler := httpapi.NewHandler(httpapi.Deps{
 		Registry: registry, Runner: runner, Store: st,
 		Sessions: auth.NewSessions(st, sessionTTL, now),
 		Limiter:  auth.NewLoginLimiter(loginMaxFails, loginWindow, now),
 		EnvFor:   envFor, Username: cfg.Admin.Username, PasswordHash: cfg.Admin.PasswordHash,
-		WritesBlocked: writesBlocked, Assets: assets, Mode: mode,
+		WritesBlocked: writesBlocked, Assets: assets, Mode: mode, StreamsDone: streamsDone,
 		MCP: mcpserver.New(registry, mode, runner, st, envFor, writesBlocked),
 	}, cfg.Admin.AllowedCIDRs, cfg.Admin.MCPToken)
 
-	// streamCtx ends open SSE streams when shutdown begins.
-	streamCtx, endStreams := context.WithCancel(context.Background())
-	defer endStreams()
 	servers := make([]*http.Server, len(listeners))
 	serveErrs := make(chan error, len(listeners))
 	for i, ln := range listeners {
@@ -162,7 +163,6 @@ func Run(ctx context.Context, opts Options) error {
 			Handler:           handler,
 			ReadHeaderTimeout: 10 * time.Second,
 			IdleTimeout:       120 * time.Second, // no WriteTimeout: SSE streams are long-lived
-			BaseContext:       func(net.Listener) context.Context { return streamCtx },
 		}
 		go func(srv *http.Server, ln net.Listener) {
 			log.Info("admin listening", "addr", ln.Addr().String(), "mode", string(mode))
@@ -186,7 +186,8 @@ func Run(ctx context.Context, opts Options) error {
 		log.Error("admin server failed", "error", runErr)
 	}
 
-	endStreams()
+	// Only SSE streams are cut; other in-flight requests drain in Shutdown.
+	close(streamsDone)
 	shutCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	for _, srv := range servers {

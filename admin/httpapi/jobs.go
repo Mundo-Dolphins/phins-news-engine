@@ -101,6 +101,7 @@ func (s *server) jobEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
+	_ = rc.Flush() // let the client see the stream is open before any line
 
 	emit := func(l store.LogLine) bool {
 		last = l.Seq
@@ -133,6 +134,8 @@ func (s *server) jobEvents(w http.ResponseWriter, r *http.Request) {
 	for open := true; open; {
 		select {
 		case <-ctx.Done():
+			return
+		case <-s.d.StreamsDone:
 			return
 		case _, ok := <-live:
 			if !ok {

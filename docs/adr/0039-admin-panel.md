@@ -73,7 +73,7 @@ Servers have `ReadHeaderTimeout` 10 s and no `WriteTimeout`, because job
 events stream over SSE.
 
 **Shutdown.** On context cancellation `Run` stops the HTTP servers first (10 s
-grace), so no new job can start; cancels the running jobs; waits for them;
+grace) so no new job can start, letting in-flight requests finish while open SSE job streams are ended; cancels the running jobs; waits for them;
 then closes the admin and operational databases.
 
 **Frontend.** TypeScript, Vite and Preact with a small router. The built

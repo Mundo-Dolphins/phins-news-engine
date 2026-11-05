@@ -33,6 +33,7 @@ const (
 
 var (
 	jobStarted  = make(chan struct{}, 1)
+	syncStarted = make(chan struct{}, 1)
 	jobFinished atomic.Bool
 )
 
@@ -48,6 +49,15 @@ func TestMain(m *testing.M) {
 			time.Sleep(200 * time.Millisecond)
 			jobFinished.Store(true)
 			return action.Result{}, ctx.Err()
+		},
+	})
+	admin.Add(action.Action{
+		Name: "test.sync", Group: "test", Title: "Sync", Kind: action.KindWrite,
+		Modes: []action.Mode{action.ModeLocal},
+		Run: func(ctx context.Context, _ action.Env, _ any) (action.Result, error) {
+			syncStarted <- struct{}{}
+			time.Sleep(300 * time.Millisecond)
+			return action.Result{}, nil
 		},
 	})
 	os.Exit(m.Run())
@@ -72,6 +82,9 @@ func newHarness(t *testing.T, profile string, nListeners int) *harness {
 		t.Fatal(err)
 	}
 	cfgText := strings.Replace(string(raw), "path: data/operational.db", "path: "+opPath, 1)
+	if !strings.Contains(cfgText, "path: "+opPath) {
+		t.Fatal("config rewrite did not replace the sqlite path; refusing to risk the repo DB")
+	}
 	cfgPath := filepath.Join(dir, "settings.yml")
 	if err := os.WriteFile(cfgPath, []byte(cfgText), 0o600); err != nil {
 		t.Fatal(err)
@@ -338,5 +351,75 @@ func TestGracefulShutdownWaitsForJob(t *testing.T) {
 	}
 	if !jobFinished.Load() {
 		t.Fatal("Run returned before the running job finished")
+	}
+}
+
+func TestShutdownDrainsInFlightSyncRequest(t *testing.T) {
+	h := newHarness(t, "local", 1)
+	h.start()
+	c := loggedIn(t, h.bases[0])
+	type reply struct {
+		code int
+		body string
+	}
+	got := make(chan reply, 1)
+	go func() {
+		code, body := postAction(t, c, h.bases[0], "test.sync", `{}`)
+		got <- reply{code, body}
+	}()
+	select {
+	case <-syncStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("sync action never started")
+	}
+	if err := h.stop(); err != nil {
+		t.Fatal(err)
+	}
+	r := <-got
+	if r.code != http.StatusOK {
+		t.Fatalf("in-flight request = %d %s, want 200", r.code, r.body)
+	}
+	db, err := sql.Open("sqlite", os.Getenv("ADMIN_DB_PATH"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var outcome string
+	if err := db.QueryRow(`SELECT outcome FROM admin_audit WHERE action = 'test.sync'`).Scan(&outcome); err != nil {
+		t.Fatal(err)
+	}
+	if outcome != "succeeded" {
+		t.Fatalf("audit outcome = %q, want succeeded", outcome)
+	}
+}
+
+func TestShutdownEndsOpenSSEStreamsPromptly(t *testing.T) {
+	h := newHarness(t, "local", 1)
+	h.start()
+	c := loggedIn(t, h.bases[0])
+	code, body := postAction(t, c, h.bases[0], "test.slow", `{}`)
+	if code != http.StatusAccepted {
+		t.Fatalf("start = %d %s", code, body)
+	}
+	<-jobStarted
+	var started struct {
+		Job struct {
+			ID string `json:"id"`
+		} `json:"job"`
+	}
+	if err := json.Unmarshal([]byte(body), &started); err != nil || started.Job.ID == "" {
+		t.Fatalf("job id from %s: %v", body, err)
+	}
+	resp, err := c.Get(h.bases[0] + "/api/jobs/" + started.Job.ID + "/events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	begin := time.Now()
+	if err := h.stop(); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(begin); d > 5*time.Second {
+		t.Fatalf("shutdown with an open SSE stream took %v", d)
 	}
 }

@@ -32,6 +32,9 @@ type Deps struct {
 	// MCP is mounted at /mcp behind the bearer token; nil disables it.
 	MCP  http.Handler
 	Mode action.Mode
+	// StreamsDone, when closed, ends open SSE job streams (graceful
+	// shutdown). It does not affect any other request. Nil never fires.
+	StreamsDone <-chan struct{}
 }
 
 type server struct{ d Deps }
