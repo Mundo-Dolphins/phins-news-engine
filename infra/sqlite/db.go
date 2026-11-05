@@ -23,11 +23,24 @@ import (
 // gives its -wal and -shm files the same mode); an existing file keeps
 // its mode.
 func Open(path string, busyTimeout time.Duration) (*sql.DB, error) {
+	return open(path, busyTimeout, "")
+}
+
+// OpenImmediate is Open with every transaction started as BEGIN IMMEDIATE
+// (DSN _txlock=immediate). A second process writing to a database another
+// process also writes (the admin panel against the running bot) then waits
+// out busy_timeout at BEGIN instead of failing with SQLITE_BUSY when a
+// read transaction later tries to upgrade to a write.
+func OpenImmediate(path string, busyTimeout time.Duration) (*sql.DB, error) {
+	return open(path, busyTimeout, "&_txlock=immediate")
+}
+
+func open(path string, busyTimeout time.Duration, extra string) (*sql.DB, error) {
 	createPrivateFile(path)
 	dsn := fmt.Sprintf(
 		"%s?_pragma=busy_timeout(%d)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)"+
-			"&_pragma=synchronous(NORMAL)&_pragma=temp_store(MEMORY)",
-		path, busyTimeout.Milliseconds(),
+			"&_pragma=synchronous(NORMAL)&_pragma=temp_store(MEMORY)%s",
+		path, busyTimeout.Milliseconds(), extra,
 	)
 
 	db, err := sql.Open("sqlite", dsn)

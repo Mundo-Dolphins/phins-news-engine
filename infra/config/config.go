@@ -112,6 +112,8 @@ type Config struct {
 	Events             map[string]EventHandlerConfig `yaml:"events"`
 	Media              MediaConfig                   `yaml:"media"`
 	Alerts             AlertsConfig                  `yaml:"alerts"`
+	// Admin is filled from ADMIN_* environment variables only; see AdminConfig.
+	Admin AdminConfig `yaml:"-"`
 }
 
 // SQLiteConfig configures the operational SQLite database.
@@ -3071,6 +3073,7 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("SQLITE_DB_PATH"); v != "" {
 		cfg.SQLite.Path = v
 	}
+	applyAdminEnv(&cfg.Admin)
 }
 
 // DedupCascade converts the normalization, deduplication, and clustering
@@ -3250,6 +3253,12 @@ func (c Config) Redacted() Config {
 	}
 	if c.CatalogMaintenance.WebLookup.Fallback.APIKey != "" {
 		c.CatalogMaintenance.WebLookup.Fallback.APIKey = "[REDACTED]"
+	}
+	if c.Admin.PasswordHash != "" {
+		c.Admin.PasswordHash = "[REDACTED]"
+	}
+	if c.Admin.MCPToken != "" {
+		c.Admin.MCPToken = "[REDACTED]"
 	}
 	return c
 }

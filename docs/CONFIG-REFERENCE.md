@@ -60,6 +60,12 @@ Secret fields are tagged `yaml:"-"`: they cannot appear in the YAML file
 | `OFFLINE_TRAINING_LLM_API_KEY` | `offline_training.llm.api_key` | yes | `editorial classify`, `train mine` against a hosted LLM |
 | `LLM_FALLBACK_API_KEY` | `entity_extraction.fallback.api_key` | yes | `entity_extraction.fallback.enabled` with a provider that needs a key |
 | `SQLITE_DB_PATH` | `sqlite.path` | no | to point at another database |
+| `ADMIN_USERNAME` | `admin.username` | no | the admin panel only (bot and CLI never read it) |
+| `ADMIN_PASSWORD_HASH` | `admin.password_hash` | yes | the admin panel only; a bcrypt hash (`$2...`) |
+| `ADMIN_MCP_TOKEN` | `admin.mcp_token` | yes | the admin panel only; at least 32 characters |
+| `ADMIN_LISTEN_ADDRS` | `admin.listen_addrs` | no | optional comma list, default `127.0.0.1:8480` |
+| `ADMIN_DB_PATH` | `admin.db_path` | no | optional, default `data/admin.db` |
+| `ADMIN_ALLOWED_CIDRS` | `admin.allowed_cidrs` | no | optional comma list, default `127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7` |
 
 `Config.Redacted()` returns a copy with every secret masked; a reflection
 test fails if a new secret field is not covered.
