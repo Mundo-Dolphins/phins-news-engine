@@ -1,0 +1,34 @@
+import { render } from "preact";
+import { LocationProvider, Router, Route } from "preact-iso";
+import { Layout } from "./components/Layout";
+import { Login } from "./routes/Login";
+import { Dashboard } from "./routes/Dashboard";
+import { Catalog } from "./routes/Catalog";
+import { ActionPage } from "./routes/ActionPage";
+import { Jobs } from "./routes/Jobs";
+import { JobDetail } from "./routes/JobDetail";
+import { Audit } from "./routes/Audit";
+import "./style.css";
+
+function NotFound() {
+  return <p>Page not found.</p>;
+}
+
+function App() {
+  const onLogin = location.pathname === "/login";
+  const routes = (
+    <Router>
+      <Route path="/login" component={Login} />
+      <Route path="/" component={Dashboard} />
+      <Route path="/actions" component={Catalog} />
+      <Route path="/actions/:name" component={ActionPage} />
+      <Route path="/jobs" component={Jobs} />
+      <Route path="/jobs/:id" component={JobDetail} />
+      <Route path="/audit" component={Audit} />
+      <Route default component={NotFound} />
+    </Router>
+  );
+  return <LocationProvider>{onLogin ? routes : <Layout>{routes}</Layout>}</LocationProvider>;
+}
+
+render(<App />, document.getElementById("app")!);

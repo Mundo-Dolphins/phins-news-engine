@@ -34,3 +34,6 @@ sessions/
 .vscode/
 *~
 *.swp
+
+# Admin SPA
+admin/web/node_modules
