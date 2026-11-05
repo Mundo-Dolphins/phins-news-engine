@@ -66,4 +66,22 @@ describe("SchemaForm", () => {
     expect("limit" in p).toBe(false);
     expect("ratio" in p).toBe(false);
   });
+
+  it("offers an empty (select) option for a required enum without default", () => {
+    const onSubmit = vi.fn();
+    render(
+      <SchemaForm
+        schema={{ type: "object", required: ["mode"], properties: { mode: { type: "string", enum: ["a", "b"] } } }}
+        onSubmit={onSubmit}
+      />,
+    );
+    const sel = screen.getByLabelText(/^mode/) as HTMLSelectElement;
+    expect(sel.value).toBe("");
+    expect(screen.getByRole("option", { name: "(select)" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    expect(onSubmit).not.toHaveBeenCalled();
+    fireEvent.change(sel, { target: { value: "a" } });
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    expect(onSubmit).toHaveBeenCalledWith({ mode: "a" });
+  });
 });

@@ -28,7 +28,7 @@ web-build:
 	cd admin/web && npm ci && npm run build
 
 web-check: web-build
-	git diff --exit-code admin/web/dist
+	git diff --exit-code admin/web/dist && test -z "$$(git status --porcelain admin/web/dist)"
 
 build:
 	go build ./...

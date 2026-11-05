@@ -1,5 +1,6 @@
 import { useState } from "preact/hooks";
 import { ApiError, login } from "../api";
+import { safeNext } from "../redirect";
 
 export function Login() {
   const [error, setError] = useState("");
@@ -8,8 +9,7 @@ export function Login() {
     const f = new FormData(e.target as HTMLFormElement);
     try {
       await login(String(f.get("username")), String(f.get("password")));
-      const next = new URLSearchParams(location.search).get("next") ?? "/";
-      location.assign(next.startsWith("/") && !next.startsWith("//") ? next : "/");
+      location.assign(safeNext(new URLSearchParams(location.search).get("next"), location.origin));
     } catch (err) {
       setError(err instanceof ApiError && err.status === 429 ? "Too many attempts, wait a minute." : err instanceof Error ? err.message : "Login failed");
     }

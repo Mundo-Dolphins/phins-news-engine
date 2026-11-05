@@ -118,7 +118,7 @@ function Field({ name, prop, required, value, error, set }: { name: string; prop
   if (prop.enum) {
     control = (
       <select id={id} value={String(value ?? "")} onChange={(e) => set((e.target as HTMLSelectElement).value)}>
-        {!required && prop.default === undefined && <option value="">(default)</option>}
+        {prop.default === undefined && <option value="">{required ? "(select)" : "(default)"}</option>}
         {prop.enum.map((o) => (
           <option key={o} value={o}>
             {o}
