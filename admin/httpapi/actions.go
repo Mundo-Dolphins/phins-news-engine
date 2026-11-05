@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/action"
@@ -50,7 +51,12 @@ func (s *server) runAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.d.WritesBlocked != nil && a.Kind != action.KindRead {
-		writeError(w, s.d.WritesBlocked)
+		var ae *action.Error
+		if errors.As(s.d.WritesBlocked, &ae) {
+			writeErr(w, http.StatusServiceUnavailable, ae.Code, ae.Error())
+		} else {
+			writeErr(w, http.StatusServiceUnavailable, action.CodeSchemaMismatch, s.d.WritesBlocked.Error())
+		}
 		return
 	}
 	params, err := action.Decode(a, req.Params)

@@ -7,11 +7,14 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/netip"
+	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -31,12 +34,18 @@ const (
 	pass = "s3cret"
 )
 
+func TestMain(m *testing.M) {
+	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	os.Exit(m.Run())
+}
+
 type env struct {
-	srv    *httptest.Server
-	client *http.Client
-	deps   *httpapi.Deps
-	store  *store.Store
-	gate   chan struct{}
+	srv      *httptest.Server
+	client   *http.Client
+	deps     *httpapi.Deps
+	store    *store.Store
+	gate     chan struct{}
+	spamGate chan struct{}
 }
 
 type readParams struct {
@@ -57,6 +66,7 @@ func newEnv(t *testing.T, mutate func(*httpapi.Deps)) *env {
 	t.Cleanup(func() { cancel(); runner.Wait(); _ = st.Close() })
 
 	gate := make(chan struct{})
+	spamGate := make(chan struct{})
 	reg := &action.Registry{}
 	reg.Add(
 		action.Action{Name: "t.read", Group: "t", Title: "Read", Kind: action.KindRead,
@@ -73,6 +83,21 @@ func newEnv(t *testing.T, mutate func(*httpapi.Deps)) *env {
 			Modes: []action.Mode{action.ModeLocal},
 			Run: func(context.Context, action.Env, any) (action.Result, error) {
 				return action.Result{Render: "text", Text: "destroyed"}, nil
+			}},
+		action.Action{Name: "t.wait", Group: "t", Kind: action.KindWrite, LongRunning: true,
+			Modes: []action.Mode{action.ModeLocal},
+			Run: func(ctx context.Context, _ action.Env, _ any) (action.Result, error) {
+				<-ctx.Done()
+				return action.Result{}, ctx.Err()
+			}},
+		action.Action{Name: "t.spam", Group: "t", Kind: action.KindWrite, LongRunning: true,
+			Modes: []action.Mode{action.ModeLocal},
+			Run: func(_ context.Context, e action.Env, _ any) (action.Result, error) {
+				<-spamGate
+				for i := 0; i < 400; i++ {
+					e.Log.Info("spam")
+				}
+				return action.Result{Render: "text"}, nil
 			}},
 		action.Action{Name: "t.long", Group: "t", Kind: action.KindWrite, LongRunning: true,
 			Modes: []action.Mode{action.ModeLocal},
@@ -107,7 +132,7 @@ func newEnv(t *testing.T, mutate func(*httpapi.Deps)) *env {
 	srv := httptest.NewServer(httpapi.NewHandler(d, allowed, "tok"))
 	t.Cleanup(srv.Close)
 	jar, _ := cookiejar.New(nil)
-	return &env{srv: srv, client: &http.Client{Jar: jar}, deps: &d, store: st, gate: gate}
+	return &env{srv: srv, client: &http.Client{Jar: jar}, deps: &d, store: st, gate: gate, spamGate: spamGate}
 }
 
 func (e *env) do(t *testing.T, method, path string, body any) (*http.Response, []byte) {
@@ -225,7 +250,7 @@ func TestCatalogFiltersByMode(t *testing.T) {
 	if err := json.Unmarshal(b, &items); err != nil {
 		t.Fatal(err)
 	}
-	if len(items) != 4 {
+	if len(items) != 6 {
 		t.Fatalf("local catalog = %d: %s", len(items), b)
 	}
 	for _, k := range []string{"name", "group", "title", "description", "kind", "modes", "long_running", "exclusive", "schema"} {
@@ -310,9 +335,11 @@ func TestReadAllowedDuringSchemaMismatch(t *testing.T) {
 	}
 }
 
-func startLong(t *testing.T, e *env) store.Job {
+func startLong(t *testing.T, e *env) store.Job { return startJob(t, e, "t.long") }
+
+func startJob(t *testing.T, e *env, name string) store.Job {
 	t.Helper()
-	resp, b := e.do(t, "POST", "/api/actions/t.long", map[string]any{})
+	resp, b := e.do(t, "POST", "/api/actions/"+name, map[string]any{})
 	if resp.StatusCode != 202 {
 		t.Fatalf("got %d %s", resp.StatusCode, b)
 	}
@@ -374,14 +401,41 @@ func TestLongRunningReturns202AndCompletes(t *testing.T) {
 func TestCancelJob(t *testing.T) {
 	e := newEnv(t, nil)
 	e.login(t)
-	j := startLong(t, e)
-	defer close(e.gate)
-	// t.long ignores ctx until gate opens, so only the accepted request is checked.
-	if resp, b := e.do(t, "POST", "/api/jobs/"+j.ID+"/cancel", nil); resp.StatusCode != 202 && resp.StatusCode != 204 {
+	j := startJob(t, e, "t.wait")
+	if resp, b := e.do(t, "POST", "/api/jobs/"+j.ID+"/cancel", nil); resp.StatusCode != 202 {
 		t.Fatalf("cancel: %d %s", resp.StatusCode, b)
+	}
+	waitStatus(t, e, j.ID, "cancelled")
+	resp, b := e.do(t, "POST", "/api/jobs/"+j.ID+"/cancel", nil)
+	if resp.StatusCode != 409 || errCode(t, b) != "conflict" {
+		t.Fatalf("cancel finished: %d %s", resp.StatusCode, b)
 	}
 	if resp, _ := e.do(t, "POST", "/api/jobs/missing/cancel", nil); resp.StatusCode != 404 {
 		t.Fatalf("cancel missing: %d", resp.StatusCode)
+	}
+}
+
+func TestSSENoGapsWithManyLines(t *testing.T) {
+	e := newEnv(t, nil)
+	e.login(t)
+	j := startJob(t, e, "t.spam")
+	req, _ := http.NewRequest("GET", e.srv.URL+"/api/jobs/"+j.ID+"/events", nil)
+	resp, err := e.client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	close(e.spamGate)
+	waitStatus(t, e, j.ID, "succeeded") // client has not read anything yet
+	rd := bufio.NewReader(resp.Body)
+	evs := readSSE(t, rd, 401)
+	for i := 0; i < 400; i++ {
+		if evs[i].event != "log" || evs[i].id != strconv.Itoa(i+1) {
+			t.Fatalf("event %d = %+v", i, evs[i])
+		}
+	}
+	if evs[400].event != "end" {
+		t.Fatalf("last = %+v", evs[400])
 	}
 }
 
@@ -483,7 +537,7 @@ func TestBodyLimit(t *testing.T) {
 	e.login(t)
 	big := map[string]any{"params": map[string]any{"n": strings.Repeat("x", 2<<20)}}
 	resp, b := e.do(t, "POST", "/api/actions/t.read", big)
-	if resp.StatusCode != 400 && resp.StatusCode != 413 {
+	if resp.StatusCode != 413 || errCode(t, b) != "payload_too_large" {
 		t.Fatalf("got %d %s", resp.StatusCode, b)
 	}
 }
@@ -500,6 +554,9 @@ func TestSPAFallbackServesIndex(t *testing.T) {
 	resp, b = e.do(t, "GET", "/assets/app.js", nil)
 	if resp.StatusCode != 200 || string(b) != "console.log(1)" || !strings.Contains(resp.Header.Get("Content-Type"), "javascript") {
 		t.Fatalf("asset: %d %q %q", resp.StatusCode, b, resp.Header.Get("Content-Type"))
+	}
+	if resp, _ := e.do(t, "GET", "/assets/old.js", nil); resp.StatusCode != 404 {
+		t.Fatalf("missing asset: %d", resp.StatusCode)
 	}
 	resp, b = e.do(t, "GET", "/", nil)
 	if resp.StatusCode != 200 || !strings.Contains(string(b), "INDEX") {
@@ -546,5 +603,14 @@ func TestOutsideLANIs403(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != 403 {
 		t.Fatalf("got %d", rec.Code)
+	}
+}
+
+func TestWriteBlockedPlainErrorIs503(t *testing.T) {
+	e := newEnv(t, func(d *httpapi.Deps) { d.WritesBlocked = errors.New("db behind") })
+	e.login(t)
+	resp, b := e.do(t, "POST", "/api/actions/t.long", map[string]any{})
+	if resp.StatusCode != 503 || errCode(t, b) != "schema_mismatch" || !strings.Contains(string(b), "db behind") {
+		t.Fatalf("got %d %s", resp.StatusCode, b)
 	}
 }

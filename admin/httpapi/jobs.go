@@ -103,9 +103,6 @@ func (s *server) jobEvents(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 
 	emit := func(l store.LogLine) bool {
-		if l.Seq <= last {
-			return true
-		}
 		last = l.Seq
 		b, _ := json.Marshal(logDTO{Seq: l.Seq, At: l.At, Line: l.Line})
 		if _, err := fmt.Fprintf(w, "id: %d\nevent: log\ndata: %s\n\n", l.Seq, b); err != nil {
@@ -113,6 +110,8 @@ func (s *server) jobEvents(w http.ResponseWriter, r *http.Request) {
 		}
 		return rc.Flush() == nil
 	}
+	// replay emits every stored line after last. The live channel is only a
+	// wake-up signal, so lines it dropped for a slow client are never lost.
 	replay := func() bool {
 		ls, err := s.d.Store.Logs(ctx, id, last)
 		if err != nil {
@@ -135,12 +134,12 @@ func (s *server) jobEvents(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-ctx.Done():
 			return
-		case l, ok := <-live:
+		case _, ok := <-live:
 			if !ok {
 				open = false
 				break
 			}
-			if !emit(l) {
+			if !replay() {
 				return
 			}
 		case <-tick.C:

@@ -9,6 +9,14 @@ import (
 	"time"
 )
 
+// assetExts are the extensions of build artifacts; a missing file with one
+// of them is a real 404 rather than a client route.
+var assetExts = map[string]bool{
+	".js": true, ".mjs": true, ".css": true, ".map": true, ".png": true, ".jpg": true, ".jpeg": true,
+	".gif": true, ".svg": true, ".ico": true, ".webp": true, ".woff": true, ".woff2": true,
+	".ttf": true, ".json": true, ".txt": true, ".webmanifest": true,
+}
+
 // spaHandler serves static files from assets, falling back to index.html
 // for any path that is not a file (client-side routing).
 func spaHandler(assets fs.FS) http.Handler {
@@ -27,6 +35,12 @@ func spaHandler(assets fs.FS) http.Handler {
 			name = "index.html"
 		}
 		if st, err := fs.Stat(assets, name); err != nil || st.IsDir() {
+			// A missing file with a known static extension is a real 404; other
+			// dotted paths (e.g. /actions/claims.list) are client routes.
+			if assetExts[path.Ext(name)] {
+				http.NotFound(w, r)
+				return
+			}
 			name = "index.html"
 		}
 		b, err := fs.ReadFile(assets, name)
