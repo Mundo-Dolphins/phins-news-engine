@@ -16,6 +16,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/editorial"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
 	infrasqlite "github.com/Mundo-Dolphins/phins-news-engine/infra/sqlite"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/trainwiring"
 	"github.com/Mundo-Dolphins/phins-news-engine/migrations"
 )
 
@@ -70,7 +71,7 @@ func newEvaluateCommand() *cobra.Command {
 			registry := sqliteadapter.NewModelRegistryRepository(db)
 
 			schemaVersion := fmt.Sprintf("fs-%d", time.Now().UTC().UnixNano())
-			trainCfg, err := shared.EditorialTrainConfig(cfg, schemaVersion)
+			trainCfg, err := trainwiring.TrainConfig(cfg, schemaVersion)
 			if err != nil {
 				return err
 			}
@@ -78,14 +79,7 @@ func newEvaluateCommand() *cobra.Command {
 			trainCfg.Thresholds.AcceptTargetPrecision, trainCfg.Thresholds.RejectTargetPrecision = acceptTargetPrecision, rejectTargetPrecision
 			trainCfg.Seed = seed
 			trainCfg.Algorithms = algorithms
-			gateCfg := editorialtrain.GateConfig{
-				MinPrecision: cfg.EditorialGates.MinPrecision, MaxRecallRegression: cfg.EditorialGates.MaxRecallRegression,
-				MinRegressionBaselineExamples: cfg.EditorialGates.MinRegressionBaselineExamples,
-				MinPRAUC:                      cfg.EditorialGates.MinPRAUC, MaxFalsePositiveRate: cfg.EditorialGates.MaxFalsePositiveRate,
-				MinPerSourcePrecision: cfg.EditorialGates.MinPerSourcePrecision, MinSourceExamples: cfg.EditorialGates.MinSourceExamples,
-				ExcludedSources:      cfg.EditorialGates.ExcludedSources,
-				MaxArtifactSizeBytes: cfg.EditorialGates.MaxArtifactSizeBytes, MaxInferenceNanos: cfg.EditorialGates.MaxInferenceNanos,
-			}
+			gateCfg := trainwiring.GateConfig(cfg)
 			promoted, err := modeltraining.EvaluatePromotedModel(cfg.Model.Path, dataset, trainCfg)
 			if err != nil {
 				return err

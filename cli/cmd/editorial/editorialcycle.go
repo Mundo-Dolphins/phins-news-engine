@@ -21,7 +21,6 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/app/deployment"
 	"github.com/Mundo-Dolphins/phins-news-engine/app/editorialcycle"
 	"github.com/Mundo-Dolphins/phins-news-engine/app/editorialsync"
-	"github.com/Mundo-Dolphins/phins-news-engine/app/editorialtrain"
 	"github.com/Mundo-Dolphins/phins-news-engine/app/modelpromotion"
 	"github.com/Mundo-Dolphins/phins-news-engine/app/telegramimport"
 	toolsdictionary "github.com/Mundo-Dolphins/phins-news-engine/cli/cmd/dictionary"
@@ -33,6 +32,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionaryfile"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/shellrunner"
 	infrasqlite "github.com/Mundo-Dolphins/phins-news-engine/infra/sqlite"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/trainwiring"
 	"github.com/Mundo-Dolphins/phins-news-engine/migrations"
 	"github.com/Mundo-Dolphins/phins-news-engine/ports/out"
 )
@@ -699,15 +699,8 @@ func newCycleCommand() *cobra.Command {
 				for _, id := range cfg.Classification.TrustedSourceIDs {
 					trustedSourceIDs[id] = true
 				}
-				gateCfg := editorialtrain.GateConfig{
-					MinPrecision: cfg.EditorialGates.MinPrecision, MaxRecallRegression: cfg.EditorialGates.MaxRecallRegression,
-					MinRegressionBaselineExamples: cfg.EditorialGates.MinRegressionBaselineExamples,
-					MinPRAUC:                      cfg.EditorialGates.MinPRAUC, MaxFalsePositiveRate: cfg.EditorialGates.MaxFalsePositiveRate,
-					MinPerSourcePrecision: cfg.EditorialGates.MinPerSourcePrecision, MinSourceExamples: cfg.EditorialGates.MinSourceExamples,
-					ExcludedSources:      cfg.EditorialGates.ExcludedSources,
-					MaxArtifactSizeBytes: cfg.EditorialGates.MaxArtifactSizeBytes, MaxInferenceNanos: cfg.EditorialGates.MaxInferenceNanos,
-				}
-				trainCfg, err := shared.EditorialTrainConfig(cfg, fmt.Sprintf("fs-%d", time.Now().UTC().UnixNano()))
+				gateCfg := trainwiring.GateConfig(cfg)
+				trainCfg, err := trainwiring.TrainConfig(cfg, fmt.Sprintf("fs-%d", time.Now().UTC().UnixNano()))
 				if err != nil {
 					err = fmt.Errorf("editorial cycle: training config: %w", err)
 					report.Error = err.Error()
