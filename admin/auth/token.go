@@ -10,7 +10,8 @@ import (
 // constant time. An empty configured token never authenticates.
 func Bearer(token string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+		scheme, got, found := strings.Cut(r.Header.Get("Authorization"), " ")
+		ok := found && strings.EqualFold(scheme, "Bearer")
 		if ok && token != "" && subtle.ConstantTimeCompare([]byte(got), []byte(token)) == 1 {
 			next.ServeHTTP(w, r)
 			return

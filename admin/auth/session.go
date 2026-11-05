@@ -41,17 +41,20 @@ func hashToken(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (s *Sessions) setCookie(w http.ResponseWriter, value string) {
+// setCookie writes the session cookie; a negative maxAge clears it.
+func (s *Sessions) setCookie(w http.ResponseWriter, value string, maxAge int) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     CookieName,
 		Value:    value,
 		Path:     "/",
-		MaxAge:   int(s.ttl / time.Second),
+		MaxAge:   maxAge,
 		HttpOnly: true,
 		Secure:   false, // plain HTTP on the LAN
 		SameSite: http.SameSiteStrictMode,
 	})
 }
+
+func (s *Sessions) ttlSeconds() int { return int(s.ttl / time.Second) }
 
 // Login creates a session for username and sets the session cookie.
 func (s *Sessions) Login(ctx context.Context, w http.ResponseWriter, username string) error {
@@ -63,16 +66,13 @@ func (s *Sessions) Login(ctx context.Context, w http.ResponseWriter, username st
 	if err := s.st.CreateSession(ctx, hashToken(token), username, s.now().Add(s.ttl)); err != nil {
 		return err
 	}
-	s.setCookie(w, token)
+	s.setCookie(w, token, s.ttlSeconds())
 	return nil
 }
 
 // Logout deletes the request's session (if any) and clears the cookie.
 func (s *Sessions) Logout(ctx context.Context, w http.ResponseWriter, r *http.Request) error {
-	http.SetCookie(w, &http.Cookie{
-		Name: CookieName, Value: "", Path: "/", MaxAge: -1,
-		HttpOnly: true, SameSite: http.SameSiteStrictMode,
-	})
+	s.setCookie(w, "", -1)
 	c, err := r.Cookie(CookieName)
 	if err != nil || c.Value == "" {
 		return nil
@@ -100,7 +100,7 @@ func (s *Sessions) Middleware(next http.Handler) http.Handler {
 			writeError(w, http.StatusUnauthorized, "unauthorized", "login required")
 			return
 		}
-		s.setCookie(w, c.Value)
+		s.setCookie(w, c.Value, s.ttlSeconds())
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userKey{}, user)))
 	})
 }

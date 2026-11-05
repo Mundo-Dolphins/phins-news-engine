@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// LoginLimiter limits failed logins per client IP in a sliding window.
+// LoginLimiter limits login attempts per client IP in a sliding window.
 type LoginLimiter struct {
 	max    int
 	window time.Duration
@@ -16,7 +16,7 @@ type LoginLimiter struct {
 	failures map[netip.Addr][]time.Time
 }
 
-// NewLoginLimiter blocks an IP once it has max failures within window.
+// NewLoginLimiter blocks an IP once it has made max attempts within window.
 func NewLoginLimiter(max int, window time.Duration, now func() time.Time) *LoginLimiter {
 	return &LoginLimiter{max: max, window: window, now: now, failures: map[netip.Addr][]time.Time{}}
 }
@@ -38,18 +38,16 @@ func (l *LoginLimiter) prune(ip netip.Addr) []time.Time {
 	return fs
 }
 
-// Allow reports whether ip may attempt a login.
+// Allow atomically records a login attempt from ip and reports whether it
+// may proceed. When ip already has max attempts within the window it returns
+// false and records nothing. Because the check and the record are one step,
+// concurrent attempts cannot all slip under the limit.
 func (l *LoginLimiter) Allow(ip netip.Addr) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return len(l.prune(ip)) < l.max
-}
-
-// Fail records a failed login from ip.
-func (l *LoginLimiter) Fail(ip netip.Addr) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.prune(ip)
+	if len(l.prune(ip)) >= l.max {
+		return false
+	}
 	l.failures[ip] = append(l.failures[ip], l.now())
 	// Opportunistically drop other IPs' stale entries so the map stays small.
 	if len(l.failures) > 1024 {
@@ -57,9 +55,10 @@ func (l *LoginLimiter) Fail(ip netip.Addr) {
 			l.prune(other)
 		}
 	}
+	return true
 }
 
-// Reset forgets ip's failures (call after a successful login).
+// Reset forgets ip's recorded attempts (call after a successful login).
 func (l *LoginLimiter) Reset(ip netip.Addr) {
 	l.mu.Lock()
 	defer l.mu.Unlock()

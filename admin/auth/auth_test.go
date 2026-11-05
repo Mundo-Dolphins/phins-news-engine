@@ -7,6 +7,8 @@ import (
 	"net/netip"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -158,7 +160,6 @@ func TestLoginLimiter(t *testing.T) {
 		if !l.Allow(ip) {
 			t.Fatalf("blocked early at %d", i)
 		}
-		l.Fail(ip)
 	}
 	if l.Allow(ip) {
 		t.Fatal("6th attempt should be blocked")
@@ -170,8 +171,8 @@ func TestLoginLimiter(t *testing.T) {
 	if !l.Allow(ip) {
 		t.Fatal("should be allowed after window")
 	}
-	for i := 0; i < 5; i++ {
-		l.Fail(ip)
+	for i := 0; i < 4; i++ {
+		l.Allow(ip)
 	}
 	if l.Allow(ip) {
 		t.Fatal("should block again")
@@ -179,6 +180,42 @@ func TestLoginLimiter(t *testing.T) {
 	l.Reset(ip)
 	if !l.Allow(ip) {
 		t.Fatal("reset should unblock")
+	}
+}
+
+func TestLoginLimiterConcurrent(t *testing.T) {
+	l := auth.NewLoginLimiter(5, time.Minute, func() time.Time { return t0 })
+	ip := netip.MustParseAddr("192.168.1.9")
+	var wg sync.WaitGroup
+	var allowed atomic.Int32
+	start := make(chan struct{})
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			if l.Allow(ip) {
+				allowed.Add(1)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	if got := allowed.Load(); got != 5 {
+		t.Fatalf("allowed = %d, want 5", got)
+	}
+}
+
+func TestSessionExpiresExactlyAtExpiry(t *testing.T) {
+	s, clk := newSessions(t, time.Hour)
+	c := login(t, s)
+	clk.t = t0.Add(time.Hour)
+	req := httptest.NewRequest("GET", "/api/x", nil)
+	req.AddCookie(c)
+	rec := httptest.NewRecorder()
+	s.Middleware(okHandler()).ServeHTTP(rec, req)
+	if rec.Code != 401 {
+		t.Fatalf("at expiry = %d, want 401", rec.Code)
 	}
 }
 
@@ -307,10 +344,12 @@ func TestBearer(t *testing.T) {
 		h.ServeHTTP(rec, req)
 		return rec
 	}
-	if rec := do("Bearer tok123"); rec.Code != 200 {
-		t.Fatalf("good = %d", rec.Code)
+	for _, a := range []string{"Bearer tok123", "bearer tok123", "BEARER tok123"} {
+		if rec := do(a); rec.Code != 200 {
+			t.Fatalf("%q = %d", a, rec.Code)
+		}
 	}
-	for _, a := range []string{"", "Bearer wrong", "Bearer ", "tok123", "Basic tok123", "Bearer tok1234"} {
+	for _, a := range []string{"", "Bearer wrong", "Bearer ", "tok123", "Basic tok123", "Bearer tok1234", "Bearer"} {
 		rec := do(a)
 		if rec.Code != 401 || rec.Header().Get("WWW-Authenticate") != "Bearer" ||
 			strings.TrimSpace(rec.Body.String()) != `{"error":{"code":"unauthorized","message":"invalid or missing bearer token"}}` {
