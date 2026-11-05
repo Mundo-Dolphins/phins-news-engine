@@ -50,3 +50,24 @@ func TestRegistryDuplicatePanics(t *testing.T) {
 		X map[string]string `json:"x"`
 	}{}})
 }
+
+func TestRegistryBadEnumPanics(t *testing.T) {
+	for name, p := range map[string]any{
+		"enum on int": struct {
+			N int `json:"n" enum:"1,2"`
+		}{},
+		"default outside enum": struct {
+			S string `json:"s" enum:"a,b" default:"c"`
+		}{},
+	} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("%s: expected panic", name)
+				}
+			}()
+			var r Registry
+			r.Add(Action{Name: "a", Modes: []Mode{ModeLocal}, Run: noop, Params: p})
+		}()
+	}
+}

@@ -3,6 +3,7 @@ package action
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -53,12 +54,18 @@ func paramFields(params any) ([]field, error) {
 			return nil, fmt.Errorf("param %q: unsupported type %s", name, sf.Type)
 		}
 		if e := sf.Tag.Get("enum"); e != "" {
+			if sf.Type.Kind() != reflect.String {
+				return nil, fmt.Errorf("param %q: enum is only supported on string fields", name)
+			}
 			f.enum = strings.Split(e, ",")
 		}
 		if d, ok := sf.Tag.Lookup("default"); ok {
 			v, err := parseDefault(sf.Type, d)
 			if err != nil {
 				return nil, fmt.Errorf("param %q: bad default %q: %w", name, d, err)
+			}
+			if ds, ok := v.(string); ok && f.enum != nil && !slices.Contains(f.enum, ds) {
+				return nil, fmt.Errorf("param %q: default %q is not in enum %v", name, ds, f.enum)
 			}
 			f.def = v
 		}

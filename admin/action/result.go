@@ -12,4 +12,7 @@ type Result struct {
 }
 
 // Column describes one table column of a [Result].
-type Column struct{ Key, Label string }
+type Column struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
+}
