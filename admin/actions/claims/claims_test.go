@@ -91,6 +91,11 @@ func (f fixture) run(name, params string) (action.Result, error) {
 	return a.Run(context.Background(), env, p)
 }
 
+func dataWeek(got map[string]any) any {
+	data, _ := got["data"].(map[string]any)
+	return data["week"]
+}
+
 func wantCode(t *testing.T, err error, code string) {
 	t.Helper()
 	var ae *action.Error
@@ -169,10 +174,14 @@ func TestShow(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got["handler"] != "injury" || got["key"] != "k1" || got["state"] != "failed" || got["article_id"] != "a1" ||
-		got["created_at"] == nil || got["updated_at"] == nil || got["data"].(map[string]any)["week"] != float64(3) {
+		got["created_at"] == nil || got["updated_at"] == nil || dataWeek(got) != float64(3) {
 		t.Errorf("object = %s", b)
 	}
-	ob := got["outbox"].([]any)[0].(map[string]any)
+	obs, _ := got["outbox"].([]any)
+	if len(obs) != 1 {
+		t.Fatalf("outbox = %v", obs)
+	}
+	ob, _ := obs[0].(map[string]any)
 	if ob["destination"] != "telegram" || ob["status"] != "dead" || ob["attempts"] != float64(6) || ob["last_error"] != "boom dead" {
 		t.Errorf("outbox = %v", ob)
 	}
