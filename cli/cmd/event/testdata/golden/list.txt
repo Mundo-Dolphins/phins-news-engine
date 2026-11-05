@@ -1,0 +1,4 @@
+handler=injury key=2026-11-03 state=claimed article=a3 outbox=none data={"week":3,"team":"Isotopes"} last_error=-
+handler=injury key=2026-11-02 state=published article=a2 outbox=telegram:delivered data={"week":3,"team":"Isotopes"} last_error=boom delivered
+handler=injury key=2026-11-01 state=failed article=a1 outbox=telegram:delivered,bluesky:dead data={"week":3,"team":"Isotopes"} last_error=boom dead
+3 claim(s)
