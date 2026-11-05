@@ -28,9 +28,10 @@ const (
 // New returns the MCP streamable-HTTP handler. Every action available in
 // mode becomes a tool named after the action with "." replaced by "_", plus
 // the jobs_get, jobs_list and jobs_cancel tools. Destructive tools require a
-// boolean "confirm" argument set to true. When writesBlocked is non-nil all
-// non-read actions fail with schema_mismatch.
-func New(reg *action.Registry, mode action.Mode, runner *jobs.Runner, st *store.Store, envFor func(actor string) action.Env, writesBlocked error) http.Handler {
+// boolean "confirm" argument set to true. When writesBlocked is non-nil it is asked
+// before every non-read action and a non-nil result fails the call with
+// schema_mismatch.
+func New(reg *action.Registry, mode action.Mode, runner *jobs.Runner, st *store.Store, envFor func(actor string) action.Env, writesBlocked func() error) http.Handler {
 	srv := newServer(reg, mode, runner, st, envFor, writesBlocked)
 	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, &mcp.StreamableHTTPOptions{Stateless: true})
 }
@@ -39,10 +40,10 @@ type deps struct {
 	runner        *jobs.Runner
 	st            *store.Store
 	envFor        func(string) action.Env
-	writesBlocked error
+	writesBlocked func() error
 }
 
-func newServer(reg *action.Registry, mode action.Mode, runner *jobs.Runner, st *store.Store, envFor func(string) action.Env, writesBlocked error) *mcp.Server {
+func newServer(reg *action.Registry, mode action.Mode, runner *jobs.Runner, st *store.Store, envFor func(string) action.Env, writesBlocked func() error) *mcp.Server {
 	srv := mcp.NewServer(&mcp.Implementation{Name: "phins-news-admin", Version: "0.1.0"}, nil)
 	d := &deps{runner: runner, st: st, envFor: envFor, writesBlocked: writesBlocked}
 	for _, a := range reg.For(mode) {
@@ -100,11 +101,13 @@ func (d *deps) actionHandler(a action.Action) mcp.ToolHandler {
 			}
 		}
 		if d.writesBlocked != nil && a.Kind != action.KindRead {
-			var ae *action.Error
-			if !errors.As(d.writesBlocked, &ae) {
-				ae = &action.Error{Code: action.CodeSchemaMismatch, Message: d.writesBlocked.Error()}
+			if blocked := d.writesBlocked(); blocked != nil {
+				var ae *action.Error
+				if !errors.As(blocked, &ae) {
+					ae = &action.Error{Code: action.CodeSchemaMismatch, Message: blocked.Error()}
+				}
+				return toolError(ae), nil
 			}
-			return toolError(ae), nil
 		}
 		params, err := action.Decode(a, raw)
 		if err != nil {

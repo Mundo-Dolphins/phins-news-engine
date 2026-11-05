@@ -94,7 +94,7 @@ func TestMetadata(t *testing.T) {
 	}
 	cases := map[string]want{
 		"train.analyze":  {action.KindRead, 2, false, false, "Analyze training signals"},
-		"train.run":      {action.KindWrite, 1, true, true, "Run training pipeline"},
+		"train.run":      {action.KindDestructive, 1, true, true, "Run training pipeline"},
 		"train.promote":  {action.KindDestructive, 1, false, true, "Promote candidate model"},
 		"train.rollback": {action.KindDestructive, 1, false, true, "Roll back model"},
 	}

@@ -58,8 +58,8 @@ func Actions() []action.Action {
 		},
 		{
 			Name: "train.run", Group: group, Title: "Run training pipeline",
-			Description: "Runs the full safe-promotion workflow end-to-end: build, analyze, evaluate, promote.",
-			Kind:        action.KindWrite, Modes: localOnly, LongRunning: true, Exclusive: true,
+			Description: "Runs the full safe-promotion workflow end-to-end: build, analyze, evaluate and, when the gates pass, promote (destructive).",
+			Kind:        action.KindDestructive, Modes: localOnly, LongRunning: true, Exclusive: true,
 			Params: runParams{}, Run: runRun,
 		},
 		{

@@ -41,9 +41,9 @@ type AdminConfig struct {
 // applyAdminEnv fills a from the ADMIN_* environment variables, using the
 // documented defaults for the list and path settings.
 func applyAdminEnv(a *AdminConfig) {
-	a.Username = os.Getenv("ADMIN_USERNAME")
-	a.PasswordHash = os.Getenv("ADMIN_PASSWORD_HASH")
-	a.MCPToken = os.Getenv("ADMIN_MCP_TOKEN")
+	a.Username = strings.TrimSpace(os.Getenv("ADMIN_USERNAME"))
+	a.PasswordHash = strings.TrimSpace(os.Getenv("ADMIN_PASSWORD_HASH"))
+	a.MCPToken = strings.TrimSpace(os.Getenv("ADMIN_MCP_TOKEN"))
 	a.DBPath = envOrDefault("ADMIN_DB_PATH", defaultAdminDBPath)
 	a.ListenAddrs = splitCSV(envOrDefault("ADMIN_LISTEN_ADDRS", defaultAdminListenAddrs))
 	a.AllowedCIDRs, a.cidrErr = parseCIDRs(splitCSV(envOrDefault("ADMIN_ALLOWED_CIDRS", defaultAdminAllowedCIDRs)))

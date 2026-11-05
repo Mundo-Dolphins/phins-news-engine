@@ -185,7 +185,8 @@ func TestUnauthenticatedAPIIs401(t *testing.T) {
 
 func TestHealthzNoAuth(t *testing.T) {
 	e := newEnv(t, func(d *httpapi.Deps) {
-		d.WritesBlocked = &action.Error{Code: action.CodeSchemaMismatch, Message: "behind"}
+		blocked := &action.Error{Code: action.CodeSchemaMismatch, Message: "behind"}
+		d.WritesBlocked = func() error { return blocked }
 	})
 	resp, b := e.do(t, "GET", "/healthz", nil)
 	if resp.StatusCode != 200 || !strings.Contains(string(b), `"schema":"mismatch"`) || !strings.Contains(string(b), `"mode":"local"`) {
@@ -314,7 +315,8 @@ func TestDestructiveWithoutConfirmIs400(t *testing.T) {
 
 func TestWriteBlockedBySchemaMismatchIs503(t *testing.T) {
 	e := newEnv(t, func(d *httpapi.Deps) {
-		d.WritesBlocked = &action.Error{Code: action.CodeSchemaMismatch, Message: "schema is behind"}
+		blocked := &action.Error{Code: action.CodeSchemaMismatch, Message: "schema is behind"}
+		d.WritesBlocked = func() error { return blocked }
 	})
 	e.login(t)
 	for _, name := range []string{"t.destroy", "t.long"} {
@@ -327,7 +329,8 @@ func TestWriteBlockedBySchemaMismatchIs503(t *testing.T) {
 
 func TestReadAllowedDuringSchemaMismatch(t *testing.T) {
 	e := newEnv(t, func(d *httpapi.Deps) {
-		d.WritesBlocked = &action.Error{Code: action.CodeSchemaMismatch, Message: "x"}
+		blocked := &action.Error{Code: action.CodeSchemaMismatch, Message: "x"}
+		d.WritesBlocked = func() error { return blocked }
 	})
 	e.login(t)
 	if resp, b := e.do(t, "POST", "/api/actions/t.read", map[string]any{}); resp.StatusCode != 200 {
@@ -607,7 +610,7 @@ func TestOutsideLANIs403(t *testing.T) {
 }
 
 func TestWriteBlockedPlainErrorIs503(t *testing.T) {
-	e := newEnv(t, func(d *httpapi.Deps) { d.WritesBlocked = errors.New("db behind") })
+	e := newEnv(t, func(d *httpapi.Deps) { d.WritesBlocked = func() error { return errors.New("db behind") } })
 	e.login(t)
 	resp, b := e.do(t, "POST", "/api/actions/t.long", map[string]any{})
 	if resp.StatusCode != 503 || errCode(t, b) != "schema_mismatch" || !strings.Contains(string(b), "db behind") {

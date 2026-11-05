@@ -62,7 +62,9 @@ type Options struct {
 	// environment variable (config.ResolveProfile). "production" selects
 	// production mode, anything else local mode.
 	Profile string
-	// Logger receives the admin's logs; nil means slog.Default().
+	// Logger receives the admin's own logs; nil means slog.Default(). The
+	// job runner, REST and MCP layers still log through slog.Default(), so a
+	// host that passes a Logger should also call slog.SetDefault with it.
 	Logger *slog.Logger
 	// Assets is the SPA build rooted at its dist directory; nil serves the
 	// build embedded in this package's web assets.
@@ -112,13 +114,26 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	defer opDB.Close()
 
-	var writesBlocked error
+	var writesBlocked func() error
 	if mode == action.ModeLocal {
 		if err := infrasqlite.Migrate(ctx, opDB, migrations.FS); err != nil {
 			return fmt.Errorf("admin: migrate operational DB: %w", err)
 		}
 	} else {
-		writesBlocked = schemaGuard(ctx, cfg.SQLite.Path, opDB, log)
+		var lastReason string
+		guard := newSchemaState(func() error {
+			err := schemaGuard(ctx, cfg.SQLite.Path, opDB)
+			switch {
+			case err == nil && lastReason != "":
+				log.Info("admin: schema matches again, write actions enabled")
+				lastReason = ""
+			case err != nil && err.Error() != lastReason:
+				log.Warn("admin: write actions disabled", "reason", err.Error())
+				lastReason = err.Error()
+			}
+			return err
+		}, schemaRecheck, func() time.Time { return time.Now() })
+		writesBlocked = guard.Blocked
 	}
 
 	st, err := store.Open(ctx, cfg.Admin.DBPath)
@@ -206,8 +221,9 @@ func Run(ctx context.Context, opts Options) error {
 // schemaGuard compares the operational DB with this binary's migrations
 // without changing it. When the DB is ahead of the binary, behind it, or
 // cannot be checked, it returns the error that blocks write and destructive
-// actions (reads keep working); otherwise nil.
-func schemaGuard(ctx context.Context, path string, db *sql.DB, log *slog.Logger) error {
+// actions (reads keep working); otherwise nil. Run re-evaluates it lazily
+// while blocked (schemaState).
+func schemaGuard(ctx context.Context, path string, db *sql.DB) error {
 	var problems []string
 	if err := infrasqlite.CheckSchemaCompatible(ctx, path, migrations.FS); err != nil {
 		problems = append(problems, err.Error())
@@ -225,7 +241,6 @@ func schemaGuard(ctx context.Context, path string, db *sql.DB, log *slog.Logger)
 		Code:    action.CodeSchemaMismatch,
 		Message: "operational DB schema differs from this binary: " + strings.Join(problems, "; "),
 	}
-	log.Warn("admin: write actions disabled", "reason", blocked.Message)
 	return blocked
 }
 

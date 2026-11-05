@@ -74,6 +74,21 @@ func TestAdminEnvOverrides(t *testing.T) {
 	}
 }
 
+func TestAdminEnvCredentialsTrimmed(t *testing.T) {
+	clearAdminEnv(t)
+	t.Setenv("ADMIN_USERNAME", "  root\n")
+	t.Setenv("ADMIN_PASSWORD_HASH", " $2a$12$abc\n")
+	t.Setenv("ADMIN_MCP_TOKEN", "\t"+strings.Repeat("t", 32)+" ")
+	cfg, err := config.Load(writeFixture(t, validYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := cfg.Admin
+	if a.Username != "root" || a.PasswordHash != "$2a$12$abc" || a.MCPToken != strings.Repeat("t", 32) {
+		t.Errorf("credentials not trimmed: %q %q %q", a.Username, a.PasswordHash, a.MCPToken)
+	}
+}
+
 func TestAdminValidate(t *testing.T) {
 	good := map[string]string{
 		"ADMIN_USERNAME":      "root",

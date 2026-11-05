@@ -16,6 +16,8 @@ run them, without the panel ever endangering the running bot.
 - **Whole catalog.** Every operator action ends up in the panel, not a
   subset. Step 1 ships the foundation, `claims.*` and `train.analyze`,
   `train.run`, `train.promote`, `train.rollback`; the rest follows by group.
+  `train.run` can promote, so like `train.promote` and `train.rollback` it is
+  destructive and needs `confirm`.
 - **Separate process.** The panel is its own binary, `phins-news-admin`, with
   its own service unit. The engine provides the core in package `admin`; the
   host binary calls `admin.Run` and adds private actions with `admin.Add`,

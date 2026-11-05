@@ -24,9 +24,10 @@ type Deps struct {
 	EnvFor func(actor string) action.Env
 	// Username and PasswordHash (bcrypt) identify the single admin user.
 	Username, PasswordHash string
-	// WritesBlocked, when non-nil, rejects write and destructive actions
-	// with this error (schema mismatch in production).
-	WritesBlocked error
+	// WritesBlocked, when non-nil, is asked before every non-read action and
+	// on /healthz; a non-nil result rejects the action with that error
+	// (schema mismatch in production). It may re-evaluate lazily.
+	WritesBlocked func() error
 	// Assets is the SPA build, already rooted at the dist directory.
 	Assets fs.FS
 	// MCP is mounted at /mcp behind the bearer token; nil disables it.
@@ -73,9 +74,17 @@ func NewHandler(d Deps, allowed []netip.Prefix, mcpToken string) http.Handler {
 	return auth.LANOnly(allowed, root)
 }
 
+// blocked returns the current write-blocking error, nil when writes are open.
+func (s *server) blocked() error {
+	if s.d.WritesBlocked == nil {
+		return nil
+	}
+	return s.d.WritesBlocked()
+}
+
 func (s *server) healthz(w http.ResponseWriter, _ *http.Request) {
 	schema := "ok"
-	if s.d.WritesBlocked != nil {
+	if s.blocked() != nil {
 		schema = "mismatch"
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "mode": string(s.d.Mode), "schema": schema})

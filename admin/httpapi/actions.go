@@ -50,14 +50,16 @@ func (s *server) runAction(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, action.CodeConfirmRequired, "this action is destructive: set confirm to true")
 		return
 	}
-	if s.d.WritesBlocked != nil && a.Kind != action.KindRead {
-		var ae *action.Error
-		if errors.As(s.d.WritesBlocked, &ae) {
-			writeErr(w, http.StatusServiceUnavailable, ae.Code, ae.Error())
-		} else {
-			writeErr(w, http.StatusServiceUnavailable, action.CodeSchemaMismatch, s.d.WritesBlocked.Error())
+	if a.Kind != action.KindRead {
+		if blocked := s.blocked(); blocked != nil {
+			var ae *action.Error
+			if errors.As(blocked, &ae) {
+				writeErr(w, http.StatusServiceUnavailable, ae.Code, ae.Error())
+			} else {
+				writeErr(w, http.StatusServiceUnavailable, action.CodeSchemaMismatch, blocked.Error())
+			}
+			return
 		}
-		return
 	}
 	params, err := action.Decode(a, req.Params)
 	if err != nil {

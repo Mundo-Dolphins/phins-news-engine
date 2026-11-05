@@ -33,6 +33,11 @@ type fixture struct {
 
 func setup(t *testing.T, blocked error) *fixture {
 	t.Helper()
+	return setupFn(t, func() error { return blocked })
+}
+
+func setupFn(t *testing.T, blocked func() error) *fixture {
+	t.Helper()
 	f := &fixture{}
 	reg := &action.Registry{}
 	local := []action.Mode{action.ModeLocal}
@@ -196,6 +201,24 @@ func TestWritesBlocked(t *testing.T) {
 	}
 	if res := f.call(t, "fake_echo", map[string]any{"text": "ok"}); res.IsError {
 		t.Errorf("read blocked: %s", text(t, res))
+	}
+}
+
+func TestWritesBlockedIsReevaluatedPerCall(t *testing.T) {
+	var blocked atomic.Bool
+	blocked.Store(true)
+	f := setupFn(t, func() error {
+		if blocked.Load() {
+			return errors.New("schema drift")
+		}
+		return nil
+	})
+	if res := f.call(t, "fake_wipe", map[string]any{"name": "x", "confirm": true}); !res.IsError {
+		t.Fatal("blocked call succeeded")
+	}
+	blocked.Store(false)
+	if res := f.call(t, "fake_wipe", map[string]any{"name": "x", "confirm": true}); res.IsError {
+		t.Fatalf("unblocked call failed: %s", text(t, res))
 	}
 }
 

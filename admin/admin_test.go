@@ -423,3 +423,51 @@ func TestShutdownEndsOpenSSEStreamsPromptly(t *testing.T) {
 		t.Fatalf("shutdown with an open SSE stream took %v", d)
 	}
 }
+
+func TestProductionUnblocksOnceMigrationIsAppliedExternally(t *testing.T) {
+	defer admin.SetSchemaRecheck(50 * time.Millisecond)()
+	h := newHarness(t, "production", 1)
+	// Undo the latest migration for real (0047 only creates event_claims) so
+	// that applying it again later succeeds.
+	h.migrateOp(func(db *sql.DB) {
+		dropLastMigration(db)
+		if _, err := db.Exec(`DROP TABLE event_claims`); err != nil {
+			t.Fatal(err)
+		}
+	})
+	h.start()
+	base := h.bases[0]
+	if m := getJSON(t, base+"/healthz"); m["schema"] != "mismatch" {
+		t.Fatalf("healthz = %v, want mismatch", m)
+	}
+	c := loggedIn(t, base)
+	if code, body := postAction(t, c, base, "claims.release", `{"params":{"handler":"h","key":"k"},"confirm":true}`); code != http.StatusServiceUnavailable {
+		t.Fatalf("release while behind = %d %s", code, body)
+	}
+	// An operator applies the missing migration out of band.
+	db, err := infrasqlite.Open(h.opPath, 5000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := infrasqlite.Migrate(context.Background(), db, migrations.FS); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		time.Sleep(60 * time.Millisecond)
+		code, body := postAction(t, c, base, "claims.release", `{"params":{"handler":"h","key":"k"},"confirm":true}`)
+		if code != http.StatusServiceUnavailable {
+			if strings.Contains(body, action.CodeSchemaMismatch) {
+				t.Fatalf("release after migrate = %d %s", code, body)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("writes never unblocked: %d %s", code, body)
+		}
+	}
+	if m := getJSON(t, base+"/healthz"); m["schema"] != "ok" {
+		t.Fatalf("healthz after migrate = %v, want ok", m)
+	}
+}
