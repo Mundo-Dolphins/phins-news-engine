@@ -52,7 +52,7 @@ type AuditEntry struct {
 // Open opens (creating if needed) admin.db at path and applies its own
 // migrations, tracked independently of the operational database.
 func Open(ctx context.Context, path string) (*Store, error) {
-	db, err := infrasqlite.Open(path, busyTimeout)
+	db, err := infrasqlite.OpenImmediate(path, busyTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -314,33 +314,14 @@ func (s *Store) CreateSession(ctx context.Context, tokenHash, username string, e
 // TouchSession validates a session and slides its expiry to newExpiry.
 // ok is false when the session is missing or already expired (expires_at <= now).
 func (s *Store) TouchSession(ctx context.Context, tokenHash string, now, newExpiry time.Time) (string, bool, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return "", false, fmt.Errorf("admin store: touch session: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-	var (
-		username string
-		expires  string
-	)
-	err = tx.QueryRowContext(ctx, `SELECT username, expires_at FROM admin_sessions WHERE token_hash = ?`, tokenHash).Scan(&username, &expires)
+	var username string
+	err := s.db.QueryRowContext(ctx, `
+		UPDATE admin_sessions SET expires_at = ? WHERE token_hash = ? AND expires_at > ? RETURNING username`,
+		ts(newExpiry), tokenHash, ts(now)).Scan(&username)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil
 	}
 	if err != nil {
-		return "", false, fmt.Errorf("admin store: touch session: %w", err)
-	}
-	exp, err := parseTS(expires)
-	if err != nil {
-		return "", false, err
-	}
-	if !exp.After(now) {
-		return "", false, nil
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE admin_sessions SET expires_at = ? WHERE token_hash = ?`, ts(newExpiry), tokenHash); err != nil {
-		return "", false, fmt.Errorf("admin store: touch session: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
 		return "", false, fmt.Errorf("admin store: touch session: %w", err)
 	}
 	return username, true, nil

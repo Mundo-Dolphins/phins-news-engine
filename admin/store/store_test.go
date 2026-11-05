@@ -220,3 +220,10 @@ func TestReopenKeepsData(t *testing.T) {
 		t.Error("job lost on reopen")
 	}
 }
+
+func TestAppendLogUnknownJobFails(t *testing.T) {
+	s := open(t)
+	if _, err := s.AppendLog(context.Background(), "ghost", "x", t0); err == nil {
+		t.Error("AppendLog for unknown job should error")
+	}
+}
