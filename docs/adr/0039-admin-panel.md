@@ -27,9 +27,19 @@ run them, without the panel ever endangering the running bot.
 - **One binary, two modes.** The mode comes from the profile: `production`
   gives production mode, anything else gives local mode. Each action declares
   the modes it is offered in.
+- **Step 2, batch 1.** 27 more actions: `outbox.*` (status, backlog, inspect,
+  expire_preview, expire, repair), `stats.report`, `sqlite.*` (inspect,
+  integrity, migrate_status), `label.*` (set, history, conflicts,
+  resolve_conflict), `source_policy.*` (validate, inspect, audit, simulate)
+  and `train.*` (build, evaluate, mine, shadow_compare, audit_dataset,
+  audit_gates, recheck_corpus, backfill_rejects, import_labels). Only
+  `train.recheck_corpus` of the new train actions is offered in production;
+  `outbox.expire` and `outbox.repair` are destructive and need `confirm`.
+  Their logic lives in `app/pipelinestats`, `app/dbinspect`,
+  `app/humanlabels` and `app/datasetaudit`, shared with the CLI.
 - **Production writes only operational state.** Reads everywhere, plus
-  `claims.retry` and `claims.release`. Training, promote and rollback are
-  local-only and reach the Pi through the normal deploy; no CPU-heavy job runs
+  `claims.retry`, `claims.release`, `outbox.expire`, `outbox.repair` and the
+  `label.*` writes. Training, promote and rollback are local-only and reach the Pi through the normal deploy; no CPU-heavy job runs
   on the Pi.
 - **MCP exposes everything.** Destructive actions need `confirm: true`. The
   agent has its own bearer token, not the owner's password.

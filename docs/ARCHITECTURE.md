@@ -108,14 +108,15 @@ A host adds its own actions with `admin.Add` before `Run`.
 
 | Piece | Package |
 |---|---|
-| Typed actions, one definition for REST, MCP and the form | `admin/action`, `admin/actions/claims`, `admin/actions/train` |
+| Typed actions, one definition for REST, MCP and the form | `admin/action`, `admin/actions/{claims,train,outbox,stats,sqlite,label,sourcepolicy}`; shared logic in `app/pipelinestats`, `app/dbinspect`, `app/humanlabels`, `app/datasetaudit` |
 | Jobs, logs, audit and sessions in `admin.db` | `admin/store`, `admin/jobs` |
 | Login, session cookie, LAN allow-list, bearer token | `admin/auth` |
 | REST API, SSE job events, embedded SPA | `admin/httpapi`, `admin/web` |
 | MCP tools | `admin/mcpserver` |
 
 The mode follows the profile: `production` offers reads plus claims retry and
-release; any other profile is `local` and offers every action. In production
+release, `outbox.expire`/`outbox.repair` and label writes; any other
+profile is `local` and offers every action. In production
 the admin never migrates the operational DB: if its schema is ahead of or
 behind the binary, write actions answer `503 schema_mismatch` and reads keep
 working. The admin opens the operational DB with `BEGIN IMMEDIATE`

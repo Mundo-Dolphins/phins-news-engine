@@ -475,3 +475,45 @@ func TestProductionUnblocksOnceMigrationIsAppliedExternally(t *testing.T) {
 		t.Fatalf("healthz after migrate = %v, want ok", m)
 	}
 }
+
+// TestCatalogStep2Batch1 pins which step 2 batch 1 actions each mode offers.
+func TestCatalogStep2Batch1(t *testing.T) {
+	both := []string{
+		"outbox.status", "outbox.backlog", "outbox.inspect", "outbox.expire_preview",
+		"outbox.expire", "outbox.repair", "stats.report",
+		"sqlite.inspect", "sqlite.integrity", "sqlite.migrate_status",
+		"label.set", "label.history", "label.conflicts", "label.resolve_conflict",
+		"source_policy.validate", "source_policy.inspect", "source_policy.audit", "source_policy.simulate",
+		"train.recheck_corpus",
+	}
+	localOnly := []string{
+		"train.build", "train.evaluate", "train.mine", "train.shadow_compare",
+		"train.audit_dataset", "train.audit_gates", "train.backfill_rejects", "train.import_labels",
+	}
+	set := func(m action.Mode) map[string]bool {
+		out := map[string]bool{}
+		for _, n := range admin.RegistryFor(m) {
+			out[n] = true
+		}
+		return out
+	}
+	local, prod := set(action.ModeLocal), set(action.ModeProduction)
+	for _, n := range append(append([]string{}, both...), localOnly...) {
+		if !local[n] {
+			t.Errorf("local mode lacks %s", n)
+		}
+	}
+	for _, n := range both {
+		if !prod[n] {
+			t.Errorf("production mode lacks %s", n)
+		}
+	}
+	for _, n := range localOnly {
+		if prod[n] {
+			t.Errorf("production mode offers local-only %s", n)
+		}
+	}
+	if got, want := len(both)+len(localOnly), 27; got != want {
+		t.Fatalf("catalog lists %d new actions, want %d", got, want)
+	}
+}
