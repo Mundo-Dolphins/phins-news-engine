@@ -8,7 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	sqliteadapter "github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqlite"
+	"github.com/Mundo-Dolphins/phins-news-engine/app/dbinspect"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
 	infrasqlite "github.com/Mundo-Dolphins/phins-news-engine/infra/sqlite"
 	"github.com/Mundo-Dolphins/phins-news-engine/migrations"
@@ -96,35 +96,17 @@ func newInspectCommand() *cobra.Command {
 				return err
 			}
 
-			articles := sqliteadapter.NewArticleRepository(db)
-			articleCount, err := articles.Count(ctx)
+			counts, err := dbinspect.Inspect(ctx, db)
 			if err != nil {
-				return err
-			}
-
-			sources := sqliteadapter.NewSourceRepository(db)
-			sourceList, err := sources.List(ctx)
-			if err != nil {
-				return err
-			}
-
-			var outboxPending, outboxLeased, openClusters int
-			if err := db.QueryRowContext(ctx, `SELECT COUNT(1) FROM publication_outbox WHERE status = 'pending'`).Scan(&outboxPending); err != nil {
-				return err
-			}
-			if err := db.QueryRowContext(ctx, `SELECT COUNT(1) FROM publication_outbox WHERE status = 'leased'`).Scan(&outboxLeased); err != nil {
-				return err
-			}
-			if err := db.QueryRowContext(ctx, `SELECT COUNT(1) FROM event_clusters WHERE status = 'open'`).Scan(&openClusters); err != nil {
 				return err
 			}
 
 			cmd.Printf("database: %s\n", cfg.SQLite.Path)
-			cmd.Printf("articles: %d\n", articleCount)
-			cmd.Printf("sources: %d\n", len(sourceList))
-			cmd.Printf("outbox pending: %d\n", outboxPending)
-			cmd.Printf("outbox leased: %d\n", outboxLeased)
-			cmd.Printf("open clusters: %d\n", openClusters)
+			cmd.Printf("articles: %d\n", counts.Articles)
+			cmd.Printf("sources: %d\n", counts.Sources)
+			cmd.Printf("outbox pending: %d\n", counts.OutboxPending)
+			cmd.Printf("outbox leased: %d\n", counts.OutboxLeased)
+			cmd.Printf("open clusters: %d\n", counts.OpenClusters)
 			return nil
 		},
 	}

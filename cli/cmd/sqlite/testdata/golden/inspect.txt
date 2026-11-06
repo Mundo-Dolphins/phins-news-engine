@@ -1,0 +1,6 @@
+database: <DB>
+articles: 2
+sources: 0
+outbox pending: 1
+outbox leased: 0
+open clusters: 1
