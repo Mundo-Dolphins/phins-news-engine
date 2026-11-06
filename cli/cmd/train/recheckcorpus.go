@@ -8,11 +8,10 @@ import (
 	"github.com/spf13/cobra"
 
 	sqliteadapter "github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqlite"
-	"github.com/Mundo-Dolphins/phins-news-engine/domain/classification"
-	"github.com/Mundo-Dolphins/phins-news-engine/domain/dictionary"
+	"github.com/Mundo-Dolphins/phins-news-engine/app/datasetaudit"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
-	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionaryfile"
 	infrasqlite "github.com/Mundo-Dolphins/phins-news-engine/infra/sqlite"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/trainwiring"
 	"github.com/Mundo-Dolphins/phins-news-engine/migrations"
 )
 
@@ -41,18 +40,9 @@ func newRecheckCorpusCommand() *cobra.Command {
 			if path == "" {
 				path = cfg.Dictionary.Path
 			}
-			d, err := dictionaryfile.Load(path)
+			matcher, err := trainwiring.LoadValidatedMatcher(path)
 			if err != nil {
-				return fmt.Errorf("train recheck-corpus: load dictionary %s: %w", path, err)
-			}
-			for _, issue := range dictionary.Validate(d) {
-				if issue.Severity == dictionary.SeverityError {
-					return fmt.Errorf("train recheck-corpus: dictionary %s failed validation: %s", path, issue)
-				}
-			}
-			matcher, err := dictionary.Prepare(d)
-			if err != nil {
-				return fmt.Errorf("train recheck-corpus: prepare dictionary: %w", err)
+				return err
 			}
 
 			db, err := infrasqlite.Open(cfg.SQLite.Path, cfg.SQLite.BusyTimeout())
@@ -70,21 +60,12 @@ func newRecheckCorpusCommand() *cobra.Command {
 				return fmt.Errorf("train recheck-corpus: %w", err)
 			}
 
-			examined := 0
-			flagged := 0
-			for _, e := range examples {
-				if e.Label != "publish" {
-					continue
-				}
-				examined++
-				result := classification.Decide(e.Title, e.Body, matcher)
-				if !result.Related {
-					flagged++
-					cmd.Printf("FLAGGED %s: publish-labeled but dictionary now scores Related=false (score %.2f, rule %s) — title: %q\n",
-						e.ArticleID, result.Score, result.RuleApplied, e.Title)
-				}
+			examined, flagged := datasetaudit.RecheckCorpus(examples, matcher)
+			for _, f := range flagged {
+				cmd.Printf("FLAGGED %s: publish-labeled but dictionary now scores Related=false (score %.2f, rule %s) — title: %q\n",
+					f.ArticleID, f.Score, f.Rule, f.Title)
 			}
-			cmd.Printf("recheck-corpus: %d publish-labeled example(s) examined, %d flagged\n", examined, flagged)
+			cmd.Printf("recheck-corpus: %d publish-labeled example(s) examined, %d flagged\n", examined, len(flagged))
 			return nil
 		},
 	}

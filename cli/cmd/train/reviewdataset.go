@@ -12,13 +12,11 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Mundo-Dolphins/phins-news-engine/app/datasetaudit"
 	"github.com/Mundo-Dolphins/phins-news-engine/app/editorialtrain"
 )
 
-type auditCandidate struct {
-	ArticleID string
-	Reason    string
-}
+type auditCandidate = datasetaudit.Candidate
 
 type datasetReviewDecision struct {
 	ArticleID string    `json:"article_id"`

@@ -96,14 +96,19 @@ func TestMetadata(t *testing.T) {
 		title       string
 	}
 	cases := map[string]want{
-		"train.analyze":        {action.KindRead, 2, false, false, "Analyze training signals"},
-		"train.run":            {action.KindDestructive, 1, true, true, "Run training pipeline"},
-		"train.promote":        {action.KindDestructive, 1, false, true, "Promote candidate model"},
-		"train.rollback":       {action.KindDestructive, 1, false, true, "Roll back model"},
-		"train.build":          {action.KindWrite, 1, false, false, "Build training dataset"},
-		"train.evaluate":       {action.KindWrite, 1, true, true, "Evaluate candidate models"},
-		"train.mine":           {action.KindWrite, 1, true, true, "Mine hard examples"},
-		"train.shadow_compare": {action.KindWrite, 1, true, false, "Shadow-compare candidate model"},
+		"train.analyze":          {action.KindRead, 2, false, false, "Analyze training signals"},
+		"train.run":              {action.KindDestructive, 1, true, true, "Run training pipeline"},
+		"train.promote":          {action.KindDestructive, 1, false, true, "Promote candidate model"},
+		"train.rollback":         {action.KindDestructive, 1, false, true, "Roll back model"},
+		"train.build":            {action.KindWrite, 1, false, false, "Build training dataset"},
+		"train.evaluate":         {action.KindWrite, 1, true, true, "Evaluate candidate models"},
+		"train.mine":             {action.KindWrite, 1, true, true, "Mine hard examples"},
+		"train.shadow_compare":   {action.KindWrite, 1, true, false, "Shadow-compare candidate model"},
+		"train.audit_dataset":    {action.KindWrite, 1, false, false, "Audit dataset"},
+		"train.audit_gates":      {action.KindWrite, 1, false, false, "Audit dataset against the gates"},
+		"train.recheck_corpus":   {action.KindRead, 2, false, false, "Recheck corpus against the dictionary"},
+		"train.backfill_rejects": {action.KindWrite, 1, false, true, "Backfill reject labels"},
+		"train.import_labels":    {action.KindWrite, 1, false, true, "Import labels"},
 	}
 	as := train.Actions()
 	if len(as) != len(cases) {
@@ -434,4 +439,105 @@ func TestShadowCompareValidation(t *testing.T) {
 	f.cfg.Model.Path = ""
 	_, err = f.run("train.shadow_compare", params(t, map[string]any{"candidate": "x"}))
 	wantCode(t, err, action.CodeConflict)
+}
+
+func TestImportLabelsNeedsASource(t *testing.T) {
+	f := newFixture(t)
+	_, err := f.run("train.import_labels", `{}`)
+	wantCode(t, err, action.CodeInvalidParams)
+}
+
+func TestImportLabelsFromDatasetRendersTally(t *testing.T) {
+	f := newFixture(t)
+	ds := filepath.Join(t.TempDir(), "ds.yml")
+	if err := editorialtrain.SaveDataset(ds, []editorialtrain.TrainingExample{
+		{ArticleID: "x", Label: "publish", LabelSource: "interactive_review", Title: "t", LabeledAt: now, FetchedAt: now},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	res, err := f.run("train.import_labels", params(t, map[string]any{"from_dataset": []string{ds}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Render != "table" || len(res.Rows) != 1 || res.Rows[0]["inserted"] != 1 || res.Rows[0]["path"] != ds {
+		t.Errorf("result = %+v", res)
+	}
+}
+
+func TestBackfillRejectsDryRun(t *testing.T) {
+	f := newFixture(t)
+	res, err := f.run("train.backfill_rejects", `{"dry_run": true}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "backfill-rejects: 0 candidate(s) found, 0 labeled, 0 skipped (already labeled) (dry-run=true)"
+	if res.Text != want || res.Summary != want {
+		t.Errorf("result = %+v", res)
+	}
+}
+
+func TestRecheckCorpusAvailableInProduction(t *testing.T) {
+	var r action.Registry
+	r.Add(train.Actions()...)
+	found := false
+	for _, a := range r.For(action.ModeProduction) {
+		switch a.Name {
+		case "train.recheck_corpus":
+			found = true
+		case "train.audit_dataset", "train.audit_gates", "train.backfill_rejects", "train.import_labels":
+			t.Errorf("%s is available in production mode", a.Name)
+		}
+	}
+	if !found {
+		t.Fatal("train.recheck_corpus must be available in production")
+	}
+
+	f := newFixture(t)
+	_, dictPath := testsupport.WriteFixtureWithDictionary(t)
+	repo := sqliteadapter.NewHumanLabelRepository(f.db)
+	for id, title := range map[string]string{"good": "Springfield Isotopes sign new linebacker", "stale": "Local weather forecast for the weekend"} {
+		if _, err := repo.ImportEditorialExample(context.Background(), training.EditorialExample{
+			ArticleID: id, Label: "publish", Source: "cli:label", Title: title, LabeledAt: now, FetchedAt: now}, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	count := func() (n int) {
+		if err := f.db.QueryRow(`SELECT COUNT(*) FROM editorial_examples`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	before := count()
+	res, err := f.run("train.recheck_corpus", params(t, map[string]any{"dictionary": dictPath}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Summary != "2 examined, 1 flagged" || len(res.Rows) != 1 || res.Rows[0]["article_id"] != "stale" {
+		t.Errorf("result = %+v", res)
+	}
+	if count() != before {
+		t.Error("recheck wrote to editorial_examples")
+	}
+}
+
+func TestAuditDatasetWritesCSVAndSummary(t *testing.T) {
+	f := newFixture(t)
+	dir := t.TempDir()
+	ds, out := filepath.Join(dir, "ds.yml"), filepath.Join(dir, "audit.csv")
+	if err := editorialtrain.SaveDataset(ds, []editorialtrain.TrainingExample{
+		{ArticleID: "r2", Title: "Weak reject", Label: "reject", LabelSource: "pipeline_backfill", SourceID: "rss:c"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	res, err := f.run("train.audit_dataset", params(t, map[string]any{"dataset": ds, "out": out}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "audited 1 eligible dataset row(s), excluding 0 official-source row(s); 1 candidate(s) written to " + out
+	if res.Summary != want || len(res.Rows) != 1 || res.Rows[0]["article_id"] != "r2" {
+		t.Errorf("result = %+v", res)
+	}
+	if _, err := os.Stat(out); err != nil {
+		t.Errorf("csv not written: %v", err)
+	}
 }

@@ -1,8 +1,6 @@
 package train
 
 import (
-	"errors"
-	"fmt"
 	"time"
 
 	"github.com/Mundo-Dolphins/phins-news-engine/cli/cmd/shared"
@@ -10,20 +8,11 @@ import (
 	"github.com/spf13/cobra"
 
 	sqliteadapter "github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqlite"
-	"github.com/Mundo-Dolphins/phins-news-engine/domain/article"
-	"github.com/Mundo-Dolphins/phins-news-engine/domain/training"
+	"github.com/Mundo-Dolphins/phins-news-engine/app/humanlabels"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
 	infrasqlite "github.com/Mundo-Dolphins/phins-news-engine/infra/sqlite"
 	"github.com/Mundo-Dolphins/phins-news-engine/migrations"
 )
-
-// Only rejected_quality is a direct editorial-quality outcome. The other
-// terminal statuses, such as rejected_not_related and retained_no_publish,
-// occur upstream in relevance/clustering, so those articles never reached
-// the editorial classifier and cannot teach its publish/reject boundary.
-var backfillStatuses = []article.Status{
-	article.StatusRejectedQuality,
-}
 
 func newBackfillRejectsCommand() *cobra.Command {
 	var limit int
@@ -60,33 +49,12 @@ func newBackfillRejectsCommand() *cobra.Command {
 			articles := sqliteadapter.NewArticleRepository(db)
 			labels := sqliteadapter.NewHumanLabelRepository(db)
 
-			candidates, err := articles.ListByStatusUnlabeled(cmd.Context(), backfillStatuses, limit)
+			rep, err := humanlabels.BackfillRejects(cmd.Context(), articles, labels, limit, dryRun, time.Now().UTC())
 			if err != nil {
-				return fmt.Errorf("train backfill-rejects: %w", err)
-			}
-
-			labeled := 0
-			skipped := 0
-			now := time.Now().UTC()
-			for _, a := range candidates {
-				if dryRun {
-					continue
-				}
-				example := training.Example{
-					ArticleID: a.ID, Label: "reject", LabeledAt: now,
-					LabeledBy: "pipeline_backfill", Reason: string(a.Status), Source: "pipeline_backfill",
-				}
-				if err := labels.Label(cmd.Context(), example); err != nil {
-					if errors.Is(err, training.ErrAlreadyLabeled) {
-						skipped++
-						continue
-					}
-					return fmt.Errorf("train backfill-rejects: label %s: %w", a.ID, err)
-				}
-				labeled++
+				return err
 			}
 			cmd.Printf("backfill-rejects: %d candidate(s) found, %d labeled, %d skipped (already labeled) (dry-run=%v)\n",
-				len(candidates), labeled, skipped, dryRun)
+				rep.Candidates, rep.Labeled, rep.Skipped, dryRun)
 			return nil
 		},
 	}

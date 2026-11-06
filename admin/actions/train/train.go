@@ -3,7 +3,8 @@
 // mining hard examples, shadow-comparing models, running the full pipeline,
 // promoting a candidate model and rolling back. They mirror the `train
 // analyze|build|evaluate|mine|shadow-compare|run|promote|rollback` CLI
-// commands. Write actions are local-only: training and
+// commands, plus `train audit-dataset|audit-gates|recheck-corpus|
+// backfill-rejects|import-labels`. Write actions are local-only: training and
 // promotion never happen on the production Pi.
 package train
 
@@ -78,7 +79,8 @@ type shadowCompareParams struct {
 
 // Actions returns the training actions: train.analyze, train.build,
 // train.evaluate, train.mine, train.shadow_compare, train.run,
-// train.promote and train.rollback.
+// train.promote, train.rollback, train.audit_dataset, train.audit_gates,
+// train.recheck_corpus, train.backfill_rejects and train.import_labels.
 func Actions() []action.Action {
 	return []action.Action{
 		{
@@ -125,6 +127,31 @@ func Actions() []action.Action {
 			Name: "train.rollback", Group: group, Title: "Roll back model",
 			Description: "Rolls back the promoted editorial-classifier model to the previous slot.",
 			Kind:        action.KindDestructive, Modes: localOnly, Exclusive: true, Run: runRollback,
+		},
+		{
+			Name: "train.audit_dataset", Group: group, Title: "Audit dataset",
+			Description: "Writes a prioritized CSV of heuristic dataset rows (conflicting titles, weak Telegram positives, pipeline-backfill rejects) for review.",
+			Kind:        action.KindWrite, Modes: localOnly, Params: auditDatasetParams{}, Run: runAuditDataset,
+		},
+		{
+			Name: "train.audit_gates", Group: group, Title: "Audit dataset against the gates",
+			Description: "Writes a review CSV of publish-labeled dataset rows the current relevance, anchor and veto gates would block. Never changes labels.",
+			Kind:        action.KindWrite, Modes: localOnly, Params: auditGatesParams{}, Run: runAuditGates,
+		},
+		{
+			Name: "train.recheck_corpus", Group: group, Title: "Recheck corpus against the dictionary",
+			Description: "Lists publish-labeled examples the current dictionary would now classify as not related (read-only).",
+			Kind:        action.KindRead, Modes: bothModes, Params: recheckCorpusParams{}, Run: runRecheckCorpus,
+		},
+		{
+			Name: "train.backfill_rejects", Group: group, Title: "Backfill reject labels",
+			Description: "Labels real pipeline-rejected (rejected_quality) articles as reject training examples.",
+			Kind:        action.KindWrite, Modes: localOnly, Exclusive: true, Params: backfillRejectsParams{}, Run: runBackfillRejects,
+		},
+		{
+			Name: "train.import_labels", Group: group, Title: "Import labels",
+			Description: "Restores label snapshots into editorial_examples from old database backups or a reviewed dataset file; additive, never deletes.",
+			Kind:        action.KindWrite, Modes: localOnly, Exclusive: true, Params: importLabelsParams{}, Run: runImportLabels,
 		},
 	}
 }

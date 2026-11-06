@@ -394,19 +394,19 @@ func (r *HumanLabelRepository) ResolveConflict(ctx context.Context, articleID st
 }
 
 // ImportOutcome is what ImportEditorialExample did with one snapshot.
-type ImportOutcome int
+type ImportOutcome = training.ImportOutcome
 
 const (
 	// ImportInserted: the article had no active label; the snapshot is now it.
-	ImportInserted ImportOutcome = iota
+	ImportInserted = training.ImportInserted
 	// ImportUnchanged: the active label already agrees; nothing written.
-	ImportUnchanged
+	ImportUnchanged = training.ImportUnchanged
 	// ImportConflict: an active label disagrees and override was false;
 	// nothing written.
-	ImportConflict
+	ImportConflict = training.ImportConflict
 	// ImportSuperseded: an active label disagreed and override was true; it
 	// was superseded (kept as history) by the snapshot's new revision.
-	ImportSuperseded
+	ImportSuperseded = training.ImportSuperseded
 )
 
 // ImportEditorialExample writes a previously captured label snapshot back

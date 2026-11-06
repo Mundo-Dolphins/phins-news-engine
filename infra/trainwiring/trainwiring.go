@@ -20,6 +20,7 @@ import (
 	sqliteadapter "github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqlite"
 	"github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqliteeditoriallabelproposal"
 	"github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqlitereviewqueue"
+	"github.com/Mundo-Dolphins/phins-news-engine/app/datasetaudit"
 	"github.com/Mundo-Dolphins/phins-news-engine/app/editorialtrain"
 	"github.com/Mundo-Dolphins/phins-news-engine/app/modelpromotion"
 	"github.com/Mundo-Dolphins/phins-news-engine/app/modeltraining"
@@ -34,6 +35,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionaryfile"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/editorialmodel"
+	infraeditorialveto "github.com/Mundo-Dolphins/phins-news-engine/infra/editorialveto"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/entitycatalog"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/llmclient"
 	infrasqlite "github.com/Mundo-Dolphins/phins-news-engine/infra/sqlite"
@@ -637,4 +639,51 @@ func ShadowCompare(ctx context.Context, db *sql.DB, cfg *config.Config, candidat
 	shadowRepo := sqliteadapter.NewShadowComparisonRepository(db)
 	since := now.AddDate(0, 0, -days)
 	return shadowcompare.Run(ctx, articles, shadowRepo, production, candidate, shadowcompare.Options{Since: since, Limit: limit}, now)
+}
+
+// NewGateAuditor wires the publication gates `train audit-gates` re-applies
+// to stored examples: the configured dictionary, anchor policy and veto
+// rules, evaluated at now.
+func NewGateAuditor(cfg *config.Config, now time.Time) (datasetaudit.GateAuditor, error) {
+	d, err := dictionaryfile.Load(cfg.Dictionary.Path)
+	if err != nil {
+		return datasetaudit.GateAuditor{}, fmt.Errorf("train audit-gates: load dictionary: %w", err)
+	}
+	matcher, err := dictionary.Prepare(d)
+	if err != nil {
+		return datasetaudit.GateAuditor{}, fmt.Errorf("train audit-gates: prepare dictionary: %w", err)
+	}
+	cascade := cfg.DedupCascade()
+	g := datasetaudit.GateAuditor{
+		Matcher: matcher, Text: cascade.Normalization.Text, Anchor: cascade.Classification.Anchor,
+		Trusted: cascade.Classification.TrustedSourceIDs, Context: cascade.Classification.ContextSourceIDs,
+		Exempt: cascade.Editorial.ModelBypassSourceIDs, Evaluated: now,
+	}
+	if cfg.Editorial.VetoPath != "" {
+		v, err := infraeditorialveto.Load(cfg.Editorial.VetoPath)
+		if err != nil {
+			return datasetaudit.GateAuditor{}, fmt.Errorf("train audit-gates: load vetoes: %w", err)
+		}
+		g.Veto = &v
+	}
+	return g, nil
+}
+
+// LoadValidatedMatcher loads the dictionary at path, refuses one with
+// validation errors and prepares its matcher (`train recheck-corpus`).
+func LoadValidatedMatcher(path string) (dictionary.Matcher, error) {
+	d, err := dictionaryfile.Load(path)
+	if err != nil {
+		return dictionary.Matcher{}, fmt.Errorf("train recheck-corpus: load dictionary %s: %w", path, err)
+	}
+	for _, issue := range dictionary.Validate(d) {
+		if issue.Severity == dictionary.SeverityError {
+			return dictionary.Matcher{}, fmt.Errorf("train recheck-corpus: dictionary %s failed validation: %s", path, issue)
+		}
+	}
+	matcher, err := dictionary.Prepare(d)
+	if err != nil {
+		return dictionary.Matcher{}, fmt.Errorf("train recheck-corpus: prepare dictionary: %w", err)
+	}
+	return matcher, nil
 }
