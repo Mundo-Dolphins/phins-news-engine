@@ -415,6 +415,10 @@ func TestShutdownEndsOpenSSEStreamsPromptly(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
+	// The transport may hold a spare dialed connection that never carried a
+	// request; Server.Shutdown only closes such a connection after 5s, which
+	// is unrelated to the stream under test. The open stream is not idle.
+	c.CloseIdleConnections()
 	begin := time.Now()
 	if err := h.stop(); err != nil {
 		t.Fatal(err)
