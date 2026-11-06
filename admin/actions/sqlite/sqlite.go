@@ -56,7 +56,7 @@ func runIntegrity(ctx context.Context, env action.Env, _ any) (action.Result, er
 }
 
 func runMigrateStatus(ctx context.Context, env action.Env, _ any) (action.Result, error) {
-	statuses, err := infrasqlite.Status(ctx, env.DB, migrations.FS)
+	statuses, err := infrasqlite.StatusReadOnly(ctx, env.DB, migrations.FS)
 	if err != nil {
 		return action.Result{}, err
 	}
