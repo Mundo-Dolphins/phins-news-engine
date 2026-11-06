@@ -72,7 +72,7 @@ func TestBuildDatasetWritesManifest(t *testing.T) {
 	src := article.Article{
 		ID: "gold1", OriginalURL: "https://example.com/g", CanonicalURL: "https://example.com/g",
 		Source:    source.Source{ID: testsupport.MustID(t, source.TypeRSS, "feed-a"), Name: "Feed A", Type: source.TypeRSS},
-		FetchedAt: opsNow, PublishedAt: opsNow, Status: article.StatusFetched, Title: "Dolphins win",
+		FetchedAt: opsNow, PublishedAt: opsNow, Status: article.StatusFetched, Title: "Team wins",
 	}
 	if err := sqliteadapter.NewArticleRepository(db).Save(ctx, src); err != nil {
 		t.Fatalf("seed article: %v", err)

@@ -362,7 +362,7 @@ func TestBuildWritesDataset(t *testing.T) {
 	src := source.Source{ID: testsupport.MustID(t, source.TypeRSS, "feed-a"), Name: "Feed A", Type: source.TypeRSS}
 	if err := sqliteadapter.NewArticleRepository(f.db).Save(ctx, article.Article{
 		ID: "g1", OriginalURL: "https://example.com/g1", CanonicalURL: "https://example.com/g1",
-		Source: src, FetchedAt: now, PublishedAt: now, Status: article.StatusFetched, Title: "Dolphins win",
+		Source: src, FetchedAt: now, PublishedAt: now, Status: article.StatusFetched, Title: "Team wins",
 	}); err != nil {
 		t.Fatal(err)
 	}
