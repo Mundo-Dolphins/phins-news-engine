@@ -5,12 +5,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	sqliteadapter "github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqlite"
-	"github.com/Mundo-Dolphins/phins-news-engine/app/trainmine"
 	"github.com/Mundo-Dolphins/phins-news-engine/cli/cmd/shared"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
-	"github.com/Mundo-Dolphins/phins-news-engine/infra/llmclient"
 	infrasqlite "github.com/Mundo-Dolphins/phins-news-engine/infra/sqlite"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/trainwiring"
 	"github.com/Mundo-Dolphins/phins-news-engine/migrations"
 )
 
@@ -37,19 +35,7 @@ func newMineCommand() *cobra.Command {
 				return err
 			}
 
-			batchLimit := cfg.OfflineTraining.Mining.BatchLimit
-			if limitOverride > 0 {
-				batchLimit = limitOverride
-			}
-
-			llm := llmclient.New(shared.OfflineTrainingLLMClientConfig(cfg.OfflineTraining.LLM))
-
-			result, err := trainmine.Mine(cmd.Context(), cfg.Model.Path,
-				sqliteadapter.NewArticleRepository(db), llm, sqliteadapter.NewHardExampleRepository(db),
-				trainmine.Options{
-					BatchLimit: batchLimit, MinNBConfidence: cfg.OfflineTraining.Mining.MinNBConfidence,
-					LLMAutoLabelThreshold: cfg.OfflineTraining.LLM.AutoLabelThreshold,
-				}, time.Now().UTC())
+			result, err := trainwiring.Mine(cmd.Context(), db, cfg, limitOverride, time.Now().UTC())
 			if err != nil {
 				return err
 			}

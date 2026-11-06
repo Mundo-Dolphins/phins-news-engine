@@ -11,6 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -22,15 +24,19 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/app/modelpromotion"
 	"github.com/Mundo-Dolphins/phins-news-engine/app/modeltraining"
 	"github.com/Mundo-Dolphins/phins-news-engine/app/retraintrigger"
+	"github.com/Mundo-Dolphins/phins-news-engine/app/shadowcompare"
+	"github.com/Mundo-Dolphins/phins-news-engine/app/trainmine"
 	"github.com/Mundo-Dolphins/phins-news-engine/app/trainrun"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/classification"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/dictionary"
+	"github.com/Mundo-Dolphins/phins-news-engine/domain/editorial"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/normalization"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionaryfile"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/editorialmodel"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/entitycatalog"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/llmclient"
+	infrasqlite "github.com/Mundo-Dolphins/phins-news-engine/infra/sqlite"
 	"github.com/Mundo-Dolphins/phins-news-engine/ports/out"
 )
 
@@ -356,4 +362,279 @@ func Rollback(ctx context.Context, db *sql.DB, cfg *config.Config) error {
 		return fmt.Errorf("train rollback: %w", err)
 	}
 	return nil
+}
+
+// ExcludedSources is the set of first-party official sources kept out of
+// Naive Bayes training and datasets: model_bypass_source_ids united with
+// unconditional_publish_source_ids.
+func ExcludedSources(cfg *config.Config) map[string]bool {
+	excluded := make(map[string]bool, len(cfg.Editorial.ModelBypassSourceIDs)+len(cfg.Editorial.UnconditionalPublishSourceIDs))
+	for _, id := range cfg.Editorial.ModelBypassSourceIDs {
+		excluded[id] = true
+	}
+	for _, id := range cfg.Editorial.UnconditionalPublishSourceIDs {
+		excluded[id] = true
+	}
+	return excluded
+}
+
+// BuildFlags are the operator-supplied knobs of one `train build`.
+type BuildFlags struct {
+	OutPath       string
+	MaxPerCluster int
+	IncludeDB     []string
+}
+
+// BuildReport describes the dataset BuildDataset wrote.
+type BuildReport struct {
+	OutPath             string
+	Examples            int
+	Gold, Silver        int
+	Dropped             int // examples removed by the per-cluster cap
+	UnresolvedConflicts int // articles excluded because of an unresolved legacy label conflict
+}
+
+// BuildDataset assembles the Gold+Silver training dataset from db (plus the
+// read-only snapshots in f.IncludeDB), writes it and its manifest to
+// f.OutPath and reports what it wrote. It does not migrate db.
+func BuildDataset(ctx context.Context, db *sql.DB, cfg *config.Config, f BuildFlags, now time.Time) (BuildReport, error) {
+	if cfg.OfflineTraining.LLM.AutoLabelThreshold <= 0 {
+		return BuildReport{}, fmt.Errorf("editorialtrain: offline_training.llm.auto_label_threshold must be configured above 0 before Silver examples can be included in a training dataset")
+	}
+	labelRepo := sqliteadapter.NewHumanLabelRepository(db)
+	articleRepo := sqliteadapter.NewArticleRepository(db)
+	proposalRepo := sqliteeditoriallabelproposal.NewEditorialLabelProposalRepository(db)
+
+	trustedSourceIDs := make(map[string]bool, len(cfg.Classification.TrustedSourceIDs))
+	for _, id := range cfg.Classification.TrustedSourceIDs {
+		trustedSourceIDs[id] = true
+	}
+	excludedSources := ExcludedSources(cfg)
+
+	gold, err := editorialtrain.ExportDataset(ctx, labelRepo, trustedSourceIDs, excludedSources)
+	if err != nil {
+		return BuildReport{}, err
+	}
+	goldGroups := [][]editorialtrain.TrainingExample{gold}
+	for _, path := range f.IncludeDB {
+		archive, openErr := infrasqlite.OpenReadOnly(path, cfg.SQLite.BusyTimeout())
+		if openErr != nil {
+			return BuildReport{}, openErr
+		}
+		archiveLabels := sqliteadapter.NewHumanLabelRepository(archive)
+		archived, exportErr := editorialtrain.ExportDataset(ctx, archiveLabels, trustedSourceIDs, excludedSources)
+		closeErr := archive.Close()
+		if exportErr != nil {
+			return BuildReport{}, exportErr
+		}
+		if closeErr != nil {
+			return BuildReport{}, closeErr
+		}
+		goldGroups = append(goldGroups, archived)
+	}
+	gold, err = editorialtrain.MergeTrainingExamples(goldGroups...)
+	if err != nil {
+		return BuildReport{}, err
+	}
+	silver, skippedMissingArticle, err := editorialtrain.FetchSilverExamples(
+		ctx, proposalRepo, labelRepo, articleRepo, trustedSourceIDs, cfg.OfflineTraining.LLM.AutoLabelThreshold,
+	)
+	if err != nil {
+		return BuildReport{}, err
+	}
+	silver = (editorialtrain.Dataset{Examples: silver}).ExcludeSources(excludedSources).Examples
+
+	examples := editorialtrain.CapPerCluster(append(gold, silver...), f.MaxPerCluster)
+	if len(examples) == 0 {
+		return BuildReport{}, fmt.Errorf("editorialtrain: no Gold or Silver examples found — use `label` to add Gold examples, or `editorial classify` to generate Silver proposals, first")
+	}
+	if err := editorialtrain.SaveDataset(f.OutPath, examples); err != nil {
+		return BuildReport{}, err
+	}
+	unresolved, err := labelRepo.CountUnresolvedConflicts(ctx)
+	if err != nil {
+		return BuildReport{}, err
+	}
+	reloaded, err := editorialtrain.LoadDataset(f.OutPath)
+	if err != nil {
+		return BuildReport{}, err
+	}
+	if err := editorialtrain.WriteManifest(f.OutPath, examples, reloaded.Hash(), now, unresolved, skippedMissingArticle); err != nil {
+		return BuildReport{}, err
+	}
+	return BuildReport{
+		OutPath: f.OutPath, Examples: len(examples), Gold: len(gold), Silver: len(silver),
+		Dropped: len(gold) + len(silver) - len(examples), UnresolvedConflicts: unresolved,
+	}, nil
+}
+
+// EvaluateFlags are the operator-supplied knobs of one `train evaluate`.
+type EvaluateFlags struct {
+	DatasetPath, OutDir                          string
+	Algorithms                                   []string
+	Seed                                         int64
+	AcceptTargetPrecision, RejectTargetPrecision float64
+	NearDupThreshold                             float64
+	CostGrid                                     string // comma-separated target precisions; empty disables the sweep
+}
+
+// CostGridWinner is the cost-grid sweep outcome for one algorithm: the
+// accept/reject pair minimizing expected cost among those clearing the
+// promotion gates, or Found=false when none does.
+type CostGridWinner struct {
+	Algorithm      string
+	Found          bool
+	Accept, Reject float64
+	ExpectedCost   float64
+}
+
+// EvaluateReport is what Evaluate fitted: the dataset counts, the current
+// promoted model's report (nil when none) and one Result per candidate.
+type EvaluateReport struct {
+	ExcludedOfficial     int // examples dropped as first-party official sources
+	UnparseableSourceIDs int // dataset rows whose source_id does not parse
+	DatasetSize          int // examples in the dataset before exclusion
+	Promoted             *editorialtrain.Report
+	Results              []modeltraining.Result
+	CostGrid             []CostGridWinner
+	OutDir               string
+}
+
+// Evaluate fits and evaluates every requested candidate algorithm from the
+// built dataset, saving and registering each under f.OutDir. It does not
+// migrate db.
+func Evaluate(ctx context.Context, db *sql.DB, cfg *config.Config, f EvaluateFlags, now time.Time) (EvaluateReport, error) {
+	var report EvaluateReport
+	dataset, err := editorialtrain.LoadDataset(f.DatasetPath)
+	if err != nil {
+		return report, err
+	}
+	report.UnparseableSourceIDs = dataset.UnparseableSourceIDCount
+	report.DatasetSize = len(dataset.Examples)
+	report.OutDir = f.OutDir
+
+	dataset = dataset.ExcludeSources(ExcludedSources(cfg))
+	report.ExcludedOfficial = report.DatasetSize - len(dataset.Examples)
+
+	trainCfg, err := TrainConfig(cfg, fmt.Sprintf("fs-%d", now.UTC().UnixNano()))
+	if err != nil {
+		return report, err
+	}
+	trainCfg.Split.NearDupThreshold = f.NearDupThreshold
+	trainCfg.Thresholds.AcceptTargetPrecision, trainCfg.Thresholds.RejectTargetPrecision = f.AcceptTargetPrecision, f.RejectTargetPrecision
+	trainCfg.Seed = f.Seed
+	trainCfg.Algorithms = f.Algorithms
+	gateCfg := GateConfig(cfg)
+	promoted, err := modeltraining.EvaluatePromotedModel(cfg.Model.Path, dataset, trainCfg)
+	if err != nil {
+		return report, err
+	}
+	report.Promoted = promoted
+
+	registry := sqliteadapter.NewModelRegistryRepository(db)
+	results, err := modeltraining.RunAndRegister(ctx, modeltraining.Deps{Registry: registry}, dataset, trainCfg, f.OutDir, gateCfg, promoted)
+	if err != nil {
+		return report, err
+	}
+	report.Results = results
+
+	if f.CostGrid == "" {
+		return report, nil
+	}
+	if cfg.EditorialCosts.FalsePublishCost <= 0 && cfg.EditorialCosts.MissedNewsCost <= 0 {
+		return report, fmt.Errorf("train evaluate: --cost-grid requires editorial_costs to be configured in settings (false_publish_cost and missed_news_cost are both <= 0)")
+	}
+	values, err := parseCostGrid(f.CostGrid)
+	if err != nil {
+		return report, err
+	}
+	_, validate, _ := editorialtrain.SplitForTraining(dataset, trainCfg)
+	costs := editorialtrain.CostConfig{FalsePublishCost: cfg.EditorialCosts.FalsePublishCost, MissedNewsCost: cfg.EditorialCosts.MissedNewsCost}
+	for _, r := range results {
+		if r.Candidate.Model.Algorithm == "trivial_majority" {
+			continue
+		}
+		artifactSize, err := modeltraining.DirSize(r.Dir)
+		if err != nil {
+			return report, err
+		}
+		var best editorial.Thresholds
+		bestCost := math.Inf(1)
+		found := false
+		for _, accept := range values {
+			for _, reject := range values {
+				th := editorialtrain.SelectThresholds(r.Candidate.Model, validate.Examples, editorialtrain.ThresholdConfig{AcceptTargetPrecision: accept, RejectTargetPrecision: reject})
+				m := r.Candidate.Model
+				m.Thresholds = th
+				rep := editorialtrain.Evaluate(m, validate.Examples, nil, cfg.Editorial.AmbiguousPolicy)
+				gates := editorialtrain.EvaluateGates(rep, promoted, artifactSize, gateCfg)
+				if !gates.Passed {
+					continue
+				}
+				if cost := rep.ExpectedCost(costs); cost < bestCost {
+					bestCost, best, found = cost, th, true
+				}
+			}
+		}
+		w := CostGridWinner{Algorithm: r.Candidate.Model.Algorithm, Found: found}
+		if found {
+			w.Accept, w.Reject, w.ExpectedCost = best.Accept, best.Reject, bestCost
+		}
+		report.CostGrid = append(report.CostGrid, w)
+	}
+	return report, nil
+}
+
+func parseCostGrid(s string) ([]float64, error) {
+	parts := strings.Split(s, ",")
+	values := make([]float64, 0, len(parts))
+	for _, p := range parts {
+		v, err := strconv.ParseFloat(strings.TrimSpace(p), 64)
+		if err != nil {
+			return nil, fmt.Errorf("train evaluate: invalid --cost-grid value %q: %w", p, err)
+		}
+		values = append(values, v)
+	}
+	return values, nil
+}
+
+// Mine scans stored articles for strong NB/LLM disagreement. A positive
+// limitOverride replaces offline_training.mining.batch_limit. It does not
+// migrate db.
+func Mine(ctx context.Context, db *sql.DB, cfg *config.Config, limitOverride int, now time.Time) (trainmine.Result, error) {
+	batchLimit := cfg.OfflineTraining.Mining.BatchLimit
+	if limitOverride > 0 {
+		batchLimit = limitOverride
+	}
+	llm := llmclient.New(LLMClientConfig(cfg.OfflineTraining.LLM))
+	return trainmine.Mine(ctx, cfg.Model.Path,
+		sqliteadapter.NewArticleRepository(db), llm, sqliteadapter.NewHardExampleRepository(db),
+		trainmine.Options{
+			BatchLimit: batchLimit, MinNBConfidence: cfg.OfflineTraining.Mining.MinNBConfidence,
+			LLMAutoLabelThreshold: cfg.OfflineTraining.LLM.AutoLabelThreshold,
+		}, now)
+}
+
+// ShadowCompare scores the last days of stored articles (at most limit) with
+// the production model and the candidate in candidateDir, storing every
+// disagreement. It does not migrate db.
+func ShadowCompare(ctx context.Context, db *sql.DB, cfg *config.Config, candidateDir string, days, limit int, now time.Time) (shadowcompare.Result, error) {
+	if days <= 0 {
+		return shadowcompare.Result{}, fmt.Errorf("train shadow-compare: --days must be positive")
+	}
+	if cfg.Model.Path == "" {
+		return shadowcompare.Result{}, fmt.Errorf("train shadow-compare: model.path is not configured — there is no production model to compare against")
+	}
+	production, err := editorialmodel.Load(cfg.Model.Path)
+	if err != nil {
+		return shadowcompare.Result{}, fmt.Errorf("train shadow-compare: load production model from %s: %w", cfg.Model.Path, err)
+	}
+	candidate, err := editorialmodel.Load(candidateDir)
+	if err != nil {
+		return shadowcompare.Result{}, fmt.Errorf("train shadow-compare: load candidate model from %s: %w", candidateDir, err)
+	}
+	articles := sqliteadapter.NewArticleRepository(db)
+	shadowRepo := sqliteadapter.NewShadowComparisonRepository(db)
+	since := now.AddDate(0, 0, -days)
+	return shadowcompare.Run(ctx, articles, shadowRepo, production, candidate, shadowcompare.Options{Since: since, Limit: limit}, now)
 }

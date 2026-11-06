@@ -10,11 +10,9 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
-	sqliteadapter "github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqlite"
-	"github.com/Mundo-Dolphins/phins-news-engine/app/shadowcompare"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
-	"github.com/Mundo-Dolphins/phins-news-engine/infra/editorialmodel"
 	infrasqlite "github.com/Mundo-Dolphins/phins-news-engine/infra/sqlite"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/trainwiring"
 	"github.com/Mundo-Dolphins/phins-news-engine/migrations"
 )
 
@@ -67,27 +65,10 @@ func newShadowCompareCommand() *cobra.Command {
 		Use:   "shadow-compare",
 		Short: "Score the same recent stored articles with the production and a candidate model offline, storing every disagreement",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if days <= 0 {
-				return fmt.Errorf("train shadow-compare: --days must be positive")
-			}
-
 			cfg, err := config.Load(shared.ConfigPath)
 			if err != nil {
 				return err
 			}
-			if cfg.Model.Path == "" {
-				return fmt.Errorf("train shadow-compare: model.path is not configured — there is no production model to compare against")
-			}
-
-			production, err := editorialmodel.Load(cfg.Model.Path)
-			if err != nil {
-				return fmt.Errorf("train shadow-compare: load production model from %s: %w", cfg.Model.Path, err)
-			}
-			candidate, err := editorialmodel.Load(candidatePath)
-			if err != nil {
-				return fmt.Errorf("train shadow-compare: load candidate model from %s: %w", candidatePath, err)
-			}
-
 			db, err := infrasqlite.Open(cfg.SQLite.Path, cfg.SQLite.BusyTimeout())
 			if err != nil {
 				return err
@@ -96,12 +77,7 @@ func newShadowCompareCommand() *cobra.Command {
 			if err := infrasqlite.Migrate(cmd.Context(), db, migrations.FS); err != nil {
 				return err
 			}
-
-			articles := sqliteadapter.NewArticleRepository(db)
-			shadowRepo := sqliteadapter.NewShadowComparisonRepository(db)
-
-			since := time.Now().UTC().AddDate(0, 0, -days)
-			result, err := shadowcompare.Run(cmd.Context(), articles, shadowRepo, production, candidate, shadowcompare.Options{Since: since, Limit: limit}, time.Now().UTC())
+			result, err := trainwiring.ShadowCompare(cmd.Context(), db, cfg, candidatePath, days, limit, time.Now().UTC())
 			if err != nil {
 				return err
 			}
