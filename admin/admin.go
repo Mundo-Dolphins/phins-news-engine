@@ -20,6 +20,7 @@ import (
 
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/action"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/claims"
+	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/outbox"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/train"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/auth"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/httpapi"
@@ -46,6 +47,7 @@ var registry = &action.Registry{}
 
 func init() {
 	registry.Add(claims.Actions()...)
+	registry.Add(outbox.Actions()...)
 	registry.Add(train.Actions()...)
 }
 
