@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -584,4 +585,34 @@ func extractRunID(t *testing.T, out string) string {
 		end = len(rest)
 	}
 	return rest[:end]
+}
+
+// maskEvaluateOutput replaces the run-specific parts of `train evaluate`
+// output (temp directory, decimal metrics) so the layout can be compared
+// byte for byte without depending on exact training numerics.
+func maskEvaluateOutput(out, outDir string) string {
+	out = strings.ReplaceAll(out, outDir, "<OUT>")
+	return regexp.MustCompile(`-?\d+\.\d+`).ReplaceAllString(out, "N")
+}
+
+func TestEvaluateOutputUnchanged(t *testing.T) {
+	configPath := testsupport.WriteFixture(t)
+	datasetPath := writeDistinctTrainRunDataset(t)
+	outDir := t.TempDir()
+
+	out, err := testsupport.Execute(t, "--config", configPath, "train", "evaluate",
+		"--dataset", datasetPath, "--out", outDir, "--algorithm", "naive_bayes", "--seed", "42",
+		"--accept-target-precision", "0.7", "--reject-target-precision", "0.7", "--cost-grid", "0.7,0.9")
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	want := "WARNING: 30 of 30 dataset example(s) have a source_id that does not parse as \"platform:identifier\" — those rows trained with no source_id feature (see editorialtrain.TrainingExample.toArticle)\n" +
+		"excluded 0 first-party official source example(s) from NB training\n" +
+		"naive_bayes          cost-grid winner: accept=N reject=N expected_cost=N\n" +
+		"algorithm              val_prec    val_rec     val_f1  val_prauc |  test_prec   test_rec    test_f1 | gates\n" +
+		"naive_bayes               N      N      N      N |      N      N      N | ✅ pass\n" +
+		"\ncandidates written under <OUT> — inspect with `validate-model`, then `train promote` the one you choose.\n"
+	if got := maskEvaluateOutput(out, outDir); got != want {
+		t.Errorf("evaluate output:\n%q\nwant:\n%q", got, want)
+	}
 }
