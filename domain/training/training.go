@@ -13,6 +13,15 @@ import (
 // Relabel instead.
 var ErrAlreadyLabeled = errors.New("training: article already has an active label")
 
+// ErrNoSuchArticle is returned (wrapped) by HumanLabelRepository.Label when
+// the target article does not exist.
+var ErrNoSuchArticle = errors.New("no such article")
+
+// ErrNoUnresolvedConflict is returned (wrapped) by
+// HumanLabelRepository.ResolveConflict when the article has no unresolved
+// legacy label conflict.
+var ErrNoUnresolvedConflict = errors.New("no unresolved conflict found")
+
 // ErrNotLabeled is returned by HumanLabelRepository.Relabel/Retract when
 // the target article has no active revision to supersede.
 var ErrNotLabeled = errors.New("training: article has no active label")
@@ -206,3 +215,19 @@ type HardExampleCandidate struct {
 	MinedAt       time.Time
 	ResolvedAt    *time.Time
 }
+
+// ImportOutcome is what importing one editorial-example snapshot did.
+type ImportOutcome int
+
+const (
+	// ImportInserted: the article had no active label; the snapshot is now it.
+	ImportInserted ImportOutcome = iota
+	// ImportUnchanged: the active label already agrees; nothing written.
+	ImportUnchanged
+	// ImportConflict: an active label disagrees and override was false;
+	// nothing written.
+	ImportConflict
+	// ImportSuperseded: an active label disagreed and override was true; it
+	// was superseded (kept as history) by the snapshot's new revision.
+	ImportSuperseded
+)

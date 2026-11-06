@@ -20,6 +20,11 @@ import (
 
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/action"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/claims"
+	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/label"
+	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/outbox"
+	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/sourcepolicy"
+	sqliteactions "github.com/Mundo-Dolphins/phins-news-engine/admin/actions/sqlite"
+	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/stats"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/train"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/auth"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/httpapi"
@@ -46,6 +51,11 @@ var registry = &action.Registry{}
 
 func init() {
 	registry.Add(claims.Actions()...)
+	registry.Add(label.Actions()...)
+	registry.Add(sourcepolicy.Actions()...)
+	registry.Add(outbox.Actions()...)
+	registry.Add(stats.Actions()...)
+	registry.Add(sqliteactions.Actions()...)
 	registry.Add(train.Actions()...)
 }
 
@@ -72,6 +82,9 @@ type Options struct {
 	// Listeners, when set, replace the addresses in ADMIN_LISTEN_ADDRS
 	// (used by tests). Run closes them on shutdown.
 	Listeners []net.Listener
+	// StatsLogPath is the process log stats.report scans by default; empty
+	// means "data/logs/out.log", the CLI default.
+	StatsLogPath string
 }
 
 // Run starts the admin panel and blocks until ctx is done or a server fails.
@@ -158,8 +171,12 @@ func Run(ctx context.Context, opts Options) error {
 		return fmt.Errorf("admin: job runner: %w", err)
 	}
 
+	statsLogPath := opts.StatsLogPath
+	if statsLogPath == "" {
+		statsLogPath = "data/logs/out.log"
+	}
 	envFor := func(actor string) action.Env {
-		return action.Env{DB: opDB, Config: cfg, Mode: mode, Now: now, Log: log, Actor: actor}
+		return action.Env{DB: opDB, Config: cfg, Mode: mode, Now: now, Log: log, Actor: actor, StatsLogPath: statsLogPath}
 	}
 	streamsDone := make(chan struct{})
 	handler := httpapi.NewHandler(httpapi.Deps{

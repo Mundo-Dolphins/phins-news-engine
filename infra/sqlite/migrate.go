@@ -197,3 +197,25 @@ func Status(ctx context.Context, db *sql.DB, migrationsFS embed.FS) ([]Migration
 	}
 	return statuses, nil
 }
+
+// StatusReadOnly is [Status] without any write: when schema_migrations does
+// not exist yet it reports every migration as pending instead of creating
+// the table, so it is safe against a database the caller must not alter.
+func StatusReadOnly(ctx context.Context, db *sql.DB, migrationsFS embed.FS) ([]MigrationStatus, error) {
+	var n int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'`).Scan(&n); err != nil {
+		return nil, fmt.Errorf("sqlite: look up schema_migrations: %w", err)
+	}
+	if n > 0 {
+		return Status(ctx, db, migrationsFS)
+	}
+	names, err := migrationNames(migrationsFS)
+	if err != nil {
+		return nil, err
+	}
+	statuses := make([]MigrationStatus, 0, len(names))
+	for _, name := range names {
+		statuses = append(statuses, MigrationStatus{Version: name})
+	}
+	return statuses, nil
+}

@@ -6,7 +6,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -22,6 +24,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/editorial"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/editoriallabelproposal"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/source"
+	"github.com/Mundo-Dolphins/phins-news-engine/domain/training"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/editorialmodel"
 	infrasqlite "github.com/Mundo-Dolphins/phins-news-engine/infra/sqlite"
@@ -93,10 +96,19 @@ func TestMetadata(t *testing.T) {
 		title       string
 	}
 	cases := map[string]want{
-		"train.analyze":  {action.KindRead, 2, false, false, "Analyze training signals"},
-		"train.run":      {action.KindDestructive, 1, true, true, "Run training pipeline"},
-		"train.promote":  {action.KindDestructive, 1, false, true, "Promote candidate model"},
-		"train.rollback": {action.KindDestructive, 1, false, true, "Roll back model"},
+		"train.analyze":          {action.KindRead, 2, false, false, "Analyze training signals"},
+		"train.run":              {action.KindDestructive, 1, true, true, "Run training pipeline"},
+		"train.promote":          {action.KindDestructive, 1, false, true, "Promote candidate model"},
+		"train.rollback":         {action.KindDestructive, 1, false, true, "Roll back model"},
+		"train.build":            {action.KindWrite, 1, false, false, "Build training dataset"},
+		"train.evaluate":         {action.KindWrite, 1, true, true, "Evaluate candidate models"},
+		"train.mine":             {action.KindWrite, 1, true, true, "Mine hard examples"},
+		"train.shadow_compare":   {action.KindWrite, 1, true, false, "Shadow-compare candidate model"},
+		"train.audit_dataset":    {action.KindWrite, 1, false, false, "Audit dataset"},
+		"train.audit_gates":      {action.KindWrite, 1, false, false, "Audit dataset against the gates"},
+		"train.recheck_corpus":   {action.KindRead, 2, false, false, "Recheck corpus against the dictionary"},
+		"train.backfill_rejects": {action.KindWrite, 1, false, true, "Backfill reject labels"},
+		"train.import_labels":    {action.KindWrite, 1, false, true, "Import labels"},
 	}
 	as := train.Actions()
 	if len(as) != len(cases) {
@@ -300,4 +312,239 @@ func TestRunDefaults(t *testing.T) {
 			t.Errorf("decoded %s missing %s", b, want)
 		}
 	}
+}
+
+func TestTrainBuildLocalOnly(t *testing.T) {
+	var r action.Registry
+	r.Add(train.Actions()...)
+	for _, a := range r.For(action.ModeProduction) {
+		switch a.Name {
+		case "train.build", "train.evaluate", "train.mine", "train.shadow_compare":
+			t.Errorf("%s is available in production mode", a.Name)
+		}
+	}
+	for _, name := range []string{"train.build", "train.evaluate", "train.mine", "train.shadow_compare"} {
+		if _, ok := r.Get(name); !ok {
+			t.Errorf("%s not registered", name)
+		}
+	}
+}
+
+func TestTrainEvaluateIsExclusiveJob(t *testing.T) {
+	var r action.Registry
+	r.Add(train.Actions()...)
+	a, ok := r.Get("train.evaluate")
+	if !ok || !a.LongRunning || !a.Exclusive {
+		t.Fatalf("train.evaluate = %+v, want LongRunning and Exclusive", a)
+	}
+}
+
+func TestBuildNeedsAutoLabelThreshold(t *testing.T) {
+	f := newFixture(t)
+	f.cfg.OfflineTraining.LLM.AutoLabelThreshold = 0
+	_, err := f.run("train.build", `{}`)
+	wantCode(t, err, action.CodeConflict)
+}
+
+func TestBuildNoExamplesIsError(t *testing.T) {
+	f := newFixture(t)
+	f.cfg.OfflineTraining.LLM.AutoLabelThreshold = 0.9
+	_, err := f.run("train.build", params(t, map[string]any{"out": filepath.Join(t.TempDir(), "d.yml")}))
+	if err == nil || !strings.Contains(err.Error(), "no Gold or Silver examples") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestBuildWritesDataset(t *testing.T) {
+	f := newFixture(t)
+	f.cfg.OfflineTraining.LLM.AutoLabelThreshold = 0.9
+	ctx := context.Background()
+	src := source.Source{ID: testsupport.MustID(t, source.TypeRSS, "feed-a"), Name: "Feed A", Type: source.TypeRSS}
+	if err := sqliteadapter.NewArticleRepository(f.db).Save(ctx, article.Article{
+		ID: "g1", OriginalURL: "https://example.com/g1", CanonicalURL: "https://example.com/g1",
+		Source: src, FetchedAt: now, PublishedAt: now, Status: article.StatusFetched, Title: "Team wins",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sqliteadapter.NewHumanLabelRepository(f.db).Label(ctx, training.Example{ArticleID: "g1", Label: "publish", LabeledAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "d.yml")
+	res, err := f.run("train.build", params(t, map[string]any{"out": out}))
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	want := "built 1 examples to " + out + " (1 gold, 0 silver; 0 dropped by --max-per-cluster)"
+	if res.Render != "text" || !strings.Contains(res.Text, want) {
+		t.Errorf("result = %+v, want text containing %q", res, want)
+	}
+}
+
+func TestEvaluateRequiresDataset(t *testing.T) {
+	f := newFixture(t)
+	_, err := f.run("train.evaluate", `{}`)
+	wantCode(t, err, action.CodeInvalidParams)
+}
+
+func TestEvaluateRendersTable(t *testing.T) {
+	f := newFixture(t)
+	var b strings.Builder
+	b.WriteString("examples:\n")
+	for i := 0; i < 15; i++ {
+		fmt.Fprintf(&b, "  - article_id: p%d\n    title: \"isotopes win big game article number %d\"\n    label: publish\n    published_at: 2026-01-01T00:00:00Z\n", i, i)
+		fmt.Fprintf(&b, "  - article_id: r%d\n    title: \"sponsored shop now huge discount deal number %d\"\n    label: reject\n    published_at: 2026-01-01T00:00:00Z\n", i, i)
+	}
+	dataset := filepath.Join(t.TempDir(), "d.yml")
+	if err := os.WriteFile(dataset, []byte(b.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outDir := t.TempDir()
+	res, err := f.run("train.evaluate", params(t, map[string]any{
+		"dataset": dataset, "out": outDir, "algorithm": []string{"naive_bayes"},
+		"accept_target_precision": 0.7, "reject_target_precision": 0.7, "cost_grid": "0.7,0.9",
+	}))
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if res.Render != "table" || len(res.Columns) != 9 || len(res.Rows) != 1 || res.Rows[0]["algorithm"] != "naive_bayes" {
+		t.Fatalf("result = %+v", res)
+	}
+	if !strings.Contains(res.Summary, "cost-grid") || !strings.Contains(res.Summary, "candidates written under "+outDir) {
+		t.Errorf("summary = %q", res.Summary)
+	}
+	if _, err := editorialmodel.Load(filepath.Join(outDir, "naive_bayes")); err != nil {
+		t.Errorf("candidate not written: %v", err)
+	}
+}
+
+func TestMineSkipsWithoutPromotedModel(t *testing.T) {
+	f := newFixture(t)
+	res, err := f.run("train.mine", `{}`)
+	if err != nil {
+		t.Fatalf("mine: %v", err)
+	}
+	if res.Render != "text" || res.Text == "" {
+		t.Errorf("result = %+v", res)
+	}
+}
+
+func TestShadowCompareValidation(t *testing.T) {
+	f := newFixture(t)
+	_, err := f.run("train.shadow_compare", `{}`)
+	wantCode(t, err, action.CodeInvalidParams)
+	_, err = f.run("train.shadow_compare", params(t, map[string]any{"candidate": "x", "days": 0}))
+	if err == nil || !strings.Contains(err.Error(), "--days must be positive") {
+		t.Fatalf("err = %v", err)
+	}
+	f.cfg.Model.Path = ""
+	_, err = f.run("train.shadow_compare", params(t, map[string]any{"candidate": "x"}))
+	wantCode(t, err, action.CodeConflict)
+}
+
+func TestImportLabelsNeedsASource(t *testing.T) {
+	f := newFixture(t)
+	_, err := f.run("train.import_labels", `{}`)
+	wantCode(t, err, action.CodeInvalidParams)
+}
+
+func TestImportLabelsFromDatasetRendersTally(t *testing.T) {
+	f := newFixture(t)
+	ds := filepath.Join(t.TempDir(), "ds.yml")
+	if err := editorialtrain.SaveDataset(ds, []editorialtrain.TrainingExample{
+		{ArticleID: "x", Label: "publish", LabelSource: "interactive_review", Title: "t", LabeledAt: now, FetchedAt: now},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	res, err := f.run("train.import_labels", params(t, map[string]any{"from_dataset": []string{ds}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Render != "table" || len(res.Rows) != 1 || res.Rows[0]["inserted"] != 1 || res.Rows[0]["path"] != ds {
+		t.Errorf("result = %+v", res)
+	}
+}
+
+func TestBackfillRejectsDryRun(t *testing.T) {
+	f := newFixture(t)
+	res, err := f.run("train.backfill_rejects", `{"dry_run": true}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "backfill-rejects: 0 candidate(s) found, 0 labeled, 0 skipped (already labeled) (dry-run=true)"
+	if res.Text != want || res.Summary != want {
+		t.Errorf("result = %+v", res)
+	}
+}
+
+func TestRecheckCorpusAvailableInProduction(t *testing.T) {
+	var r action.Registry
+	r.Add(train.Actions()...)
+	found := false
+	for _, a := range r.For(action.ModeProduction) {
+		switch a.Name {
+		case "train.recheck_corpus":
+			found = true
+		case "train.audit_dataset", "train.audit_gates", "train.backfill_rejects", "train.import_labels":
+			t.Errorf("%s is available in production mode", a.Name)
+		}
+	}
+	if !found {
+		t.Fatal("train.recheck_corpus must be available in production")
+	}
+
+	f := newFixture(t)
+	_, dictPath := testsupport.WriteFixtureWithDictionary(t)
+	repo := sqliteadapter.NewHumanLabelRepository(f.db)
+	for id, title := range map[string]string{"good": "Springfield Isotopes sign new linebacker", "stale": "Local weather forecast for the weekend"} {
+		if _, err := repo.ImportEditorialExample(context.Background(), training.EditorialExample{
+			ArticleID: id, Label: "publish", Source: "cli:label", Title: title, LabeledAt: now, FetchedAt: now}, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	count := func() (n int) {
+		if err := f.db.QueryRow(`SELECT COUNT(*) FROM editorial_examples`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	before := count()
+	res, err := f.run("train.recheck_corpus", params(t, map[string]any{"dictionary": dictPath}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Summary != "2 examined, 1 flagged" || len(res.Rows) != 1 || res.Rows[0]["article_id"] != "stale" {
+		t.Errorf("result = %+v", res)
+	}
+	if count() != before {
+		t.Error("recheck wrote to editorial_examples")
+	}
+}
+
+func TestAuditDatasetWritesCSVAndSummary(t *testing.T) {
+	f := newFixture(t)
+	dir := t.TempDir()
+	ds, out := filepath.Join(dir, "ds.yml"), filepath.Join(dir, "audit.csv")
+	if err := editorialtrain.SaveDataset(ds, []editorialtrain.TrainingExample{
+		{ArticleID: "r2", Title: "Weak reject", Label: "reject", LabelSource: "pipeline_backfill", SourceID: "rss:c"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	res, err := f.run("train.audit_dataset", params(t, map[string]any{"dataset": ds, "out": out}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "audited 1 eligible dataset row(s), excluding 0 official-source row(s); 1 candidate(s) written to " + out
+	if res.Summary != want || len(res.Rows) != 1 || res.Rows[0]["article_id"] != "r2" {
+		t.Errorf("result = %+v", res)
+	}
+	if _, err := os.Stat(out); err != nil {
+		t.Errorf("csv not written: %v", err)
+	}
+}
+
+func TestBuildNoExamplesIsConflict(t *testing.T) {
+	f := newFixture(t)
+	f.cfg.OfflineTraining.LLM.AutoLabelThreshold = 0.9
+	_, err := f.run("train.build", params(t, map[string]any{"out": filepath.Join(t.TempDir(), "d.yml")}))
+	wantCode(t, err, action.CodeConflict)
 }

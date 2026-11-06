@@ -40,6 +40,9 @@ type Env struct {
 	Log *slog.Logger
 	// Actor is "user:<name>" or "mcp".
 	Actor string
+	// StatsLogPath is the process log the host wants stats.report to scan
+	// when the caller gives no log_path.
+	StatsLogPath string
 }
 
 // Action is one admin operation.

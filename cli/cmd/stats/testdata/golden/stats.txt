@@ -1,0 +1,17 @@
+since=<TS> window=<H>h sources=2 analyzed=4 accepted=1 rejected=2 pending=1 reject_rate=0.500
+rejected by status:
+  rejected_quality         2
+rejected by reason:
+  editorial score below threshold          2
+top sources:
+  Feed A                         total=2     rejected=1
+  Feed B                         total=2     rejected=1
+telegram delivered_in_window=0
+telegram backlog (current, all-time):
+  pending            0
+  leased             0
+  sent_unconfirmed   0
+  retryable          0
+  quarantined        0
+  dead               0
+logs (<LOG>): cycles_run=1 fetched_sum=7 error_lines=1 last_cycle_at=<TS>

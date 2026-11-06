@@ -142,7 +142,7 @@ func (r *HumanLabelRepository) insertRevision(ctx context.Context, tx *sql.Tx, e
 		&publishedAt, &fetchedAt, &clusterID, &author, &externalID, &originalURL, &canonicalURL,
 		&classifierVersion, &dictionaryVersion)
 	if errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("sqlite: label %s: no such article", e.ArticleID)
+		return fmt.Errorf("sqlite: label %s: %w", e.ArticleID, training.ErrNoSuchArticle)
 	}
 	if err != nil {
 		return fmt.Errorf("sqlite: read article %s for label: %w", e.ArticleID, err)
@@ -358,7 +358,7 @@ func (r *HumanLabelRepository) ResolveConflict(ctx context.Context, articleID st
 			return fmt.Errorf("sqlite: mark conflicts resolved for %s: %w", articleID, err)
 		}
 		if n, _ := res.RowsAffected(); n == 0 {
-			return fmt.Errorf("sqlite: resolve conflict for %s: no unresolved conflict found", articleID)
+			return fmt.Errorf("sqlite: resolve conflict for %s: %w", articleID, training.ErrNoUnresolvedConflict)
 		}
 		// A conflict can outlive its article: migration 0026 detects
 		// ambiguity in editorial_examples independently of human_labels,
@@ -394,19 +394,19 @@ func (r *HumanLabelRepository) ResolveConflict(ctx context.Context, articleID st
 }
 
 // ImportOutcome is what ImportEditorialExample did with one snapshot.
-type ImportOutcome int
+type ImportOutcome = training.ImportOutcome
 
 const (
 	// ImportInserted: the article had no active label; the snapshot is now it.
-	ImportInserted ImportOutcome = iota
+	ImportInserted = training.ImportInserted
 	// ImportUnchanged: the active label already agrees; nothing written.
-	ImportUnchanged
+	ImportUnchanged = training.ImportUnchanged
 	// ImportConflict: an active label disagrees and override was false;
 	// nothing written.
-	ImportConflict
+	ImportConflict = training.ImportConflict
 	// ImportSuperseded: an active label disagreed and override was true; it
 	// was superseded (kept as history) by the snapshot's new revision.
-	ImportSuperseded
+	ImportSuperseded = training.ImportSuperseded
 )
 
 // ImportEditorialExample writes a previously captured label snapshot back

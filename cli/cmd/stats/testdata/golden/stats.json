@@ -1,0 +1,42 @@
+{
+  "since": "<TS>",
+  "window_hours": 24,
+  "sources_processed": 2,
+  "articles_analyzed": 4,
+  "articles_accepted": 1,
+  "articles_rejected": 2,
+  "articles_pending": 1,
+  "reject_rate": 0.5,
+  "rejected_by_status": {
+    "rejected_quality": 2
+  },
+  "rejected_by_reason": {
+    "editorial score below threshold": 2
+  },
+  "top_sources": [
+    {
+      "source": "Feed A",
+      "total": 2,
+      "rejected": 1
+    },
+    {
+      "source": "Feed B",
+      "total": 2,
+      "rejected": 1
+    }
+  ],
+  "telegram_delivered_in_window": 0,
+  "telegram_backlog": {
+    "dead": 0,
+    "leased": 0,
+    "pending": 0,
+    "quarantined": 0,
+    "retryable": 0,
+    "sent_unconfirmed": 0
+  },
+  "log_path": "<LOG>",
+  "log_cycles_run": 1,
+  "log_last_cycle_at": "<TS>",
+  "log_fetched_sum": 7,
+  "log_error_lines": 1
+}
