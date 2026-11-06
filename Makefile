@@ -9,7 +9,7 @@ RACE_FLAG ?= -race
 # golangci-lint version used by CI (.github/workflows/ci.yml).
 GOLANGCI_LINT_VERSION := v2.14.0
 
-.PHONY: help build vet test cover lint validate-config docs-check smoke release-script-test ci
+.PHONY: web-build web-check help build vet test cover lint validate-config docs-check smoke release-script-test ci
 
 help:
 	@echo "make build            Compile every package"
@@ -20,7 +20,15 @@ help:
 	@echo "make validate-config  Load every file in configs/example through the engine loaders"
 	@echo "make docs-check       Validate README.md and docs/ (links, paths, commands, YAML)"
 	@echo "make smoke            Build a throwaway host module against this library"
+	@echo "make web-build       Install deps and build the admin SPA into admin/web/dist"
+	@echo "make web-check       Rebuild the SPA and fail if admin/web/dist differs from the commit"
 	@echo "make ci               Everything CI runs (except the boundary check)"
+
+web-build:
+	cd admin/web && npm ci && npm run build
+
+web-check: web-build
+	git diff --exit-code admin/web/dist && test -z "$$(git status --porcelain admin/web/dist)"
 
 build:
 	go build ./...

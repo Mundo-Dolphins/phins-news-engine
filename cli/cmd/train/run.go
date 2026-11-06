@@ -3,92 +3,19 @@ package train
 import (
 	"database/sql"
 	"fmt"
-	"log"
-	"strings"
 	"time"
-	"unicode"
 
 	"github.com/spf13/cobra"
 
 	sqliteadapter "github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqlite"
-	"github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqliteeditoriallabelproposal"
-	"github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqlitereviewqueue"
-	"github.com/Mundo-Dolphins/phins-news-engine/app/editorialtrain"
-	"github.com/Mundo-Dolphins/phins-news-engine/app/retraintrigger"
 	"github.com/Mundo-Dolphins/phins-news-engine/app/trainrun"
 	"github.com/Mundo-Dolphins/phins-news-engine/cli/cmd/shared"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
-	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionaryfile"
-	"github.com/Mundo-Dolphins/phins-news-engine/infra/entitycatalog"
-	"github.com/Mundo-Dolphins/phins-news-engine/infra/llmclient"
 	infrasqlite "github.com/Mundo-Dolphins/phins-news-engine/infra/sqlite"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/trainwiring"
 	"github.com/Mundo-Dolphins/phins-news-engine/migrations"
 	"github.com/Mundo-Dolphins/phins-news-engine/ports/out"
 )
-
-// retrainTriggerConfigFrom converts config.RetrainTriggersConfig into
-// retraintrigger.Config -- the cmd layer's job
-// (application packages never import infrastructure/config). Excludes
-// AutoEnabled deliberately: that field is checked directly against
-// cfg.OfflineTraining.RetrainTriggers below, before Evaluate is ever
-// called.
-func retrainTriggerConfigFrom(c config.RetrainTriggersConfig) retraintrigger.Config {
-	return retraintrigger.Config{
-		MinNewGoldExamples: c.MinNewGoldExamples, MinNewSilverExamples: c.MinNewSilverExamples,
-		MaxDisagreementRate: c.MaxDisagreementRate, MaxManualErrorRate: c.MaxManualErrorRate,
-		NovelVocabularyThreshold: c.NovelVocabularyThreshold, MinHardExampleCount: c.MinHardExampleCount,
-	}
-}
-
-// knownTermsFrom builds the lowercase word set trainmine.UnknownTerms
-// treats as "already known": every canonical name/alias in the
-// classification dictionary (cfg.Dictionary.Path) plus every canonical
-// name/term in the entity catalog (cfg.Clustering.EntityCatalog), each
-// split into individual words the same way UnknownTerms tokenizes
-// titles. A load failure on either source logs a warning and
-// contributes nothing from that source -- this is a best-effort report
-// nudge, never something train run should abort
-// a promotion run over.
-func knownTermsFrom(cfg *config.Config) map[string]bool {
-	known := map[string]bool{}
-	addWords := func(phrase string) {
-		for _, w := range strings.FieldsFunc(phrase, func(r rune) bool { return !unicode.IsLetter(r) }) {
-			known[strings.ToLower(w)] = true
-		}
-	}
-
-	if cfg.Dictionary.Path != "" {
-		dict, err := dictionaryfile.Load(cfg.Dictionary.Path)
-		if err != nil {
-			log.Printf("train run: load dictionary %s for known-terms nudge: %v (continuing without it)", cfg.Dictionary.Path, err)
-		} else {
-			for _, cat := range dict.Categories {
-				for _, e := range cat.Entries {
-					addWords(e.CanonicalName)
-					for _, alias := range e.Aliases {
-						addWords(alias)
-					}
-				}
-			}
-		}
-	}
-
-	if cfg.Clustering.EntityCatalog.ManualPath != "" && cfg.Clustering.EntityCatalog.GeneratedPath != "" {
-		entities, err := entitycatalog.Load(cfg.Clustering.EntityCatalog.ManualPath, cfg.Clustering.EntityCatalog.GeneratedPath)
-		if err != nil {
-			log.Printf("train run: load entity catalog for known-terms nudge: %v (continuing without it)", err)
-		} else {
-			for _, e := range entities {
-				addWords(e.CanonicalName)
-				for _, term := range e.Terms {
-					addWords(term)
-				}
-			}
-		}
-	}
-
-	return known
-}
 
 // newRunCommand builds `train run`, the full-workflow orchestrator
 // (#253 part 22): build -> analyze -> evaluate -> promote, aborting
@@ -147,64 +74,29 @@ func newRunCommand() *cobra.Command {
 				archivedLabels = append(archivedLabels, sqliteadapter.NewHumanLabelRepository(archive))
 			}
 
-			trustedSourceIDs := make(map[string]bool, len(cfg.Classification.TrustedSourceIDs))
-			for _, id := range cfg.Classification.TrustedSourceIDs {
-				trustedSourceIDs[id] = true
-			}
-
-			deps := trainrun.Deps{
-				Registry:       sqliteadapter.NewModelRegistryRepository(db),
-				RunRepo:        sqliteadapter.NewTrainingRunRepository(db),
-				UOW:            sqliteadapter.NewUnitOfWork(db),
-				Labels:         sqliteadapter.NewHumanLabelRepository(db),
-				Articles:       sqliteadapter.NewArticleRepository(db),
-				Proposals:      sqliteeditoriallabelproposal.NewEditorialLabelProposalRepository(db),
-				Queue:          sqlitereviewqueue.NewReviewQueueRepository(db),
-				ArchivedLabels: archivedLabels,
-			}
-			deps.LLM = llmclient.New(shared.OfflineTrainingLLMClientConfig(cfg.OfflineTraining.LLM))
-			deps.HardExamples = sqliteadapter.NewHardExampleRepository(db)
-			trainCfg, err := shared.EditorialTrainConfig(cfg, fmt.Sprintf("fs-%d", time.Now().UTC().UnixNano()))
+			deps := trainwiring.RunDeps(db, cfg, archivedLabels)
+			now := time.Now().UTC()
+			opts, err := trainwiring.RunOptions(cfg, trainwiring.RunFlags{
+				DatasetPath: datasetPath, CandidatesDir: candidatesDir, MaxPerCluster: maxPerCluster,
+				Force: force, Auto: auto,
+			}, now)
 			if err != nil {
 				return err
 			}
-			// The teacher is deliberately offline-only. Its output may
-			// improve this candidate dataset, but the production model
-			// remains Naive Bayes.
-			trainCfg.Algorithms = []string{"naive_bayes"}
-			opts := trainrun.Options{
-				DatasetPath: datasetPath, MaxPerCluster: maxPerCluster, CandidatesDir: candidatesDir,
-				ModelPath: cfg.Model.Path, TrustedSourceIDs: trustedSourceIDs,
-				AutoLabelThreshold: cfg.OfflineTraining.LLM.AutoLabelThreshold,
-				TrainCfg:           trainCfg,
-				GateCfg: editorialtrain.GateConfig{
-					MinPrecision: cfg.EditorialGates.MinPrecision, MaxRecallRegression: cfg.EditorialGates.MaxRecallRegression,
-					MinRegressionBaselineExamples: cfg.EditorialGates.MinRegressionBaselineExamples,
-					MinPRAUC:                      cfg.EditorialGates.MinPRAUC, MaxFalsePositiveRate: cfg.EditorialGates.MaxFalsePositiveRate,
-					MinPerSourcePrecision: cfg.EditorialGates.MinPerSourcePrecision, MinSourceExamples: cfg.EditorialGates.MinSourceExamples,
-					ExcludedSources:      cfg.EditorialGates.ExcludedSources,
-					MaxArtifactSizeBytes: cfg.EditorialGates.MaxArtifactSizeBytes, MaxInferenceNanos: cfg.EditorialGates.MaxInferenceNanos,
-				},
-				PromotionCfg: promotionCriteriaFrom(cfg.OfflineTraining.Promotion),
-				Force:        force, Auto: auto,
-				MiningBatchLimit: cfg.OfflineTraining.Mining.BatchLimit, MiningMinNBConfidence: cfg.OfflineTraining.Mining.MinNBConfidence,
-				KnownTerms: knownTermsFrom(cfg),
-			}
 
 			if auto {
-				signals, err := trainrun.GatherAutoSignals(cmd.Context(), deps, opts)
+				triggered, reasons, err := trainwiring.EvaluateAuto(cmd.Context(), deps, opts, cfg)
 				if err != nil {
 					return err
 				}
-				result := retraintrigger.Evaluate(retrainTriggerConfigFrom(cfg.OfflineTraining.RetrainTriggers), signals)
-				if !result.Triggered {
+				if !triggered {
 					cmd.Println("no retrain triggered: no configured criteria were met")
 					return nil
 				}
-				opts.TriggerReasons = result.Reasons
+				opts.TriggerReasons = reasons
 			}
 
-			outcome, err := trainrun.Run(cmd.Context(), deps, opts, time.Now().UTC())
+			outcome, err := trainrun.Run(cmd.Context(), deps, opts, now)
 			if err != nil {
 				return err
 			}

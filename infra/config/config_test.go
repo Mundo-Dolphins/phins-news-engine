@@ -2240,6 +2240,13 @@ func TestConfig_Redacted_CoversEverySecretField(t *testing.T) {
 	}
 }
 
+// nonSecretEnvFields are env-only (yaml:"-") settings that are not secrets,
+// so Redacted() rightly leaves them alone.
+var nonSecretEnvFields = map[string]bool{
+	"Admin.Username": true, "Admin.DBPath": true,
+	"Admin.ListenAddrs": true, "Admin.AllowedCIDRs": true,
+}
+
 // collectYAMLDashFieldPaths recursively walks typ's fields (including
 // nested structs) and returns the dotted path of every field tagged
 // yaml:"-" — the secret fields Redacted() must mask.
@@ -2253,7 +2260,13 @@ func collectYAMLDashFieldPaths(t *testing.T, typ reflect.Type, prefix string) []
 			name = prefix + "." + name
 		}
 		if f.Tag.Get("yaml") == "-" {
-			paths = append(paths, name)
+			switch {
+			case f.Type.Kind() == reflect.Struct:
+				// Env-only section (Config.Admin): its leaves are the secrets.
+				paths = append(paths, collectYAMLDashFieldPaths(t, f.Type, name)...)
+			case !nonSecretEnvFields[name]:
+				paths = append(paths, name)
+			}
 			continue
 		}
 		if f.Type.Kind() == reflect.Struct {

@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 
 	sqliteadapter "github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqlite"
+	"github.com/Mundo-Dolphins/phins-news-engine/app/eventclaims"
 	"github.com/Mundo-Dolphins/phins-news-engine/cli/cmd/shared"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/clock"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
@@ -54,18 +55,6 @@ func openStore(ctx context.Context) (*sql.DB, *sqliteadapter.EventClaimRepositor
 	return db, sqliteadapter.NewEventClaimRepository(db), nil
 }
 
-// parseSince accepts a Go duration ("24h": that long ago) or a date
-// ("2026-11-01", UTC midnight).
-func parseSince(s string, now time.Time) (time.Time, error) {
-	if d, err := time.ParseDuration(s); err == nil {
-		return now.Add(-d), nil
-	}
-	if t, err := time.Parse("2006-01-02", s); err == nil {
-		return t, nil
-	}
-	return time.Time{}, fmt.Errorf("invalid --since %q: want a duration like 24h or a date like 2026-11-01", s)
-}
-
 func summarize(data json.RawMessage) string {
 	var buf strings.Builder
 	buf.Grow(len(data))
@@ -93,15 +82,6 @@ func outboxSummary(rows []appout.EventClaimOutboxRow) string {
 	return strings.Join(parts, ",")
 }
 
-func lastError(rows []appout.EventClaimOutboxRow) string {
-	for i := len(rows) - 1; i >= 0; i-- {
-		if rows[i].LastError != "" {
-			return rows[i].LastError
-		}
-	}
-	return "-"
-}
-
 func newListCommand() *cobra.Command {
 	var handler, state, since string
 	cmd := &cobra.Command{
@@ -115,7 +95,7 @@ func newListCommand() *cobra.Command {
 			}
 			var sinceTime time.Time
 			if since != "" {
-				t, err := parseSince(since, clock.Real{}.Now())
+				t, err := eventclaims.ParseSince(since, clock.Real{}.Now())
 				if err != nil {
 					return fmt.Errorf("event claims list: %w", err)
 				}
@@ -126,28 +106,23 @@ func newListCommand() *cobra.Command {
 				return err
 			}
 			defer db.Close()
-			claims, err := repo.List(cmd.Context(), filter)
+			views, err := eventclaims.List(cmd.Context(), repo, filter, sinceTime)
 			if err != nil {
 				return err
 			}
-			printed := 0
-			for _, c := range claims {
-				if !sinceTime.IsZero() && c.CreatedAt.Before(sinceTime) {
-					continue
-				}
-				rows, err := repo.OutboxRows(cmd.Context(), c.ArticleID)
-				if err != nil {
-					return err
-				}
-				article := c.ArticleID
+			for _, v := range views {
+				article := v.ArticleID
 				if article == "" {
 					article = "-"
 				}
+				lastErr := v.LastError
+				if lastErr == "" {
+					lastErr = "-"
+				}
 				cmd.Printf("handler=%s key=%s state=%s article=%s outbox=%s data=%s last_error=%s\n",
-					c.Handler, c.Key, c.State, article, outboxSummary(rows), summarize(c.Data), lastError(rows))
-				printed++
+					v.Handler, v.Key, v.State, article, outboxSummary(v.Outbox), summarize(v.Data), lastErr)
 			}
-			cmd.Printf("%d claim(s)\n", printed)
+			cmd.Printf("%d claim(s)\n", len(views))
 			return nil
 		},
 	}
@@ -168,14 +143,10 @@ func newShowCommand() *cobra.Command {
 				return err
 			}
 			defer db.Close()
-			claim, found, err := repo.Get(cmd.Context(), args[0], args[1])
-			if err != nil {
-				return err
+			claim, err := eventclaims.Show(cmd.Context(), repo, args[0], args[1])
+			if errors.Is(err, appout.ErrEventClaimNotFound) {
+				return fmt.Errorf("event claims show: %w", err)
 			}
-			if !found {
-				return fmt.Errorf("event claims show: %w: %s/%s", appout.ErrEventClaimNotFound, args[0], args[1])
-			}
-			rows, err := repo.OutboxRows(cmd.Context(), claim.ArticleID)
 			if err != nil {
 				return err
 			}
@@ -195,7 +166,7 @@ func newShowCommand() *cobra.Command {
 				Data      json.RawMessage `json:"data"`
 				Outbox    []outboxJSON    `json:"outbox"`
 			}{claim.Handler, claim.Key, string(claim.State), claim.ArticleID, claim.CreatedAt, claim.UpdatedAt, claim.Data, []outboxJSON{}}
-			for _, r := range rows {
+			for _, r := range claim.Outbox {
 				out.Outbox = append(out.Outbox, outboxJSON{r.Destination, r.Status, r.Attempts, r.LastError})
 			}
 			enc := json.NewEncoder(cmd.OutOrStdout())
@@ -251,32 +222,9 @@ func retryError(handler, key string, err error) error {
 
 // dryRunRetry applies the same checks as RetryFailed, read-only.
 func dryRunRetry(cmd *cobra.Command, repo *sqliteadapter.EventClaimRepository, handler, key string) error {
-	claim, found, err := repo.Get(cmd.Context(), handler, key)
+	dead, err := eventclaims.CheckRetry(cmd.Context(), repo, handler, key)
 	if err != nil {
-		return err
-	}
-	if !found {
-		return retryError(handler, key, appout.ErrEventClaimNotFound)
-	}
-	if claim.State != appout.EventClaimFailed {
-		return retryError(handler, key, appout.ErrEventClaimNotFailed)
-	}
-	rows, err := repo.OutboxRows(cmd.Context(), claim.ArticleID)
-	if err != nil {
-		return err
-	}
-	dead := 0
-	for _, r := range rows {
-		switch r.Status {
-		case "dead":
-			dead++
-		case "delivered":
-		default:
-			return retryError(handler, key, appout.ErrEventClaimInFlight)
-		}
-	}
-	if dead == 0 {
-		return retryError(handler, key, appout.ErrEventClaimNothingToRetry)
+		return retryError(handler, key, err)
 	}
 	cmd.Printf("dry run: would re-enqueue %d outbox row(s) of %s/%s and set the claim to claimed\n", dead, handler, key)
 	return nil

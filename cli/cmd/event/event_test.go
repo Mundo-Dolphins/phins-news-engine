@@ -18,6 +18,8 @@ import (
 type fixture struct {
 	config string
 	dbPath string
+	// now is the claim creation time; zero means time.Now().
+	now time.Time
 }
 
 func newFixture(t *testing.T) fixture {
@@ -36,7 +38,10 @@ func (f fixture) seed(t *testing.T, key, state, articleID string, outboxStatuses
 		t.Fatalf("open db: %v", err)
 	}
 	defer db.Close()
-	now := time.Now()
+	now := f.now
+	if now.IsZero() {
+		now = time.Now()
+	}
 	src := source.Source{ID: testsupport.MustID(t, source.TypeRSS, "feed-a"), Name: "Feed A", Type: source.TypeRSS}
 	if err := sqliteadapter.NewArticleRepository(db).Save(ctx, article.Article{
 		ID: articleID, OriginalURL: "https://example.com/" + articleID, CanonicalURL: "https://example.com/" + articleID,

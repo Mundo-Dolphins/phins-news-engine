@@ -99,6 +99,28 @@ clear error when nothing is registered.
 | Storage | `adapters/outbound/sqlite` and the `sqlite*` proposal and cache adapters, `infra/sqlite`, `migrations` |
 | Knowledge (tools only) | `infra/wikidata`, `app/knowledgecache`, `domain/entityidentity`, `app/entitydiscovery` |
 
+## Admin panel
+
+Package `admin` is a second inbound surface next to the scheduler: a web
+panel and an MCP endpoint over operator actions, run by the host's
+`phins-news-admin` binary through `admin.Run` ([ADR 0039](adr/0039-admin-panel.md)).
+A host adds its own actions with `admin.Add` before `Run`.
+
+| Piece | Package |
+|---|---|
+| Typed actions, one definition for REST, MCP and the form | `admin/action`, `admin/actions/claims`, `admin/actions/train` |
+| Jobs, logs, audit and sessions in `admin.db` | `admin/store`, `admin/jobs` |
+| Login, session cookie, LAN allow-list, bearer token | `admin/auth` |
+| REST API, SSE job events, embedded SPA | `admin/httpapi`, `admin/web` |
+| MCP tools | `admin/mcpserver` |
+
+The mode follows the profile: `production` offers reads plus claims retry and
+release; any other profile is `local` and offers every action. In production
+the admin never migrates the operational DB: if its schema is ahead of or
+behind the binary, write actions answer `503 schema_mismatch` and reads keep
+working. The admin opens the operational DB with `BEGIN IMMEDIATE`
+transactions so it waits for the bot's writes rather than failing.
+
 ## Guard rails in tests
 
 - `engine` has a dependency test that fails if the service depends on the
