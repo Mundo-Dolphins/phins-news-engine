@@ -20,6 +20,7 @@ import (
 
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/action"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/claims"
+	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/label"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/outbox"
 	sqliteactions "github.com/Mundo-Dolphins/phins-news-engine/admin/actions/sqlite"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/stats"
@@ -49,6 +50,7 @@ var registry = &action.Registry{}
 
 func init() {
 	registry.Add(claims.Actions()...)
+	registry.Add(label.Actions()...)
 	registry.Add(outbox.Actions()...)
 	registry.Add(stats.Actions()...)
 	registry.Add(sqliteactions.Actions()...)
