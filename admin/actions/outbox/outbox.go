@@ -187,6 +187,9 @@ func runInspect(ctx context.Context, env action.Env, params any) (action.Result,
 	if !ok {
 		return action.Result{}, errBadParams
 	}
+	if p.Limit <= 0 {
+		return action.Result{}, badParam("limit must be positive")
+	}
 	repo := sqliteadapter.NewOutboxRepository(env.DB)
 	var (
 		items []appout.OutboxItem
@@ -313,11 +316,22 @@ func runExpire(ctx context.Context, env action.Env, params any) (action.Result, 
 	if len(preview.Candidates) > 0 {
 		applied, err = uc.Apply(ctx, preview.Candidates, p.Reason)
 		if err != nil {
-			return action.Result{}, err
+			return action.Result{}, expireApplyError(err)
 		}
 	}
 	env.Log.Warn("outbox publications expired", "applied", applied, "reason", p.Reason, "by", env.Actor)
 	return action.Result{Render: "text", Text: fmt.Sprintf("applied=%d reason_code=%s", applied, usecase.OutboxExpiredReasonCode)}, nil
+}
+
+// expireApplyError maps the race where a candidate was leased between the
+// preview and the apply to a conflict the operator can act on; other errors
+// pass through unchanged.
+func expireApplyError(err error) error {
+	if errors.Is(err, appout.ErrNotExpirable) {
+		return &action.Error{Code: action.CodeConflict, Err: err,
+			Message: "a publication changed state since the preview (it was leased or sent); re-run outbox.expire_preview and try again"}
+	}
+	return err
 }
 
 func runRepair(ctx context.Context, env action.Env, params any) (action.Result, error) {

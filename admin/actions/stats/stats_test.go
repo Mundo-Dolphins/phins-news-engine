@@ -84,3 +84,15 @@ func TestStatsMetadata(t *testing.T) {
 		t.Fatalf("actions = %+v", as)
 	}
 }
+
+func TestStatsProductionRejectsOtherLogPath(t *testing.T) {
+	hostLog := filepath.Join(t.TempDir(), "host.log")
+	_, err := run(t, hostLog, `{"log_path":"`+filepath.Join(t.TempDir(), "other.log")+`"}`)
+	var ae *action.Error
+	if !errors.As(err, &ae) || ae.Code != action.CodeInvalidParams || !strings.Contains(ae.Message, "log_path") {
+		t.Fatalf("err = %v, want invalid params naming log_path", err)
+	}
+	if _, err := run(t, hostLog, `{"log_path":"`+hostLog+`"}`); err != nil {
+		t.Errorf("same path should be allowed: %v", err)
+	}
+}

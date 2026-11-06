@@ -105,12 +105,17 @@ func TestEvaluateBadCostGrid(t *testing.T) {
 	if err := os.WriteFile(dataset, []byte(b.String()), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	outDir := t.TempDir()
 	_, err := trainwiring.Evaluate(context.Background(), db, cfg, trainwiring.EvaluateFlags{
-		DatasetPath: dataset, OutDir: t.TempDir(), Algorithms: []string{"naive_bayes"}, Seed: 42,
+		DatasetPath: dataset, OutDir: outDir, Algorithms: []string{"naive_bayes"}, Seed: 42,
 		AcceptTargetPrecision: 0.7, RejectTargetPrecision: 0.7, NearDupThreshold: 0.8, CostGrid: "0.7,abc",
 	}, opsNow)
 	if err == nil || !strings.Contains(err.Error(), `train evaluate: invalid --cost-grid value "abc"`) {
 		t.Fatalf("err = %v", err)
+	}
+	// The grid is validated before any candidate is trained or registered.
+	if entries, _ := os.ReadDir(outDir); len(entries) != 0 {
+		t.Errorf("out dir has %d entries, want none", len(entries))
 	}
 }
 

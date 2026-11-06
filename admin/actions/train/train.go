@@ -308,6 +308,9 @@ func runBuild(ctx context.Context, env action.Env, params any) (action.Result, e
 	}
 	report, err := trainwiring.BuildDataset(ctx, env.DB, env.Config,
 		trainwiring.BuildFlags{OutPath: p.Out, MaxPerCluster: p.MaxPerCluster, IncludeDB: p.IncludeDB}, env.Now().UTC())
+	if errors.Is(err, trainwiring.ErrNoExamples) {
+		return action.Result{}, action.Conflict(err)
+	}
 	if err != nil {
 		return action.Result{}, err
 	}

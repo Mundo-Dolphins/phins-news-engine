@@ -1,6 +1,7 @@
 // Package humanlabels holds the human-label operations shared by the
 // `label` CLI commands and the admin label actions: setting (or relabeling)
-// an article's label, resolving a legacy conflict and reading history.
+// an article's label, resolving a legacy conflict, reading history,
+// backfilling labels and importing them from a dataset.
 package humanlabels
 
 import (

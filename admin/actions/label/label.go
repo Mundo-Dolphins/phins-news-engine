@@ -91,7 +91,11 @@ func runSet(ctx context.Context, env action.Env, params any) (action.Result, err
 	out, warning, err := humanlabels.Set(ctx, sqliteadapter.NewHumanLabelRepository(env.DB), sqliteadapter.NewHardExampleRepository(env.DB),
 		example(env, p, "admin:label"))
 	if errors.Is(err, humanlabels.ErrUnresolvedConflict) {
-		return action.Result{}, action.Conflict(fmt.Errorf("%s has an unresolved legacy label conflict; use label.resolve_conflict instead of label.set: %w", p.ArticleID, err))
+		return action.Result{}, &action.Error{Code: action.CodeConflict, Err: err,
+			Message: p.ArticleID + " has an unresolved legacy label conflict; use label.resolve_conflict"}
+	}
+	if errors.Is(err, training.ErrNoSuchArticle) {
+		return action.Result{}, action.NotFound(err)
 	}
 	if err != nil {
 		return action.Result{}, err
@@ -118,8 +122,9 @@ func runResolve(ctx context.Context, env action.Env, params any) (action.Result,
 	warning, err := humanlabels.ResolveConflict(ctx, sqliteadapter.NewHumanLabelRepository(env.DB), sqliteadapter.NewHardExampleRepository(env.DB),
 		example(env, p, "admin:label-resolve-conflict"))
 	if err != nil {
-		// The repository returns an untyped error when the article has no
-		// unresolved conflict, so it surfaces as an internal error.
+		if errors.Is(err, training.ErrNoUnresolvedConflict) || errors.Is(err, training.ErrNoSuchArticle) {
+			return action.Result{}, action.NotFound(err)
+		}
 		return action.Result{}, err
 	}
 	if warning != nil {

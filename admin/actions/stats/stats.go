@@ -42,6 +42,9 @@ func runReport(ctx context.Context, env action.Env, params any) (action.Result, 
 	if err != nil {
 		return action.Result{}, err
 	}
+	if env.Mode == action.ModeProduction && p.LogPath != "" && p.LogPath != env.StatsLogPath {
+		return action.Result{}, &action.Error{Code: action.CodeInvalidParams, Message: "log_path cannot be changed in production"}
+	}
 	logPath := p.LogPath
 	if logPath == "" {
 		logPath = env.StatsLogPath

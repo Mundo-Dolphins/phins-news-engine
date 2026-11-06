@@ -142,7 +142,7 @@ func (r *HumanLabelRepository) insertRevision(ctx context.Context, tx *sql.Tx, e
 		&publishedAt, &fetchedAt, &clusterID, &author, &externalID, &originalURL, &canonicalURL,
 		&classifierVersion, &dictionaryVersion)
 	if errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("sqlite: label %s: no such article", e.ArticleID)
+		return fmt.Errorf("sqlite: label %s: %w", e.ArticleID, training.ErrNoSuchArticle)
 	}
 	if err != nil {
 		return fmt.Errorf("sqlite: read article %s for label: %w", e.ArticleID, err)
@@ -358,7 +358,7 @@ func (r *HumanLabelRepository) ResolveConflict(ctx context.Context, articleID st
 			return fmt.Errorf("sqlite: mark conflicts resolved for %s: %w", articleID, err)
 		}
 		if n, _ := res.RowsAffected(); n == 0 {
-			return fmt.Errorf("sqlite: resolve conflict for %s: no unresolved conflict found", articleID)
+			return fmt.Errorf("sqlite: resolve conflict for %s: %w", articleID, training.ErrNoUnresolvedConflict)
 		}
 		// A conflict can outlive its article: migration 0026 detects
 		// ambiguity in editorial_examples independently of human_labels,

@@ -231,3 +231,9 @@ func TestSimulateNoDecisions(t *testing.T) {
 		t.Fatalf("res = %+v", res)
 	}
 }
+
+func TestSimulateUnknownArticleIsNotFound(t *testing.T) {
+	f := newFixture(t)
+	_, err := f.run("source_policy.simulate", `{"article_id":"nope"}`)
+	_ = wantCode(t, err, action.CodeNotFound)
+}

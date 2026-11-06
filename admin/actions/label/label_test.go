@@ -130,3 +130,27 @@ func TestLabelSetRejectsBadLabel(t *testing.T) {
 	_, err := f.run("label.set", `{"article_id":"a1","label":"maybe"}`)
 	wantCode(t, err, action.CodeInvalidParams)
 }
+
+func TestLabelSetUnknownArticleIsNotFound(t *testing.T) {
+	f := newFixture(t)
+	_, err := f.run("label.set", `{"article_id":"nope","label":"publish"}`)
+	wantCode(t, err, action.CodeNotFound)
+}
+
+func TestResolveWithoutConflictIsNotFound(t *testing.T) {
+	f := newFixture(t)
+	_, err := f.run("label.resolve_conflict", `{"article_id":"a1","label":"reject"}`)
+	wantCode(t, err, action.CodeNotFound)
+}
+
+func TestLabelSetConflictMessageIsOperatorFacing(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.db.Exec(`INSERT INTO human_label_conflicts (table_name, article_id, detail, detected_at) VALUES ('human_labels', 'a1', 'x', ?)`, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	_, err := f.run("label.set", `{"article_id":"a1","label":"publish"}`)
+	var ae *action.Error
+	if !errors.As(err, &ae) || ae.Message != "a1 has an unresolved legacy label conflict; use label.resolve_conflict" {
+		t.Fatalf("err = %v", err)
+	}
+}

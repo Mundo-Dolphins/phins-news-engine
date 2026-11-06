@@ -282,3 +282,8 @@ func TestBadDuration(t *testing.T) {
 }
 
 func itoa(i int64) string { b, _ := json.Marshal(i); return string(b) }
+
+func TestInspectRejectsNonPositiveLimit(t *testing.T) {
+	_, err := newFixture(t).run("outbox.inspect", `{"status":"quarantined","limit":0}`)
+	wantCode(t, err, action.CodeInvalidParams)
+}

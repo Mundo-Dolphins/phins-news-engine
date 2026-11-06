@@ -7,6 +7,7 @@ package sourcepolicy
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"time"
@@ -173,8 +174,9 @@ func runSimulate(ctx context.Context, env action.Env, params any) (action.Result
 		return action.Result{}, errBadParams
 	}
 	sim, err := usecase.SimulateSourcePolicy(ctx, sqliteadapter.NewSourcePolicyRepository(env.DB), sqliteadapter.NewArticleRepository(env.DB), p.ArticleID)
-	// The sqlite article repository returns an untyped error for an unknown
-	// article (not article.ErrNotFound), so it surfaces as an internal error.
+	if errors.Is(err, sql.ErrNoRows) {
+		return action.Result{}, action.NotFound(err)
+	}
 	if err != nil {
 		return action.Result{}, err
 	}

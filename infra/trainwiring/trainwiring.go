@@ -387,6 +387,10 @@ type BuildFlags struct {
 	IncludeDB     []string
 }
 
+// ErrNoExamples is returned by [BuildDataset] when neither Gold nor Silver
+// examples exist yet.
+var ErrNoExamples = errors.New("editorialtrain: no Gold or Silver examples found — use `label` to add Gold examples, or `editorial classify` to generate Silver proposals, first")
+
 // BuildReport describes the dataset BuildDataset wrote.
 type BuildReport struct {
 	OutPath             string
@@ -448,7 +452,7 @@ func BuildDataset(ctx context.Context, db *sql.DB, cfg *config.Config, f BuildFl
 
 	examples := editorialtrain.CapPerCluster(append(gold, silver...), f.MaxPerCluster)
 	if len(examples) == 0 {
-		return BuildReport{}, fmt.Errorf("editorialtrain: no Gold or Silver examples found — use `label` to add Gold examples, or `editorial classify` to generate Silver proposals, first")
+		return BuildReport{}, ErrNoExamples
 	}
 	if err := editorialtrain.SaveDataset(f.OutPath, examples); err != nil {
 		return BuildReport{}, err
@@ -533,6 +537,18 @@ func Evaluate(ctx context.Context, db *sql.DB, cfg *config.Config, f EvaluateFla
 	}
 	report.Promoted = promoted
 
+	// Validate the cost-grid inputs before the (slow, registering) run so a
+	// bad grid fails without side effects.
+	var gridValues []float64
+	if f.CostGrid != "" {
+		if cfg.EditorialCosts.FalsePublishCost <= 0 && cfg.EditorialCosts.MissedNewsCost <= 0 {
+			return report, fmt.Errorf("train evaluate: --cost-grid requires editorial_costs to be configured in settings (false_publish_cost and missed_news_cost are both <= 0)")
+		}
+		if gridValues, err = parseCostGrid(f.CostGrid); err != nil {
+			return report, err
+		}
+	}
+
 	registry := sqliteadapter.NewModelRegistryRepository(db)
 	results, err := modeltraining.RunAndRegister(ctx, modeltraining.Deps{Registry: registry}, dataset, trainCfg, f.OutDir, gateCfg, promoted)
 	if err != nil {
@@ -543,13 +559,7 @@ func Evaluate(ctx context.Context, db *sql.DB, cfg *config.Config, f EvaluateFla
 	if f.CostGrid == "" {
 		return report, nil
 	}
-	if cfg.EditorialCosts.FalsePublishCost <= 0 && cfg.EditorialCosts.MissedNewsCost <= 0 {
-		return report, fmt.Errorf("train evaluate: --cost-grid requires editorial_costs to be configured in settings (false_publish_cost and missed_news_cost are both <= 0)")
-	}
-	values, err := parseCostGrid(f.CostGrid)
-	if err != nil {
-		return report, err
-	}
+	values := gridValues
 	_, validate, _ := editorialtrain.SplitForTraining(dataset, trainCfg)
 	costs := editorialtrain.CostConfig{FalsePublishCost: cfg.EditorialCosts.FalsePublishCost, MissedNewsCost: cfg.EditorialCosts.MissedNewsCost}
 	for _, r := range results {

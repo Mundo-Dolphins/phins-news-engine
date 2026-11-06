@@ -541,3 +541,10 @@ func TestAuditDatasetWritesCSVAndSummary(t *testing.T) {
 		t.Errorf("csv not written: %v", err)
 	}
 }
+
+func TestBuildNoExamplesIsConflict(t *testing.T) {
+	f := newFixture(t)
+	f.cfg.OfflineTraining.LLM.AutoLabelThreshold = 0.9
+	_, err := f.run("train.build", params(t, map[string]any{"out": filepath.Join(t.TempDir(), "d.yml")}))
+	wantCode(t, err, action.CodeConflict)
+}
