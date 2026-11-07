@@ -443,6 +443,8 @@ func (r *OutboxRepository) MarkRetryable(ctx context.Context, id int64, errMsg s
 	if dead {
 		status = "dead"
 	}
+	// thread_progress is kept on purpose: a retry resumes the thread after
+	// the parts already posted instead of re-posting them.
 	_, err := executor(ctx, r.db).ExecContext(ctx, `
 		UPDATE publication_outbox
 		SET status = ?, available_at = ?, attempt_count = attempt_count + 1, last_error = ?,
@@ -568,6 +570,8 @@ func (r *OutboxRepository) Repair(ctx context.Context, id int64, articleID strin
 			WHERE id = ? AND article_id = ? AND status IN ('sent_unconfirmed', 'quarantined')
 			`, reason, sqliteTime(now), id, articleID)
 	case publishing.RepairRetry:
+		// thread_progress is kept on purpose, as in MarkRetryable: the
+		// retry resumes the thread instead of re-posting its posted parts.
 		result, err = executor(ctx, r.db).ExecContext(ctx, `
 			UPDATE publication_outbox SET status = 'retryable', available_at = ?, last_error = ?,
 				sent_message_id = '', ambiguous_reason = '', quarantined_at = NULL, updated_at = ?

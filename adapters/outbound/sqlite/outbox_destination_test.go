@@ -327,3 +327,35 @@ func TestMigration0048_DefaultEmpty(t *testing.T) {
 		t.Fatalf("items = %+v, %v; want ThreadProgress []", items, err)
 	}
 }
+
+// Repairing a thread row must keep the parts already posted, so a retry
+// resumes the thread instead of re-posting them.
+func TestRepair_KeepsThreadProgress(t *testing.T) {
+	db := newTestDB(t)
+	mustSaveArticle(t, sqliteadapter.NewArticleRepository(db), "a1")
+	repo := sqliteadapter.NewOutboxRepository(db)
+	ctx := context.Background()
+	past := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	now := past.Add(time.Hour)
+	if err := repo.EnqueueDestination(ctx, "a1", "{}", publishing.LaneNormal, publishing.DestinationBluesky, past); err != nil {
+		t.Fatal(err)
+	}
+	id := mustOutboxID(t, db, "a1")
+	const progress = `[{"uri":"at://x/1","cid":"c1"}]`
+	if _, err := repo.ClaimBatch(ctx, "w", 10, time.Minute, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.RecordThreadPart(ctx, id, progress, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.RecordSentUnconfirmed(ctx, id, "", "timeout", now); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Repair(ctx, id, "a1", publishing.RepairRetry, "operator retry", now); err != nil {
+		t.Fatal(err)
+	}
+	var got string
+	if err := db.QueryRowContext(ctx, `SELECT thread_progress FROM publication_outbox WHERE id=?`, id).Scan(&got); err != nil || got != progress {
+		t.Fatalf("thread_progress after repair = %q, %v; want %q", got, err, progress)
+	}
+}

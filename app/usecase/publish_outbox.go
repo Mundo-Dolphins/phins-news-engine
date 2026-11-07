@@ -124,6 +124,7 @@ func (p *PublishOutbox) alertItem(ctx context.Context, kind string, item out.Out
 		return
 	}
 	details := fmt.Sprintf("destination: %s\narticle: %s\noutbox id: %d\nlast error: %s", destination, item.ArticleID, item.ID, lastError)
+	details += threadAlertDetails(item)
 	if p.eventClaims != nil {
 		claims, err := p.eventClaims.List(ctx, out.EventClaimFilter{ArticleID: item.ArticleID, Limit: 3})
 		if err != nil {
@@ -140,6 +141,26 @@ func (p *PublishOutbox) alertItem(ctx context.Context, kind string, item out.Out
 		Details:  details,
 		DedupKey: fmt.Sprintf("outbox:%s:%s:%s", destination, kind, reasonKey(lastError)),
 	})
+}
+
+// threadAlertDetails tells the operator how far a partly posted thread got
+// and which parts are missing, so they can finish it by hand. It is empty for
+// single posts and for threads with no part posted yet.
+func threadAlertDetails(item out.OutboxItem) string {
+	payload, err := publishing.ParseMessagePayload(item.Payload)
+	if err != nil || len(payload.Continuations) == 0 {
+		return ""
+	}
+	progress, err := publishing.ParseThreadProgress(item.ThreadProgress)
+	if err != nil || len(progress) == 0 {
+		return ""
+	}
+	parts := payload.Parts()
+	details := fmt.Sprintf("\nposted parts: %d/%d, last: %s", len(progress), len(parts), progress[len(progress)-1].URI)
+	for i := len(progress); i < len(parts); i++ {
+		details += fmt.Sprintf("\nmissing part %d: %s", i+1, parts[i])
+	}
+	return details
 }
 
 // RegisterPublisher adds the publisher for a non-Telegram destination
@@ -344,6 +365,13 @@ func (p *PublishOutbox) publishOne(ctx context.Context, runID string, item out.O
 			// Retrying cannot repair a malformed payload.
 			return p.recordFailure(ctx, runID, item, a, &out.PermanentError{Err: perr}, 0, result)
 		}
+	} else if parsed, perr := publishing.ParseMessagePayload(item.Payload); perr == nil && len(parsed.Continuations) > 0 {
+		// A plain publisher ignores the payload; posting the article alone
+		// would silently drop the thread.
+		payload = parsed
+	}
+	if len(payload.Continuations) > 0 {
+		return p.publishThread(ctx, runID, item, a, publisher, payload, result)
 	}
 
 	// The network call happens with no database transaction open — never
@@ -357,7 +385,63 @@ func (p *PublishOutbox) publishOne(ctx context.Context, runID string, item out.O
 		messageID, publishErr = publisher.Publish(ctx, a)
 	}
 	duration := p.clock.Now().Sub(start)
+	return p.recordOutcome(ctx, runID, item, a, messageID, publishErr, duration, result)
+}
 
+// errThreadUnsupported is the permanent failure of a thread row whose
+// destination publisher cannot post threads.
+var errThreadUnsupported = errors.New("destination does not support threads")
+
+// publishThread posts a payload with Continuations as a reply chain. Each
+// newly posted part is persisted before the next is posted, so a retry or a
+// restart resumes after it instead of re-posting it. Outcomes then follow the
+// single-post path; the ID recorded on success is the first part's.
+func (p *PublishOutbox) publishThread(ctx context.Context, runID string, item out.OutboxItem, a article.Article, publisher out.Publisher, payload publishing.MessagePayload, result *in.PublishOutboxResult) error {
+	threads, ok := publisher.(out.ThreadPublisher)
+	if !ok {
+		return p.recordFailure(ctx, runID, item, a, &out.PermanentError{Err: errThreadUnsupported}, 0, result)
+	}
+	repo, ok := p.outbox.(out.DestinationOutboxRepository)
+	if !ok {
+		return fmt.Errorf("publish outbox: outbox item %d (article %s) holds a thread but the outbox repository cannot record thread progress", item.ID, item.ArticleID)
+	}
+	done, err := publishing.ParseThreadProgress(item.ThreadProgress)
+	if err != nil {
+		// Starting over would re-post the parts already posted.
+		return p.recordFailure(ctx, runID, item, a, &out.PermanentError{Err: err}, 0, result)
+	}
+
+	progress := done
+	var recordErr error
+	record := func(ref publishing.PostRef) error {
+		next := append(append([]publishing.PostRef(nil), progress...), ref)
+		raw, err := publishing.MarshalThreadProgress(next)
+		if err == nil {
+			err = repo.RecordThreadPart(ctx, item.ID, raw, p.clock.Now())
+		}
+		if err != nil {
+			recordErr = err
+			return err
+		}
+		progress = next
+		item.ThreadProgress = raw
+		return nil
+	}
+
+	start := p.clock.Now()
+	messageID, publishErr := threads.PublishThread(ctx, a, payload, done, record)
+	duration := p.clock.Now().Sub(start)
+	if recordErr != nil {
+		// A part is posted but its progress is not durable: as in
+		// recordSentThenFinalize, carrying on would open a re-post window.
+		return fmt.Errorf("publish outbox: record thread progress for %s: %w", a.ID, recordErr)
+	}
+	return p.recordOutcome(ctx, runID, item, a, messageID, publishErr, duration, result)
+}
+
+// recordOutcome routes a publish result to its success, ambiguous or failure
+// path.
+func (p *PublishOutbox) recordOutcome(ctx context.Context, runID string, item out.OutboxItem, a article.Article, messageID string, publishErr error, duration time.Duration, result *in.PublishOutboxResult) error {
 	var ambiguous *out.AmbiguousError
 	switch {
 	case publishErr == nil:
@@ -874,6 +958,9 @@ func (p *PublishOutbox) reconcileWithDestination(ctx context.Context, reconciler
 	if err != nil {
 		return p.quarantineItem(ctx, item, "reconciliation_unavailable: unreadable payload", result)
 	}
+	if len(payload.Continuations) > 0 {
+		return p.reconcileThread(ctx, reconciler, item, a, payload, now, result)
+	}
 	ref, matched, covered, err := reconciler.FindSent(ctx, out.SentLookup{
 		Article: a, Payload: payload, SentAt: item.SentAt, ClockSkew: p.reconcile.ClockSkew,
 	})
@@ -899,6 +986,91 @@ func (p *PublishOutbox) reconcileWithDestination(ctx context.Context, reconciler
 	default:
 		return p.quarantineItem(ctx, item, "destination_history_inconclusive", result)
 	}
+}
+
+// reconcileThread resolves a thread row whose next part's send was ambiguous.
+// It looks that part up in the destination history: a match adds it to the
+// progress, then the row is delivered (all parts posted) or resumed after it;
+// a confident non-match resumes the row to post that part again; anything
+// else quarantines, as for a single post.
+func (p *PublishOutbox) reconcileThread(ctx context.Context, reconciler out.DestinationReconciler, item out.OutboxItem, a article.Article, payload publishing.MessagePayload, now time.Time, result *in.ReconcileResult) error {
+	progress, err := publishing.ParseThreadProgress(item.ThreadProgress)
+	if err != nil {
+		return p.quarantineItem(ctx, item, "reconciliation_unavailable: unreadable thread progress", result)
+	}
+	parts := len(payload.Parts())
+	if len(progress) < parts {
+		ref, matched, covered, err := reconciler.FindSent(ctx, out.SentLookup{
+			Article: a, Payload: payload, SentAt: item.SentAt, ClockSkew: p.reconcile.ClockSkew, ThreadProgress: progress,
+		})
+		if err != nil {
+			p.logger.Warn("destination history reconciliation failed", "outbox_id", item.ID, "article_id", a.ID,
+				"destination", item.Destination.Normalized(), "thread_part", len(progress), "error", err.Error())
+			return p.quarantineItem(ctx, item, "destination_history_lookup_failed", result)
+		}
+		switch {
+		case matched:
+			progress = append(progress, ref)
+		case covered:
+			if err := p.resumeThread(ctx, item, a, progress, "reconciled: thread part not found in destination history", now); err != nil {
+				return err
+			}
+			p.logger.Info("ambiguous thread part reconciled negative, resuming", "outbox_id", item.ID, "article_id", a.ID, "thread_part", len(progress))
+			result.ReconciledNegative++
+			return nil
+		default:
+			return p.quarantineItem(ctx, item, "destination_history_inconclusive", result)
+		}
+	}
+	if len(progress) < parts {
+		if err := p.resumeThread(ctx, item, a, progress, "", now); err != nil {
+			return err
+		}
+		p.logger.Info("ambiguous thread part reconciled positive, resuming", "outbox_id", item.ID, "article_id", a.ID, "posted_parts", len(progress))
+		result.ReconciledPositive++
+		return nil
+	}
+	root := progress[0].URI
+	if err := p.outbox.RecordSentUnconfirmed(ctx, item.ID, root, "reconciled_from_destination_history", now); err != nil {
+		return fmt.Errorf("reconcile outbox: record matched message id for %s: %w", a.ID, err)
+	}
+	if err := p.finalizeDelivered(ctx, "reconcile", item, a, root, 0, &in.PublishOutboxResult{}); err != nil {
+		return err
+	}
+	p.logger.Info("ambiguous delivery reconciled positive (destination history)", "outbox_id", item.ID, "article_id", a.ID)
+	result.ReconciledPositive++
+	return nil
+}
+
+// resumeThread makes a sent_unconfirmed thread row claimable again with the
+// given progress, so the next publish posts the part after it. A non-empty
+// failure (the part was not found) is recorded as a failed attempt, keeping
+// the outcome as auditable as reconcileNegative's.
+func (p *PublishOutbox) resumeThread(ctx context.Context, item out.OutboxItem, a article.Article, progress []publishing.PostRef, failure string, now time.Time) error {
+	repo, ok := p.outbox.(out.DestinationOutboxRepository)
+	if !ok {
+		return fmt.Errorf("reconcile outbox: outbox item %d holds a thread but the outbox repository cannot resume it", item.ID)
+	}
+	raw, err := publishing.MarshalThreadProgress(progress)
+	if err != nil {
+		return fmt.Errorf("reconcile outbox: encode thread progress for %s: %w", a.ID, err)
+	}
+	err = p.uow.Do(ctx, func(txCtx context.Context) error {
+		if err := repo.ResumeThread(txCtx, item.ID, raw, now); err != nil {
+			return fmt.Errorf("resume thread: %w", err)
+		}
+		if failure == "" {
+			return nil
+		}
+		return p.outbox.RecordAttempt(txCtx, out.Attempt{
+			OutboxID: item.ID, ArticleID: a.ID, AttemptedAt: now,
+			Outcome: publishing.AttemptTemporaryFailure, ErrorMessage: failure,
+		})
+	})
+	if err != nil {
+		return fmt.Errorf("reconcile outbox: resume thread for %s: %w", a.ID, err)
+	}
+	return nil
 }
 
 // reconcileNegative is the confirmed-not-delivered outcome: channel
