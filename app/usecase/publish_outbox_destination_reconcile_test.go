@@ -22,9 +22,9 @@ type reconcilingPublisher struct {
 	lookups []out.SentLookup
 }
 
-func (r *reconcilingPublisher) FindSent(_ context.Context, l out.SentLookup) (string, bool, bool, error) {
+func (r *reconcilingPublisher) FindSent(_ context.Context, l out.SentLookup) (publishing.PostRef, bool, bool, error) {
 	r.lookups = append(r.lookups, l)
-	return r.id, r.matched, r.covered, r.err
+	return publishing.PostRef{URI: r.id}, r.matched, r.covered, r.err
 }
 
 func reconcileBlueskySetup(t *testing.T, pub *reconcilingPublisher) (*fakeOutboxRepo, *fakeArticleRepo, func() error) {

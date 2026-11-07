@@ -28,6 +28,17 @@ type PayloadPublisher interface {
 	PublishPayload(ctx context.Context, a article.Article, payload publishing.MessagePayload) (messageID string, err error)
 }
 
+// ThreadPublisher is the optional extension of PayloadPublisher for
+// destinations that can post a payload with Continuations as a thread.
+// done holds the parts already posted (in order); record must be called
+// after each newly posted part, before posting the next, and its error
+// aborts the publish. The returned ID is the first part's.
+type ThreadPublisher interface {
+	PayloadPublisher
+	PublishThread(ctx context.Context, a article.Article, payload publishing.MessagePayload,
+		done []publishing.PostRef, record func(publishing.PostRef) error) (messageID string, err error)
+}
+
 // PermanentError wraps a Publish error that will never succeed on retry
 // (e.g. the destination rejected the article as malformed). PublishOutbox
 // discards the outbox item immediately instead of scheduling a backoff

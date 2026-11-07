@@ -847,12 +847,13 @@ func TestFindSent(t *testing.T) {
 				writeJSON(w, 200, tt.feed)
 			}
 			p, _ := pds.publisher(t, "")
-			id, matched, covered, err := p.FindSent(context.Background(), appout.SentLookup{
+			ref, matched, covered, err := p.FindSent(context.Background(), appout.SentLookup{
 				Article: testArticle, Payload: textPayload(want), SentAt: sentAt, ClockSkew: skew,
 			})
 			if err != nil {
 				t.Fatalf("FindSent() error = %v", err)
 			}
+			id := ref.URI
 			if id != tt.wantID || matched != tt.wantMatched || covered != tt.wantCovered {
 				t.Fatalf("FindSent() = (%q, %v, %v), want (%q, %v, %v)", id, matched, covered, tt.wantID, tt.wantMatched, tt.wantCovered)
 			}
@@ -870,10 +871,10 @@ func TestFindSent_MatchesArticleDerivedText(t *testing.T) {
 		writeJSON(w, 200, feedJSON(feedPost("at://d/p/1", testHandle, text, baseTime)))
 	}
 	p, _ := pds.publisher(t, "")
-	id, matched, _, err := p.FindSent(context.Background(), appout.SentLookup{
+	ref, matched, _, err := p.FindSent(context.Background(), appout.SentLookup{
 		Article: testArticle, SentAt: baseTime, ClockSkew: time.Minute,
 	})
-	if err != nil || !matched || id != "at://d/p/1" {
+	if id := ref.URI; err != nil || !matched || id != "at://d/p/1" {
 		t.Fatalf("FindSent() = (%q, %v, %v)", id, matched, err)
 	}
 }
@@ -913,10 +914,10 @@ func TestAmbiguousPublishThenReconcileFindsThePost(t *testing.T) {
 	if !errors.As(err, &amb) {
 		t.Fatalf("error = %v, want AmbiguousError", err)
 	}
-	id, matched, covered, err := p.FindSent(context.Background(), appout.SentLookup{
+	ref, matched, covered, err := p.FindSent(context.Background(), appout.SentLookup{
 		Article: testArticle, Payload: textPayload("Hola"), SentAt: baseTime.Add(time.Second), ClockSkew: time.Minute,
 	})
-	if err != nil || !matched || !covered || id != "at://d/p/77" {
+	if id := ref.URI; err != nil || !matched || !covered || id != "at://d/p/77" {
 		t.Fatalf("FindSent() = (%q, %v, %v, %v)", id, matched, covered, err)
 	}
 }

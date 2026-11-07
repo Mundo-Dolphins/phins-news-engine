@@ -78,3 +78,53 @@ func TestMessagePayload_Validate(t *testing.T) {
 		})
 	}
 }
+
+func TestValidate_Continuations(t *testing.T) {
+	img := []ImageRef{{Path: "a.jpg", MIME: "image/jpeg"}}
+	tests := []struct {
+		name    string
+		p       MessagePayload
+		wantErr bool
+	}{
+		{"empty continuation", MessagePayload{Text: "a", Continuations: []string{""}}, true},
+		{"blank continuation", MessagePayload{Text: "a", Continuations: []string{"b", "  \n"}}, true},
+		{"with images", MessagePayload{Text: "a", Images: img, Continuations: []string{"b"}}, true},
+		{"without text", MessagePayload{Continuations: []string{"b"}}, true},
+		{"two continuations", MessagePayload{Text: "a", Continuations: []string{"b", "c"}}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.p.Validate(); (err != nil) != tt.wantErr {
+				t.Fatalf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestParts(t *testing.T) {
+	got := MessagePayload{Text: "a", Continuations: []string{"b", "c"}}.Parts()
+	if want := []string{"a", "b", "c"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Parts() = %v, want %v", got, want)
+	}
+}
+
+func TestThreadProgressRoundTrip(t *testing.T) {
+	for _, raw := range []string{"", "[]"} {
+		got, err := ParseThreadProgress(raw)
+		if err != nil || len(got) != 0 {
+			t.Fatalf("ParseThreadProgress(%q) = %v, %v; want empty", raw, got, err)
+		}
+	}
+	if s, err := MarshalThreadProgress(nil); err != nil || s != "[]" {
+		t.Fatalf("MarshalThreadProgress(nil) = %q, %v; want []", s, err)
+	}
+	refs := []PostRef{{URI: "at://d/p/1", CID: "c1"}, {URI: "at://d/p/2", CID: "c2"}}
+	raw, err := MarshalThreadProgress(refs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := ParseThreadProgress(raw)
+	if err != nil || !reflect.DeepEqual(got, refs) {
+		t.Fatalf("round trip = %v, %v; want %v", got, err, refs)
+	}
+}

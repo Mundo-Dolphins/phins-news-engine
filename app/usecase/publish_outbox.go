@@ -874,7 +874,7 @@ func (p *PublishOutbox) reconcileWithDestination(ctx context.Context, reconciler
 	if err != nil {
 		return p.quarantineItem(ctx, item, "reconciliation_unavailable: unreadable payload", result)
 	}
-	messageID, matched, covered, err := reconciler.FindSent(ctx, out.SentLookup{
+	ref, matched, covered, err := reconciler.FindSent(ctx, out.SentLookup{
 		Article: a, Payload: payload, SentAt: item.SentAt, ClockSkew: p.reconcile.ClockSkew,
 	})
 	if err != nil {
@@ -882,6 +882,7 @@ func (p *PublishOutbox) reconcileWithDestination(ctx context.Context, reconciler
 			"destination", item.Destination.Normalized(), "error", err.Error())
 		return p.quarantineItem(ctx, item, "destination_history_lookup_failed", result)
 	}
+	messageID := ref.URI
 	switch {
 	case matched:
 		if err := p.outbox.RecordSentUnconfirmed(ctx, item.ID, messageID, "reconciled_from_destination_history", now); err != nil {

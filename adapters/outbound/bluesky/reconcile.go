@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Mundo-Dolphins/phins-news-engine/app/outboxreconcile"
+	"github.com/Mundo-Dolphins/phins-news-engine/domain/publishing"
 	appout "github.com/Mundo-Dolphins/phins-news-engine/ports/out"
 )
 
@@ -21,14 +22,14 @@ const reconcileFeedLimit = 100
 // Only the newest page of the author feed is read, so a busy account can push
 // the send out of reach; the result is then not covered, which the caller
 // treats as inconclusive rather than as "not sent".
-func (p *Publisher) FindSent(ctx context.Context, lookup appout.SentLookup) (string, bool, bool, error) {
+func (p *Publisher) FindSent(ctx context.Context, lookup appout.SentLookup) (publishing.PostRef, bool, bool, error) {
 	want, err := postText(lookup.Article, lookup.Payload)
 	if err != nil {
-		return "", false, false, fmt.Errorf("bluesky: reconcile: %w", err)
+		return publishing.PostRef{}, false, false, fmt.Errorf("bluesky: reconcile: %w", err)
 	}
 	feed, err := p.feed.GetAuthorFeed(ctx, p.cfg.Handle, reconcileFeedLimit)
 	if err != nil {
-		return "", false, false, fmt.Errorf("bluesky: reconcile: %w", err)
+		return publishing.PostRef{}, false, false, fmt.Errorf("bluesky: reconcile: %w", err)
 	}
 
 	posts := make([]outboxreconcile.Post, 0, len(feed))
@@ -44,5 +45,5 @@ func (p *Publisher) FindSent(ctx context.Context, lookup appout.SentLookup) (str
 		posts = append(posts, outboxreconcile.Post{ID: item.Post.URI, Text: item.Post.Record.Text, PostedAt: created})
 	}
 	id, matched, covered := outboxreconcile.MatchPost(posts, want, lookup.SentAt, lookup.ClockSkew)
-	return id, matched, covered, nil
+	return publishing.PostRef{URI: id}, matched, covered, nil
 }
