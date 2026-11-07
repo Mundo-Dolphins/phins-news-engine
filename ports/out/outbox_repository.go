@@ -27,6 +27,9 @@ type OutboxItem struct {
 	// Destination is where this row must be delivered. The zero value
 	// means Telegram.
 	Destination publishing.Destination
+	// ThreadProgress is the JSON list of already-posted thread parts
+	// (publishing.ParseThreadProgress); "[]" when none.
+	ThreadProgress string
 }
 
 // LaneOutboxRepository is optional during the compatibility rollout. The
@@ -49,6 +52,14 @@ type DestinationOutboxRepository interface {
 	// sent_unconfirmed or quarantined), used to fail wiring when a
 	// destination has work but no publisher.
 	OpenDestinations(ctx context.Context) ([]publishing.Destination, error)
+	// RecordThreadPart stores the thread progress (raw JSON from
+	// publishing.MarshalThreadProgress) of a leased row; ErrLeaseLost if the
+	// row is not leased.
+	RecordThreadPart(ctx context.Context, id int64, progress string, now time.Time) error
+	// ResumeThread moves a sent_unconfirmed row to retryable, available
+	// now, with the given progress and no ambiguous reason; ErrLeaseLost if
+	// the row is not sent_unconfirmed.
+	ResumeThread(ctx context.Context, id int64, progress string, now time.Time) error
 }
 
 // OpenPayloadRepository lists the payloads of outbox rows that may still be

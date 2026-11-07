@@ -2,6 +2,7 @@ package sqlite_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -248,5 +249,81 @@ func TestOutboxRepository_ListOpenPayloads_OnlyRowsThatMayStillBeDelivered(t *te
 	}
 	if len(got) != 4 {
 		t.Errorf("got %d payloads %v, want only the 4 open ones", len(got), got)
+	}
+}
+
+func TestRecordThreadPart_LeasedOnly(t *testing.T) {
+	db := newTestDB(t)
+	mustSaveArticle(t, sqliteadapter.NewArticleRepository(db), "a1")
+	repo := sqliteadapter.NewOutboxRepository(db)
+	ctx := context.Background()
+	past := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := repo.EnqueueDestination(ctx, "a1", "{}", publishing.LaneNormal, publishing.DestinationBluesky, past); err != nil {
+		t.Fatal(err)
+	}
+	id := mustOutboxID(t, db, "a1")
+	const progress = `[{"uri":"at://x/1","cid":"c1"}]`
+
+	if err := repo.RecordThreadPart(ctx, id, progress, past); !errors.Is(err, appout.ErrLeaseLost) {
+		t.Fatalf("RecordThreadPart on pending = %v, want ErrLeaseLost", err)
+	}
+	if _, err := repo.ClaimBatch(ctx, "w", 10, time.Minute, past.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.RecordThreadPart(ctx, id, progress, past); err != nil {
+		t.Fatalf("RecordThreadPart on leased: %v", err)
+	}
+	var got string
+	if err := db.QueryRowContext(ctx, `SELECT thread_progress FROM publication_outbox WHERE id=?`, id).Scan(&got); err != nil || got != progress {
+		t.Fatalf("thread_progress = %q, %v; want %q", got, err, progress)
+	}
+}
+
+func TestResumeThread(t *testing.T) {
+	db := newTestDB(t)
+	mustSaveArticle(t, sqliteadapter.NewArticleRepository(db), "a1")
+	repo := sqliteadapter.NewOutboxRepository(db)
+	ctx := context.Background()
+	past := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	now := past.Add(time.Hour)
+	if err := repo.EnqueueDestination(ctx, "a1", "{}", publishing.LaneNormal, publishing.DestinationBluesky, past); err != nil {
+		t.Fatal(err)
+	}
+	id := mustOutboxID(t, db, "a1")
+	const progress = `[{"uri":"at://x/1","cid":"c1"}]`
+
+	if err := repo.ResumeThread(ctx, id, progress, now); !errors.Is(err, appout.ErrLeaseLost) {
+		t.Fatalf("ResumeThread on pending = %v, want ErrLeaseLost", err)
+	}
+	if _, err := repo.ClaimBatch(ctx, "w", 10, time.Minute, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.RecordSentUnconfirmed(ctx, id, "", "timeout", now); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ResumeThread(ctx, id, progress, now); err != nil {
+		t.Fatalf("ResumeThread: %v", err)
+	}
+	items, err := repo.ClaimBatch(ctx, "w2", 10, time.Minute, now.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].ThreadProgress != progress || items[0].AmbiguousReason != "" {
+		t.Fatalf("claimed %+v, want the resumed row with progress and no ambiguous reason", items)
+	}
+}
+
+func TestMigration0048_DefaultEmpty(t *testing.T) {
+	db := newTestDB(t)
+	mustSaveArticle(t, sqliteadapter.NewArticleRepository(db), "a1")
+	repo := sqliteadapter.NewOutboxRepository(db)
+	ctx := context.Background()
+	past := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := repo.Enqueue(ctx, "a1", "{}", past); err != nil {
+		t.Fatal(err)
+	}
+	items, err := repo.ClaimBatch(ctx, "w", 10, time.Minute, past.Add(time.Hour))
+	if err != nil || len(items) != 1 || items[0].ThreadProgress != "[]" {
+		t.Fatalf("items = %+v, %v; want ThreadProgress []", items, err)
 	}
 }

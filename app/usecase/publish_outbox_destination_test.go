@@ -27,6 +27,12 @@ func (d *destinationOutbox) EnqueueDestination(context.Context, string, string, 
 func (d *destinationOutbox) DestinationOf(context.Context, int64) (publishing.Destination, error) {
 	return publishing.DestinationBluesky, nil
 }
+func (d *destinationOutbox) RecordThreadPart(context.Context, int64, string, time.Time) error {
+	return nil
+}
+func (d *destinationOutbox) ResumeThread(context.Context, int64, string, time.Time) error {
+	return nil
+}
 func (d *destinationOutbox) OpenDestinations(context.Context) ([]publishing.Destination, error) {
 	return d.open, nil
 }

@@ -234,7 +234,7 @@ func (r *OutboxRepository) ClaimBatch(ctx context.Context, workerID string, limi
 		rows, err := tx.QueryContext(ctx, `
 			SELECT po.id, po.article_id, po.payload, po.status, po.available_at, po.expires_at, po.claimed_at, po.claimed_by, po.attempt_count, po.last_error,
 			       po.lane, po.destination,
-			       po.sent_message_id, po.sent_at, po.ambiguous_reason
+			       po.sent_message_id, po.sent_at, po.ambiguous_reason, po.thread_progress
 			FROM publication_outbox po
 			JOIN articles a ON a.id = po.article_id
 			WHERE po.status = 'leased' AND po.claimed_by = ?
@@ -284,7 +284,7 @@ func (r *OutboxRepository) ClaimExpired(ctx context.Context, workerID string, li
 		rows, err := tx.QueryContext(ctx, `
 			SELECT id, article_id, payload, status, available_at, expires_at, claimed_at, claimed_by, attempt_count, last_error,
 			       lane, destination,
-			       sent_message_id, sent_at, ambiguous_reason
+			       sent_message_id, sent_at, ambiguous_reason, thread_progress
 			FROM publication_outbox
 			WHERE status = 'leased' AND claimed_by = ? AND claimed_at = ? AND expires_at IS NOT NULL AND expires_at <= ?
 			ORDER BY expires_at ASC, id ASC
@@ -310,7 +310,7 @@ func (r *OutboxRepository) ClaimExpired(ctx context.Context, workerID string, li
 
 // scanOutboxItem scans one row of the standard outbox projection
 // (id, article_id, payload, status, available_at, expires_at, claimed_at, claimed_by,
-// attempt_count, last_error, lane, destination, sent_message_id, sent_at, ambiguous_reason)
+// attempt_count, last_error, lane, destination, sent_message_id, sent_at, ambiguous_reason, thread_progress)
 // into an appout.OutboxItem.
 func scanOutboxItem(row rowScanner) (appout.OutboxItem, error) {
 	var it appout.OutboxItem
@@ -324,7 +324,7 @@ func scanOutboxItem(row rowScanner) (appout.OutboxItem, error) {
 	var ambiguousReason sql.NullString
 	if err := row.Scan(
 		&it.ID, &it.ArticleID, &it.Payload, &status, &availableAt, &expiresAt, &claimedAt, &it.ClaimedBy, &it.AttemptCount, &it.LastError,
-		&lane, &destination, &sentMessageID, &sentAt, &ambiguousReason,
+		&lane, &destination, &sentMessageID, &sentAt, &ambiguousReason, &it.ThreadProgress,
 	); err != nil {
 		return appout.OutboxItem{}, err
 	}
@@ -393,6 +393,35 @@ func (r *OutboxRepository) MarkDelivered(ctx context.Context, id int64, now time
 		return fmt.Errorf("sqlite: mark outbox item %d delivered: %w", id, err)
 	}
 	return guardMatchedARow(result, fmt.Sprintf("mark outbox item %d delivered", id))
+}
+
+// RecordThreadPart implements ports/out.DestinationOutboxRepository. It only
+// writes while the row is leased, so a worker that lost its lease cannot
+// overwrite progress.
+func (r *OutboxRepository) RecordThreadPart(ctx context.Context, id int64, progress string, now time.Time) error {
+	result, err := executor(ctx, r.db).ExecContext(ctx, `
+		UPDATE publication_outbox SET thread_progress = ?, updated_at = ?
+		WHERE id = ? AND status = 'leased'
+		`, progress, sqliteTime(now), id)
+	if err != nil {
+		return fmt.Errorf("sqlite: record thread part for outbox item %d: %w", id, err)
+	}
+	return guardMatchedARow(result, fmt.Sprintf("record thread part for outbox item %d", id))
+}
+
+// ResumeThread implements ports/out.DestinationOutboxRepository: a
+// sent_unconfirmed thread goes back to retryable, immediately available,
+// carrying the progress to continue from.
+func (r *OutboxRepository) ResumeThread(ctx context.Context, id int64, progress string, now time.Time) error {
+	result, err := executor(ctx, r.db).ExecContext(ctx, `
+		UPDATE publication_outbox
+		SET status = 'retryable', available_at = ?, thread_progress = ?, ambiguous_reason = '', updated_at = ?
+		WHERE id = ? AND status = 'sent_unconfirmed'
+		`, sqliteTime(now), progress, sqliteTime(now), id)
+	if err != nil {
+		return fmt.Errorf("sqlite: resume thread for outbox item %d: %w", id, err)
+	}
+	return guardMatchedARow(result, fmt.Sprintf("resume thread for outbox item %d", id))
 }
 
 // guardMatchedARow turns a status-guarded UPDATE that changed nothing into
@@ -500,7 +529,7 @@ func (r *OutboxRepository) listByStatus(ctx context.Context, status, orderCol st
 	rows, err := executor(ctx, r.db).QueryContext(ctx, fmt.Sprintf(`
 		SELECT id, article_id, payload, status, available_at, expires_at, claimed_at, claimed_by, attempt_count, last_error,
 		       lane, destination,
-		       sent_message_id, sent_at, ambiguous_reason
+		       sent_message_id, sent_at, ambiguous_reason, thread_progress
 		FROM publication_outbox
 		WHERE status = ?
 		ORDER BY %s ASC
