@@ -156,7 +156,12 @@ func threadAlertDetails(item out.OutboxItem) string {
 		return ""
 	}
 	parts := payload.Parts()
-	details := fmt.Sprintf("\nposted parts: %d/%d, last: %s", len(progress), len(parts), progress[len(progress)-1].URI)
+	last := progress[len(progress)-1]
+	lastLink := last.URI
+	if web := last.WebURL(); web != "" {
+		lastLink = web
+	}
+	details := fmt.Sprintf("\nposted parts: %d/%d, last: %s", len(progress), len(parts), lastLink)
 	for i := len(progress); i < len(parts); i++ {
 		details += fmt.Sprintf("\nmissing part %d: %s", i+1, parts[i])
 	}

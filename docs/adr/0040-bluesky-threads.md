@@ -45,8 +45,9 @@ negative path (retryable when the feed reaches past the cutoff, else
 quarantine).
 
 **Alerts.** A dead or quarantined thread row alerts the operator with
-"posted parts: N/M, last: <uri>" and the text of the parts not posted, so the
-rest can be sent by hand.
+"posted parts: N/M, last: <link>" (the bsky.app link of the last posted part,
+or its URI when it is not a Bluesky post) and the text of the parts not
+posted, so the rest can be sent by hand.
 
 ## Consequences
 

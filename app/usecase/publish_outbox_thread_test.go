@@ -295,3 +295,19 @@ func TestAlert_ThreadPartialDead(t *testing.T) {
 		}
 	}
 }
+
+func TestAlert_ThreadPartialDeadLinksLastPost(t *testing.T) {
+	alerter := &recordingAlerter{}
+	progress, err := publishing.MarshalThreadProgress([]publishing.PostRef{{URI: "at://did:plc:abc/app.bsky.feed.post/3kroot", CID: "c0"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub := &threadPublisher{failAt: 1, failErr: &out.PermanentError{Err: errors.New("rejected")}}
+	runThreadRow(t, threadItem(threadPayload(t, "parte dos"), progress), pub, alerter)
+	if len(alerter.alerts) != 1 {
+		t.Fatalf("alerts = %+v, want one", alerter.alerts)
+	}
+	if want := "last: https://bsky.app/profile/did:plc:abc/post/3kroot"; !strings.Contains(alerter.alerts[0].Details, want) {
+		t.Errorf("details %q lack %q", alerter.alerts[0].Details, want)
+	}
+}
