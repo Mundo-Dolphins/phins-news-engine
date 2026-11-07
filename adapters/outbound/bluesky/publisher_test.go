@@ -1100,7 +1100,7 @@ func TestPublishThread_AllDoneReturnsRoot(t *testing.T) {
 func TestPublishThread_PartOverLimitIsPermanent(t *testing.T) {
 	for name, payload := range map[string]publishing.MessagePayload{
 		"graphemes": threadPayload("Uno.", "Dos.", strings.Repeat("a", 301)),
-		"bytes":     threadPayload("Uno.", strings.Repeat("\U0001F468‍\U0001F469‍\U0001F467", 200)),
+		"bytes":     threadPayload("Uno.", strings.Repeat("\U0001F468\u200d\U0001F469\u200d\U0001F467", 200)),
 	} {
 		t.Run(name, func(t *testing.T) {
 			pds := newFakePDS(t)

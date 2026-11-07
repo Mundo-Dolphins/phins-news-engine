@@ -50,7 +50,7 @@ flowchart TB
 `domain` imports nothing from this module, and the use cases never import an
 adapter. A use case recognises adapter outcomes through types declared in
 `ports/out` (for example `out.PermanentError`, `out.RateLimitedError` and
-`out.AmbiguousError` from a `Publisher`).
+`out.AmbiguousError` from a `Publisher`). A multi-part payload (thread) goes through the optional `out.ThreadPublisher` ([ADR 0040](adr/0040-bluesky-threads.md)).
 
 ## Composition
 
@@ -98,7 +98,7 @@ clear error when nothing is registered.
 | Events | `domain/eventsignals`, `domain/clustering`, `domain/clusterlifecycle`, `domain/clustergate`, `infra/clusteringrules`, `infra/entitycatalog`, `infra/leaguecatalog` |
 | Source policy | `domain/sourcepolicy`, `infra/sourcepolicyfile` |
 | Editorial | `domain/editorial`, `domain/editorialveto`, `infra/editorialmodel`, `infra/editorialveto`, `app/editorialtrain`, `app/editorialcycle` |
-| Publication | `domain/publishing`, `app/usecase` (`PublishOutbox`, `RepairOutbox`, `ExpireOutbox`), `app/outboxreconcile`, `adapters/outbound/telegram`, `adapters/outbound/bluesky` (publisher, [ADR 0035](adr/0035-bluesky-publisher.md)), `adapters/outbound/mediafs` (image download and retention, [ADR 0036](adr/0036-media-store.md)), operator alerts (`out.Alerter`, `telegram.Alerter`, [ADR 0037](adr/0037-operator-alerts.md)), event claim operator commands ([runbook](EVENT-CLAIMS-RUNBOOK.md)) |
+| Publication | `domain/publishing`, `app/usecase` (`PublishOutbox`, `RepairOutbox`, `ExpireOutbox`), `app/outboxreconcile`, `adapters/outbound/telegram`, `adapters/outbound/bluesky` (publisher and threads, [ADR 0035](adr/0035-bluesky-publisher.md), [ADR 0040](adr/0040-bluesky-threads.md)), `adapters/outbound/mediafs` (image download and retention, [ADR 0036](adr/0036-media-store.md)), operator alerts (`out.Alerter`, `telegram.Alerter`, [ADR 0037](adr/0037-operator-alerts.md)), event claim operator commands ([runbook](EVENT-CLAIMS-RUNBOOK.md)) |
 | Match state | `domain/matchstate`, `adapters/outbound/espnscoreboard` |
 | Storage | `adapters/outbound/sqlite` and the `sqlite*` proposal and cache adapters, `infra/sqlite`, `migrations` |
 | Knowledge (tools only) | `infra/wikidata`, `app/knowledgecache`, `domain/entityidentity`, `app/entitydiscovery` |
