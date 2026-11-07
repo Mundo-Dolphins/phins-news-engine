@@ -18,6 +18,12 @@ import (
 // see adapters/outbound/sqlite's wrapNotFound.
 var ErrNotFound = errors.New("article: not found")
 
+// MetadataMediaImages is the Metadata key holding a JSON array of
+// {"url","type"} objects, one per image attached to the post (source order),
+// where type is the image MIME type. Fetchers that know a post's images set
+// it; it is absent when there is none.
+const MetadataMediaImages = "media_images"
+
 // ContentType classifies the shape of the content behind an Article.
 type ContentType string
 
