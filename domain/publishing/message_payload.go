@@ -54,6 +54,20 @@ type PostRef struct {
 	CID string `json:"cid"`
 }
 
+// WebURL is the bsky.app link of a Bluesky post URI
+// (at://<did>/app.bsky.feed.post/<rkey>), or "" for any other URI.
+func (r PostRef) WebURL() string {
+	rest, ok := strings.CutPrefix(r.URI, "at://")
+	if !ok {
+		return ""
+	}
+	parts := strings.Split(rest, "/")
+	if len(parts) != 3 || parts[0] == "" || parts[1] != "app.bsky.feed.post" || parts[2] == "" {
+		return ""
+	}
+	return "https://bsky.app/profile/" + parts[0] + "/post/" + parts[2]
+}
+
 // ParseThreadProgress decodes the posted parts of a thread, in order. An
 // empty string yields no parts.
 func ParseThreadProgress(raw string) ([]PostRef, error) {

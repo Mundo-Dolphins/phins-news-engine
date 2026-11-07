@@ -128,3 +128,17 @@ func TestThreadProgressRoundTrip(t *testing.T) {
 		t.Fatalf("round trip = %v, %v; want %v", got, err, refs)
 	}
 }
+
+func TestPostRefWebURL(t *testing.T) {
+	cases := map[string]string{
+		"at://did:plc:abc123/app.bsky.feed.post/3kxyz": "https://bsky.app/profile/did:plc:abc123/post/3kxyz",
+		"at://did:plc:abc123/app.bsky.feed.like/3kxyz": "",
+		"at://t/p/0": "",
+		"":           "",
+	}
+	for uri, want := range cases {
+		if got := (PostRef{URI: uri}).WebURL(); got != want {
+			t.Errorf("WebURL(%q) = %q, want %q", uri, got, want)
+		}
+	}
+}
