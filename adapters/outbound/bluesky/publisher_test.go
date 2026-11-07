@@ -847,12 +847,13 @@ func TestFindSent(t *testing.T) {
 				writeJSON(w, 200, tt.feed)
 			}
 			p, _ := pds.publisher(t, "")
-			id, matched, covered, err := p.FindSent(context.Background(), appout.SentLookup{
+			ref, matched, covered, err := p.FindSent(context.Background(), appout.SentLookup{
 				Article: testArticle, Payload: textPayload(want), SentAt: sentAt, ClockSkew: skew,
 			})
 			if err != nil {
 				t.Fatalf("FindSent() error = %v", err)
 			}
+			id := ref.URI
 			if id != tt.wantID || matched != tt.wantMatched || covered != tt.wantCovered {
 				t.Fatalf("FindSent() = (%q, %v, %v), want (%q, %v, %v)", id, matched, covered, tt.wantID, tt.wantMatched, tt.wantCovered)
 			}
@@ -870,10 +871,10 @@ func TestFindSent_MatchesArticleDerivedText(t *testing.T) {
 		writeJSON(w, 200, feedJSON(feedPost("at://d/p/1", testHandle, text, baseTime)))
 	}
 	p, _ := pds.publisher(t, "")
-	id, matched, _, err := p.FindSent(context.Background(), appout.SentLookup{
+	ref, matched, _, err := p.FindSent(context.Background(), appout.SentLookup{
 		Article: testArticle, SentAt: baseTime, ClockSkew: time.Minute,
 	})
-	if err != nil || !matched || id != "at://d/p/1" {
+	if id := ref.URI; err != nil || !matched || id != "at://d/p/1" {
 		t.Fatalf("FindSent() = (%q, %v, %v)", id, matched, err)
 	}
 }
@@ -913,10 +914,10 @@ func TestAmbiguousPublishThenReconcileFindsThePost(t *testing.T) {
 	if !errors.As(err, &amb) {
 		t.Fatalf("error = %v, want AmbiguousError", err)
 	}
-	id, matched, covered, err := p.FindSent(context.Background(), appout.SentLookup{
+	ref, matched, covered, err := p.FindSent(context.Background(), appout.SentLookup{
 		Article: testArticle, Payload: textPayload("Hola"), SentAt: baseTime.Add(time.Second), ClockSkew: time.Minute,
 	})
-	if err != nil || !matched || !covered || id != "at://d/p/77" {
+	if id := ref.URI; err != nil || !matched || !covered || id != "at://d/p/77" {
 		t.Fatalf("FindSent() = (%q, %v, %v, %v)", id, matched, covered, err)
 	}
 }
@@ -966,4 +967,266 @@ func str(t *testing.T, v any) string {
 		t.Fatalf("got %T, want a JSON string", v)
 	}
 	return s
+}
+
+// --- threads ---
+
+func threadPayload(parts ...string) publishing.MessagePayload {
+	return publishing.MessagePayload{Text: parts[0], Continuations: parts[1:]}
+}
+
+// postedRef is the ref the fake PDS returns for its n-th created record.
+func postedRef(n int) publishing.PostRef {
+	return publishing.PostRef{URI: fmt.Sprintf("at://%s/app.bsky.feed.post/3k%d", testDID, n), CID: fmt.Sprintf("bafyrei%d", n)}
+}
+
+// replyOf returns the record's reply root and parent, or nil when it has none.
+func replyOf(t *testing.T, in map[string]any) (root, parent *publishing.PostRef) {
+	t.Helper()
+	reply, ok := obj(t, in["record"])["reply"]
+	if !ok {
+		return nil, nil
+	}
+	ref := func(v any) *publishing.PostRef {
+		m := obj(t, v)
+		return &publishing.PostRef{URI: str(t, m["uri"]), CID: str(t, m["cid"])}
+	}
+	r := obj(t, reply)
+	return ref(r["root"]), ref(r["parent"])
+}
+
+func TestPublishThread_PostsRepliesWithRootAndParent(t *testing.T) {
+	pds := newFakePDS(t)
+	p, _ := pds.publisher(t, "")
+	var recorded []publishing.PostRef
+	uri, err := p.PublishThread(context.Background(), testArticle, threadPayload("Uno.", "Dos.", "Tres."), nil,
+		func(ref publishing.PostRef) error { recorded = append(recorded, ref); return nil })
+	if err != nil {
+		t.Fatalf("PublishThread() error = %v", err)
+	}
+	if uri != postedRef(1).URI {
+		t.Errorf("uri = %q, want the first part's %q", uri, postedRef(1).URI)
+	}
+	if len(pds.records) != 3 {
+		t.Fatalf("createRecord calls = %d, want 3", len(pds.records))
+	}
+	for i, want := range []string{"Uno.", "Dos.", "Tres."} {
+		rec := obj(t, pds.records[i]["record"])
+		if rec["text"] != want {
+			t.Errorf("part %d text = %v, want %q", i, rec["text"], want)
+		}
+		if langs := arr(t, rec["langs"]); len(langs) != 1 || langs[0] != "es" {
+			t.Errorf("part %d langs = %v", i, langs)
+		}
+	}
+	if root, parent := replyOf(t, pds.records[0]); root != nil || parent != nil {
+		t.Errorf("part 0 has a reply: root=%v parent=%v", root, parent)
+	}
+	if root, parent := replyOf(t, pds.records[1]); root == nil || *root != postedRef(1) || *parent != postedRef(1) {
+		t.Errorf("part 1 reply root=%v parent=%v, want both %v", root, parent, postedRef(1))
+	}
+	if root, parent := replyOf(t, pds.records[2]); root == nil || *root != postedRef(1) || *parent != postedRef(2) {
+		t.Errorf("part 2 reply root=%v parent=%v, want root %v parent %v", root, parent, postedRef(1), postedRef(2))
+	}
+	if want := []publishing.PostRef{postedRef(1), postedRef(2), postedRef(3)}; fmt.Sprint(recorded) != fmt.Sprint(want) {
+		t.Errorf("recorded = %v, want %v", recorded, want)
+	}
+}
+
+func TestPublishThread_LinkAndFacetsOnFirstPart(t *testing.T) {
+	pds := newFakePDS(t)
+	p, _ := pds.publisher(t, "")
+	payload := threadPayload("Uno.", "Mira https://example.com/dos")
+	payload.Link = "https://example.com/uno"
+	if _, err := p.PublishThread(context.Background(), testArticle, payload, nil, func(publishing.PostRef) error { return nil }); err != nil {
+		t.Fatalf("PublishThread() error = %v", err)
+	}
+	for i, want := range []string{"Uno.\n\nhttps://example.com/uno", "Mira https://example.com/dos"} {
+		rec := obj(t, pds.records[i]["record"])
+		if rec["text"] != want {
+			t.Errorf("part %d text = %q, want %q", i, rec["text"], want)
+		}
+		if len(arr(t, rec["facets"])) != 1 {
+			t.Errorf("part %d facets = %v, want the link facet", i, rec["facets"])
+		}
+	}
+}
+
+func TestPublishThread_SkipsDone(t *testing.T) {
+	pds := newFakePDS(t)
+	p, _ := pds.publisher(t, "")
+	first := publishing.PostRef{URI: "at://" + testDID + "/app.bsky.feed.post/root", CID: "bafyroot"}
+	var recorded []publishing.PostRef
+	uri, err := p.PublishThread(context.Background(), testArticle, threadPayload("Uno.", "Dos.", "Tres."),
+		[]publishing.PostRef{first}, func(ref publishing.PostRef) error { recorded = append(recorded, ref); return nil })
+	if err != nil {
+		t.Fatalf("PublishThread() error = %v", err)
+	}
+	if uri != first.URI {
+		t.Errorf("uri = %q, want the done root %q", uri, first.URI)
+	}
+	if n := pds.count("com.atproto.repo.createRecord"); n != 2 {
+		t.Fatalf("createRecord calls = %d, want 2", n)
+	}
+	if text := obj(t, pds.records[0]["record"])["text"]; text != "Dos." {
+		t.Errorf("first posted text = %v, want the second part", text)
+	}
+	if root, parent := replyOf(t, pds.records[0]); root == nil || *root != first || *parent != first {
+		t.Errorf("first posted reply root=%v parent=%v, want both %v", root, parent, first)
+	}
+	if root, parent := replyOf(t, pds.records[1]); root == nil || *root != first || *parent != postedRef(1) {
+		t.Errorf("second posted reply root=%v parent=%v", root, parent)
+	}
+	if len(recorded) != 2 {
+		t.Errorf("record calls = %d, want 2", len(recorded))
+	}
+}
+
+func TestPublishThread_AllDoneReturnsRoot(t *testing.T) {
+	pds := newFakePDS(t)
+	p, _ := pds.publisher(t, "")
+	done := []publishing.PostRef{{URI: "at://d/p/1", CID: "c1"}, {URI: "at://d/p/2", CID: "c2"}}
+	calls := 0
+	uri, err := p.PublishThread(context.Background(), testArticle, threadPayload("Uno.", "Dos."), done,
+		func(publishing.PostRef) error { calls++; return nil })
+	if err != nil || uri != "at://d/p/1" {
+		t.Fatalf("PublishThread() = (%q, %v), want (\"at://d/p/1\", nil)", uri, err)
+	}
+	if calls != 0 || len(pds.calls) != 0 {
+		t.Fatalf("record calls = %d, network calls = %v; want none", calls, pds.calls)
+	}
+}
+
+func TestPublishThread_PartOverLimitIsPermanent(t *testing.T) {
+	for name, payload := range map[string]publishing.MessagePayload{
+		"graphemes": threadPayload("Uno.", "Dos.", strings.Repeat("a", 301)),
+		"bytes":     threadPayload("Uno.", strings.Repeat("\U0001F468\u200d\U0001F469\u200d\U0001F467", 200)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			pds := newFakePDS(t)
+			p, _ := pds.publisher(t, "")
+			calls := 0
+			_, err := p.PublishThread(context.Background(), testArticle, payload, nil,
+				func(publishing.PostRef) error { calls++; return nil })
+			var perm *appout.PermanentError
+			if !errors.As(err, &perm) {
+				t.Fatalf("error = %v, want PermanentError", err)
+			}
+			if len(pds.calls) != 0 || calls != 0 {
+				t.Fatalf("network calls = %v, record calls = %d; want none", pds.calls, calls)
+			}
+		})
+	}
+}
+
+func TestPublishThread_RecordErrorStops(t *testing.T) {
+	pds := newFakePDS(t)
+	p, _ := pds.publisher(t, "")
+	boom := errors.New("disk full")
+	_, err := p.PublishThread(context.Background(), testArticle, threadPayload("Uno.", "Dos."), nil,
+		func(publishing.PostRef) error { return boom })
+	if !errors.Is(err, boom) {
+		t.Fatalf("error = %v, want the record error", err)
+	}
+	if n := pds.count("com.atproto.repo.createRecord"); n != 1 {
+		t.Fatalf("createRecord calls = %d, want 1", n)
+	}
+}
+
+func TestPublishThread_AmbiguousPartIsNotRecorded(t *testing.T) {
+	pds := newFakePDS(t)
+	var n atomic.Int32
+	pds.createRecord = func(w http.ResponseWriter, r *http.Request) bool {
+		if n.Add(1) == 2 {
+			hijackClose(w)
+			return true
+		}
+		return false
+	}
+	p, _ := pds.publisher(t, "")
+	var recorded []publishing.PostRef
+	_, err := p.PublishThread(context.Background(), testArticle, threadPayload("Uno.", "Dos.", "Tres."), nil,
+		func(ref publishing.PostRef) error { recorded = append(recorded, ref); return nil })
+	var amb *appout.AmbiguousError
+	if !errors.As(err, &amb) {
+		t.Fatalf("error = %v, want AmbiguousError", err)
+	}
+	if len(recorded) != 1 || recorded[0] != postedRef(1) {
+		t.Fatalf("recorded = %v, want only the first part", recorded)
+	}
+	if c := pds.count("com.atproto.repo.createRecord"); c != 2 {
+		t.Fatalf("createRecord calls = %d, want 2", c)
+	}
+}
+
+func replyFeedPost(uri, cid, text string, createdAt time.Time, parentURI string) string {
+	return fmt.Sprintf(`{"post":{"uri":%q,"cid":%q,"author":{"handle":%q},"record":{"text":%q,"createdAt":%q,"reply":{"root":{"uri":%q,"cid":"x"},"parent":{"uri":%q,"cid":"y"}}}}}`,
+		uri, cid, testHandle, text, createdAt.UTC().Format("2006-01-02T15:04:05.000Z"), parentURI, parentURI)
+}
+
+func TestFindSent_ThreadPartMatchesParent(t *testing.T) {
+	sentAt := baseTime
+	progress := []publishing.PostRef{{URI: "at://d/p/1", CID: "c1"}}
+	tests := []struct {
+		name        string
+		feed        string
+		want        publishing.PostRef
+		wantMatched bool
+		wantCovered bool
+	}{
+		{"reply to the last part matches", feedJSON(
+			replyFeedPost("at://d/p/3", "c3", "Dos.", sentAt.Add(time.Second), "at://d/p/other"),
+			replyFeedPost("at://d/p/2", "c2", "Dos.", sentAt.Add(time.Second), "at://d/p/1"),
+			feedPost("at://d/p/1", testHandle, "Uno.", sentAt.Add(-time.Hour))),
+			publishing.PostRef{URI: "at://d/p/2", CID: "c2"}, true, true},
+		{"same text under another parent does not match", feedJSON(
+			replyFeedPost("at://d/p/3", "c3", "Dos.", sentAt.Add(time.Second), "at://d/p/other"),
+			feedPost("at://d/p/1", testHandle, "Uno.", sentAt.Add(-time.Hour))),
+			publishing.PostRef{}, false, true},
+		{"top-level post with the text does not match", feedJSON(
+			feedPost("at://d/p/3", testHandle, "Dos.", sentAt.Add(time.Second)),
+			feedPost("at://d/p/1", testHandle, "Uno.", sentAt.Add(-time.Hour))),
+			publishing.PostRef{}, false, true},
+		{"shallow feed is inconclusive", feedJSON(
+			replyFeedPost("at://d/p/3", "c3", "Dos.", sentAt.Add(time.Second), "at://d/p/other")),
+			publishing.PostRef{}, false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pds := newFakePDS(t)
+			var query string
+			pds.feed = func(w http.ResponseWriter, r *http.Request) {
+				query = r.URL.RawQuery
+				writeJSON(w, 200, tt.feed)
+			}
+			p, _ := pds.publisher(t, "")
+			ref, matched, covered, err := p.FindSent(context.Background(), appout.SentLookup{
+				Article: testArticle, Payload: threadPayload("Uno.", "Dos.", "Tres."),
+				SentAt: sentAt, ClockSkew: time.Minute, ThreadProgress: progress,
+			})
+			if err != nil {
+				t.Fatalf("FindSent() error = %v", err)
+			}
+			if ref != tt.want || matched != tt.wantMatched || covered != tt.wantCovered {
+				t.Fatalf("FindSent() = (%v, %v, %v), want (%v, %v, %v)", ref, matched, covered, tt.want, tt.wantMatched, tt.wantCovered)
+			}
+			if strings.Contains(query, "posts_no_replies") {
+				t.Errorf("query = %q, want replies included", query)
+			}
+		})
+	}
+}
+
+func TestFindSent_ThreadRootReturnsCID(t *testing.T) {
+	pds := newFakePDS(t)
+	pds.feed = func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, feedJSON(`{"post":{"uri":"at://d/p/1","cid":"c1","author":{"handle":"`+testHandle+`"},"record":{"text":"Uno.","createdAt":"`+baseTime.Format("2006-01-02T15:04:05.000Z")+`"}}}`))
+	}
+	p, _ := pds.publisher(t, "")
+	ref, matched, _, err := p.FindSent(context.Background(), appout.SentLookup{
+		Article: testArticle, Payload: threadPayload("Uno.", "Dos."), SentAt: baseTime, ClockSkew: time.Minute,
+	})
+	if err != nil || !matched || ref != (publishing.PostRef{URI: "at://d/p/1", CID: "c1"}) {
+		t.Fatalf("FindSent() = (%v, %v, %v)", ref, matched, err)
+	}
 }

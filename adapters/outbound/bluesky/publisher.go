@@ -55,7 +55,7 @@ type Config struct {
 }
 
 // Publisher posts text and images to one Bluesky account (ADR 0035). It
-// implements out.PayloadPublisher and out.DestinationReconciler, and is safe
+// implements out.ThreadPublisher and out.DestinationReconciler, and is safe
 // for concurrent use.
 type Publisher struct {
 	cfg  Config
@@ -68,6 +68,7 @@ type Publisher struct {
 
 var (
 	_ appout.PayloadPublisher      = (*Publisher)(nil)
+	_ appout.ThreadPublisher       = (*Publisher)(nil)
 	_ appout.DestinationReconciler = (*Publisher)(nil)
 )
 
@@ -127,18 +128,24 @@ func (p *Publisher) Publish(ctx context.Context, a article.Article) (string, err
 // the final createRecord call can be ambiguous: a login or an image upload
 // that fails leaves nothing posted and is an ordinary temporary error.
 func (p *Publisher) PublishPayload(ctx context.Context, a article.Article, payload publishing.MessagePayload) (string, error) {
+	ref, err := p.publishPost(ctx, a, payload)
+	return ref.URI, err
+}
+
+// publishPost is PublishPayload returning the post's full ref.
+func (p *Publisher) publishPost(ctx context.Context, a article.Article, payload publishing.MessagePayload) (publishing.PostRef, error) {
 	text, err := postText(a, payload)
 	if err != nil {
-		return "", &appout.PermanentError{Err: fmt.Errorf("bluesky: publish %s: %w", a.ID, err)}
+		return publishing.PostRef{}, &appout.PermanentError{Err: fmt.Errorf("bluesky: publish %s: %w", a.ID, err)}
 	}
 	if len(payload.Images) > maxImages {
-		return "", &appout.PermanentError{Err: fmt.Errorf("bluesky: publish %s: %d images, the limit is %d", a.ID, len(payload.Images), maxImages)}
+		return publishing.PostRef{}, &appout.PermanentError{Err: fmt.Errorf("bluesky: publish %s: %d images, the limit is %d", a.ID, len(payload.Images), maxImages)}
 	}
 	images := make([]preparedImage, 0, len(payload.Images))
 	for _, ref := range payload.Images {
 		img, err := loadImage(p.cfg.MediaRoot, ref)
 		if err != nil {
-			return "", fmt.Errorf("bluesky: publish %s: %w", a.ID, err)
+			return publishing.PostRef{}, fmt.Errorf("bluesky: publish %s: %w", a.ID, err)
 		}
 		images = append(images, img)
 	}
@@ -147,7 +154,7 @@ func (p *Publisher) PublishPayload(ctx context.Context, a article.Article, paylo
 	for _, img := range images {
 		blob, err := p.uploadBlob(ctx, img)
 		if err != nil {
-			return "", fmt.Errorf("bluesky: publish %s: %w", a.ID, err)
+			return publishing.PostRef{}, fmt.Errorf("bluesky: publish %s: %w", a.ID, err)
 		}
 		e := embedImage{Alt: img.alt, Image: blob}
 		if img.width > 0 && img.height > 0 {
@@ -156,21 +163,104 @@ func (p *Publisher) PublishPayload(ctx context.Context, a article.Article, paylo
 		embeds = append(embeds, e)
 	}
 
-	rec := postRecordOut{
+	rec := p.newRecord(text)
+	if len(embeds) > 0 {
+		rec.Embed = &embedImages{Type: "app.bsky.embed.images", Images: embeds}
+	}
+	ref, err := p.createRecord(ctx, rec)
+	if err != nil {
+		return publishing.PostRef{}, fmt.Errorf("bluesky: publish %s: %w", a.ID, err)
+	}
+	return ref, nil
+}
+
+// PublishThread posts payload.Parts() as a reply chain: every part after the
+// first replies to the previous one, and all share the first as root. done
+// holds the parts already posted, which are skipped; record is called after
+// each newly posted part and its error stops the thread. It returns the first
+// part's URI.
+//
+// Every part is checked before anything is posted, so a part that can never
+// be posted fails as PermanentError with nothing sent. Each createRecord
+// keeps the single-post ambiguity rules, and only confirmed posts are
+// recorded.
+func (p *Publisher) PublishThread(ctx context.Context, a article.Article, payload publishing.MessagePayload,
+	done []publishing.PostRef, record func(publishing.PostRef) error) (string, error) {
+	parts := payload.Parts()
+	if len(done) > len(parts) {
+		return "", &appout.PermanentError{Err: fmt.Errorf("bluesky: publish %s: %d parts already posted, the thread has %d", a.ID, len(done), len(parts))}
+	}
+	if len(done) == len(parts) {
+		return done[0].URI, nil
+	}
+	if len(parts) > 1 && len(payload.Images) > 0 {
+		return "", &appout.PermanentError{Err: fmt.Errorf("bluesky: publish %s: a thread cannot carry images", a.ID)}
+	}
+	if len(parts) == 1 {
+		// A single post: images and all, exactly like PublishPayload.
+		ref, err := p.publishPost(ctx, a, payload)
+		if err != nil {
+			return "", err
+		}
+		if err := record(ref); err != nil {
+			return "", fmt.Errorf("bluesky: publish %s: %w", a.ID, err)
+		}
+		return ref.URI, nil
+	}
+	texts, err := threadTexts(a, payload)
+	if err != nil {
+		return "", &appout.PermanentError{Err: fmt.Errorf("bluesky: publish %s: %w", a.ID, err)}
+	}
+
+	posted := append([]publishing.PostRef(nil), done...)
+	for i := len(done); i < len(texts); i++ {
+		rec := p.newRecord(texts[i])
+		if i > 0 {
+			rec.Reply = &replyRef{Root: strongRef(posted[0]), Parent: strongRef(posted[i-1])}
+		}
+		ref, err := p.createRecord(ctx, rec)
+		if err != nil {
+			return "", fmt.Errorf("bluesky: publish %s: thread part %d: %w", a.ID, i, err)
+		}
+		if err := record(ref); err != nil {
+			return "", fmt.Errorf("bluesky: publish %s: thread part %d: %w", a.ID, i, err)
+		}
+		posted = append(posted, ref)
+	}
+	return posted[0].URI, nil
+}
+
+// newRecord builds a text post with the account's language and the text's
+// facets.
+func (p *Publisher) newRecord(text string) postRecordOut {
+	return postRecordOut{
 		Type:      postCollection,
 		Text:      text,
 		CreatedAt: p.cfg.Now().UTC().Format(createdAtLayout),
 		Langs:     []string{postLang},
 		Facets:    buildFacets(text),
 	}
-	if len(embeds) > 0 {
-		rec.Embed = &embedImages{Type: "app.bsky.embed.images", Images: embeds}
-	}
-	uri, err := p.createRecord(ctx, rec)
+}
+
+// threadTexts returns the text of every part: the first is built like a
+// single post (link included), the continuations are posted as they are.
+// Each must fit the post limits.
+func threadTexts(a article.Article, payload publishing.MessagePayload) ([]string, error) {
+	first, err := postText(a, payload)
 	if err != nil {
-		return "", fmt.Errorf("bluesky: publish %s: %w", a.ID, err)
+		return nil, err
 	}
-	return uri, nil
+	texts := []string{first}
+	for i, c := range payload.Continuations {
+		if strings.TrimSpace(c) == "" {
+			return nil, fmt.Errorf("thread part %d: nothing to post", i+1)
+		}
+		if err := checkLimits(c); err != nil {
+			return nil, fmt.Errorf("thread part %d: %w", i+1, err)
+		}
+		texts = append(texts, c)
+	}
+	return texts, nil
 }
 
 // postText builds the post body and enforces Bluesky's limits. It never
@@ -197,13 +287,21 @@ func postText(a article.Article, payload publishing.MessagePayload) (string, err
 	if strings.TrimSpace(text) == "" && len(payload.Images) == 0 {
 		return "", errors.New("nothing to post: no text and no images")
 	}
-	if n := countGraphemes(text); n > maxPostGraphemes {
-		return "", fmt.Errorf("text is %d characters, the limit is %d", n, maxPostGraphemes)
-	}
-	if len(text) > maxPostBytes {
-		return "", fmt.Errorf("text is %d bytes, the limit is %d", len(text), maxPostBytes)
+	if err := checkLimits(text); err != nil {
+		return "", err
 	}
 	return text, nil
+}
+
+// checkLimits enforces Bluesky's per-post grapheme and byte limits.
+func checkLimits(text string) error {
+	if n := countGraphemes(text); n > maxPostGraphemes {
+		return fmt.Errorf("text is %d characters, the limit is %d", n, maxPostGraphemes)
+	}
+	if len(text) > maxPostBytes {
+		return fmt.Errorf("text is %d bytes, the limit is %d", len(text), maxPostBytes)
+	}
+	return nil
 }
 
 // Wire types of the records written to the repo.
@@ -214,7 +312,22 @@ type postRecordOut struct {
 	Langs     []string     `json:"langs"`
 	Facets    []postFacet  `json:"facets,omitempty"`
 	Embed     *embedImages `json:"embed,omitempty"`
+	Reply     *replyRef    `json:"reply,omitempty"`
 }
+
+// replyRef makes a post a reply: Root is the thread's first post, Parent the
+// post it answers.
+type replyRef struct {
+	Root   postStrongRef `json:"root"`
+	Parent postStrongRef `json:"parent"`
+}
+
+type postStrongRef struct {
+	URI string `json:"uri"`
+	CID string `json:"cid"`
+}
+
+func strongRef(r publishing.PostRef) postStrongRef { return postStrongRef{URI: r.URI, CID: r.CID} }
 
 type embedImages struct {
 	Type   string       `json:"$type"`
@@ -254,39 +367,41 @@ func (p *Publisher) uploadBlob(ctx context.Context, img preparedImage) (json.Raw
 // createRecord writes the post. Once the request has been sent, a transport
 // failure, an unreadable reply, or a gateway error with no API body leaves
 // it unknown whether the post exists, so those are AmbiguousError (ADR 0030).
-// A reply that parses as an API answer is a confirmed outcome.
-func (p *Publisher) createRecord(ctx context.Context, rec postRecordOut) (string, error) {
+// A reply that parses as an API answer is a confirmed outcome. The returned
+// ref carries the post's CID, which a reply to it needs.
+func (p *Publisher) createRecord(ctx context.Context, rec postRecordOut) (publishing.PostRef, error) {
 	const endpoint = "com.atproto.repo.createRecord"
 	// The DID is part of the body, so resolve the session before marshalling.
 	_, did, err := p.accessToken(ctx)
 	if err != nil {
-		return "", err
+		return publishing.PostRef{}, err
 	}
 	body, err := json.Marshal(map[string]any{"repo": did, "collection": postCollection, "record": rec})
 	if err != nil {
-		return "", fmt.Errorf("bluesky: marshal post: %w", err)
+		return publishing.PostRef{}, fmt.Errorf("bluesky: marshal post: %w", err)
 	}
 	r, _, err := p.authedPost(ctx, endpoint, "application/json", body)
 	if err != nil {
 		var sent *transportError
 		if errors.As(err, &sent) {
-			return "", &appout.AmbiguousError{Err: err}
+			return publishing.PostRef{}, &appout.AmbiguousError{Err: err}
 		}
-		return "", err
+		return publishing.PostRef{}, err
 	}
 	if r.status != http.StatusOK {
 		if r.status >= 500 && !isAPIError(r.body) {
-			return "", &appout.AmbiguousError{Err: fmt.Errorf("bluesky: HTTP %d for %s with no API error body", r.status, endpoint)}
+			return publishing.PostRef{}, &appout.AmbiguousError{Err: fmt.Errorf("bluesky: HTTP %d for %s with no API error body", r.status, endpoint)}
 		}
-		return "", statusError(endpoint, r, p.cfg.Now())
+		return publishing.PostRef{}, statusError(endpoint, r, p.cfg.Now())
 	}
 	var created struct {
 		URI string `json:"uri"`
+		CID string `json:"cid"`
 	}
-	if err := json.Unmarshal(r.body, &created); err != nil || created.URI == "" {
-		return "", &appout.AmbiguousError{Err: fmt.Errorf("bluesky: unreadable %s response", endpoint)}
+	if err := json.Unmarshal(r.body, &created); err != nil || created.URI == "" || created.CID == "" {
+		return publishing.PostRef{}, &appout.AmbiguousError{Err: fmt.Errorf("bluesky: unreadable %s response", endpoint)}
 	}
-	return created.URI, nil
+	return publishing.PostRef{URI: created.URI, CID: created.CID}, nil
 }
 
 func isAPIError(body []byte) bool {

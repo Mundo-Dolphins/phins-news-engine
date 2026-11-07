@@ -20,6 +20,9 @@ type SentLookup struct {
 	// ClockSkew is the tolerance between the engine's clock and the
 	// destination's.
 	ClockSkew time.Duration
+	// ThreadProgress holds the thread parts already posted, in order (empty
+	// for a single-post payload).
+	ThreadProgress []publishing.PostRef
 }
 
 // DestinationReconciler is the optional extension of Publisher for
@@ -27,12 +30,12 @@ type SentLookup struct {
 // account's author feed). PublishOutbox.Reconcile uses it to decide whether
 // an AmbiguousError send actually landed, before any resend.
 //
-// FindSent returns (id, true, true, nil) on a confident match (id is the
+// FindSent returns (ref, true, true, nil) on a confident match (ref.URI is the
 // message ID the original Publish would have returned),
-// ("", false, true, nil) when the history reached back past
-// SentAt-ClockSkew and holds no match, and ("", false, false, nil) when the
+// (PostRef{}, false, true, nil) when the history reached back past
+// SentAt-ClockSkew and holds no match, and (PostRef{}, false, false, nil) when the
 // history was too shallow to conclude anything. An error means the lookup
 // itself failed; the caller quarantines the row.
 type DestinationReconciler interface {
-	FindSent(ctx context.Context, lookup SentLookup) (messageID string, matched, covered bool, err error)
+	FindSent(ctx context.Context, lookup SentLookup) (ref publishing.PostRef, matched, covered bool, err error)
 }

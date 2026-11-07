@@ -36,6 +36,51 @@ type MessagePayload struct {
 	Link string `json:"link,omitempty"`
 	// Kind is a free-form label for the host's handler (e.g. "injury_report").
 	Kind string `json:"kind,omitempty"`
+	// Continuations are the texts that follow Text when the message does not
+	// fit one post; a destination that supports threads posts Text and then
+	// each continuation as a reply to the previous part. Text-only: a payload
+	// with continuations carries no images.
+	Continuations []string `json:"continuations,omitempty"`
+}
+
+// Parts returns Text followed by the continuations, in posting order.
+func (p MessagePayload) Parts() []string {
+	return append([]string{p.Text}, p.Continuations...)
+}
+
+// PostRef identifies one posted part of a thread.
+type PostRef struct {
+	URI string `json:"uri"`
+	CID string `json:"cid"`
+}
+
+// ParseThreadProgress decodes the posted parts of a thread, in order. An
+// empty string yields no parts.
+func ParseThreadProgress(raw string) ([]PostRef, error) {
+	if strings.TrimSpace(raw) == "" {
+		return []PostRef{}, nil
+	}
+	var refs []PostRef
+	if err := json.Unmarshal([]byte(raw), &refs); err != nil {
+		return nil, fmt.Errorf("publishing: decode thread progress: %w", err)
+	}
+	if refs == nil {
+		refs = []PostRef{}
+	}
+	return refs, nil
+}
+
+// MarshalThreadProgress encodes the posted parts of a thread. No parts
+// encode as '[]'.
+func MarshalThreadProgress(refs []PostRef) (string, error) {
+	if refs == nil {
+		refs = []PostRef{}
+	}
+	b, err := json.Marshal(refs)
+	if err != nil {
+		return "", fmt.Errorf("publishing: encode thread progress: %w", err)
+	}
+	return string(b), nil
 }
 
 // IsEmpty reports whether the payload carries no content of its own, so the
@@ -83,6 +128,19 @@ func (p MessagePayload) Validate() error {
 		u, err := url.Parse(p.Link)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 			return fmt.Errorf("publishing: payload link %q must be an absolute http(s) URL", p.Link)
+		}
+	}
+	if len(p.Continuations) > 0 {
+		if strings.TrimSpace(p.Text) == "" {
+			return fmt.Errorf("publishing: payload has continuations but no text")
+		}
+		if len(p.Images) > 0 {
+			return fmt.Errorf("publishing: payload with continuations must not carry images")
+		}
+		for i, c := range p.Continuations {
+			if strings.TrimSpace(c) == "" {
+				return fmt.Errorf("publishing: payload continuation %d must not be empty", i)
+			}
 		}
 	}
 	if p.IsEmpty() && (p.Link != "" || p.Kind != "") {
