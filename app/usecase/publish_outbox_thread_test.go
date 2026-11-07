@@ -246,17 +246,27 @@ func TestReconcile_ThreadLastPartFoundDelivered(t *testing.T) {
 	}
 }
 
-func TestReconcile_ThreadPartNotFoundResendsIt(t *testing.T) {
+// A part confidently not found takes the single-post negative outcome: the
+// attempt counts and the retry backs off, so a destination that keeps failing
+// ambiguously exhausts the row instead of looping. The progress is left as
+// it is, so the retry resumes after the parts already posted.
+func TestReconcile_ThreadPartNotFoundIsNegativeLikeSinglePost(t *testing.T) {
 	pub := &threadReconciler{covered: true}
 	outbox := reconcileThreadRow(t, pub, threadPayload(t, "parte dos"), threadProgress(t, 1))
-	if len(outbox.resumed) != 1 || outbox.resumed[0] != 1 {
-		t.Fatalf("resumed = %v, want the thread row back to retryable", outbox.resumed)
+	if len(outbox.retryable) != 1 || outbox.retryable[0] != 1 {
+		t.Fatalf("retryable = %v, want the thread row retried", outbox.retryable)
 	}
-	if refs := outbox.refs(t, 1); len(refs) != 1 {
-		t.Errorf("thread progress = %+v, want it unchanged", refs)
+	if want := testBackoff.NextAvailableAt(destNow, 1); !outbox.retryableAvailableAt[0].Equal(want) {
+		t.Errorf("retry at %v, want the backoff's %v", outbox.retryableAvailableAt[0], want)
 	}
-	if len(outbox.retryable) != 0 {
-		t.Errorf("retryable = %v: a thread row must resume, not restart", outbox.retryable)
+	if len(outbox.attempts) != 1 || outbox.attempts[0].Outcome != publishing.AttemptTemporaryFailure {
+		t.Errorf("attempts = %+v, want 1 temporary failure", outbox.attempts)
+	}
+	if len(outbox.resumed) != 0 {
+		t.Errorf("resumed = %v: a not-found part must back off, not resume now", outbox.resumed)
+	}
+	if _, written := outbox.progress[1]; written {
+		t.Errorf("thread progress rewritten to %q, want it left as it was", outbox.progress[1])
 	}
 }
 
