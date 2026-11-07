@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/reddit"
+	"github.com/Mundo-Dolphins/phins-news-engine/domain/article"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/source"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/rssclient"
 )
@@ -159,5 +160,76 @@ func TestFetch_ContextCancellationPropagates(t *testing.T) {
 	cancel()
 	if _, err := f.Fetch(ctx); err == nil {
 		t.Fatal("Fetch() error = nil, want context.Canceled")
+	}
+}
+
+func atomFeed(entries string) string {
+	return `<?xml version="1.0" encoding="UTF-8"?><feed xmlns="http://www.w3.org/2005/Atom"><title>F</title>` + entries + `</feed>`
+}
+
+// redditEntry mirrors the Atom entry Reddit serves for a post: the post's
+// target sits in the "[link]" anchor of the HTML content.
+func redditEntry(id, link string) string {
+	post := "https://www.reddit.com/r/sprisotopes/comments/" + id + "/x/"
+	return `<entry><id>t3_` + id + `</id><title>Week 9 Friday report</title>` +
+		`<link href="` + post + `"/>` +
+		`<updated>2026-11-06T21:13:32+00:00</updated>` +
+		`<content type="html">&lt;span&gt;&lt;a href=&quot;` + link + `&quot;&gt;[link]&lt;/a&gt;&lt;/span&gt; ` +
+		`&lt;span&gt;&lt;a href=&quot;` + post + `&quot;&gt;[comments]&lt;/a&gt;&lt;/span&gt;</content></entry>`
+}
+
+func TestFetch_MediaImagesMetadata(t *testing.T) {
+	tests := []struct {
+		name  string
+		link  string
+		hosts []string
+		want  string
+	}{
+		{name: "jpeg", link: "https://i.redd.it/uq0amutw520i1.jpeg", want: `[{"url":"https://i.redd.it/uq0amutw520i1.jpeg","type":"image/jpeg"}]`},
+		{name: "png", link: "https://i.redd.it/a.png", want: `[{"url":"https://i.redd.it/a.png","type":"image/png"}]`},
+		{name: "uppercase extension with query", link: "https://i.redd.it/ABC.JPEG?x=1", want: `[{"url":"https://i.redd.it/ABC.JPEG?x=1","type":"image/jpeg"}]`},
+		{name: "text post", link: "https://www.reddit.com/r/sprisotopes/comments/p1/x/"},
+		{name: "external host", link: "https://i.imgur.com/a.jpg"},
+		{name: "gallery", link: "https://www.reddit.com/gallery/abc"},
+		{name: "http", link: "http://i.redd.it/a.jpg"},
+		{name: "webp", link: "https://i.redd.it/a.webp"},
+		{name: "custom hosts", link: "https://img.example.test/a.png", hosts: []string{"img.example.test"}, want: `[{"url":"https://img.example.test/a.png","type":"image/png"}]`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(atomFeed(redditEntry("p1", tc.link))))
+			}))
+			defer server.Close()
+
+			f := reddit.NewFetcher([]reddit.FeedConfig{{Subreddit: "sprisotopes"}}, testClientConfig(), noopLogger{})
+			if tc.hosts != nil {
+				f = f.WithImageHosts(tc.hosts...)
+			}
+			f.BaseURL = server.URL
+			articles, err := f.Fetch(context.Background())
+			if err != nil {
+				t.Fatalf("Fetch() error = %v", err)
+			}
+			if len(articles) != 1 {
+				t.Fatalf("articles = %d, want 1", len(articles))
+			}
+			a := articles[0]
+			got, ok := a.Metadata[article.MetadataMediaImages]
+			if tc.want == "" {
+				if ok || a.Metadata != nil {
+					t.Fatalf("Metadata = %v, want nil", a.Metadata)
+				}
+				return
+			}
+			if got != tc.want {
+				t.Errorf("media_images = %s, want %s", got, tc.want)
+			}
+			// Summary stays what it was before images were exposed: Reddit's
+			// Atom feed carries no summary, only content.
+			if a.Summary != "" {
+				t.Errorf("Summary = %q, want empty", a.Summary)
+			}
+		})
 	}
 }

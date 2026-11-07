@@ -1,10 +1,19 @@
 // Package reddit fetches subreddit RSS feeds from Reddit's public .rss
 // endpoints (no authentication). Ported from v1's reddit/fetcher.go.
+//
+// An image post's picture is exposed as article.MetadataMediaImages when its
+// "[link]" target is an https URL on an allowed image host (default
+// i.redd.it) with a .jpg, .jpeg or .png extension.
 package reddit
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/url"
+	"path"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sourcefilter"
@@ -17,6 +26,15 @@ import (
 
 const defaultBaseURL = "https://www.reddit.com"
 
+// defaultImageHosts are the hosts whose image links become media metadata.
+var defaultImageHosts = []string{"i.redd.it"}
+
+// imageTypes maps the accepted image extensions to their MIME type.
+var imageTypes = map[string]string{".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png"}
+
+// postLinkRe finds the target of the "[link]" anchor in a post's content.
+var postLinkRe = regexp.MustCompile(`<a href="([^"]+)">\[link\]</a>`)
+
 // FeedConfig is one subreddit's public .rss feed.
 type FeedConfig struct {
 	Subreddit  string
@@ -28,15 +46,22 @@ type FeedConfig struct {
 // Fetcher fetches every configured subreddit feed. BaseURL defaults to
 // Reddit's real host; tests override it to point at an httptest.Server.
 type Fetcher struct {
-	BaseURL   string
-	feeds     []FeedConfig
-	clientCfg rssclient.Config
-	logger    appout.Logger
+	BaseURL    string
+	feeds      []FeedConfig
+	clientCfg  rssclient.Config
+	logger     appout.Logger
+	imageHosts []string
 }
 
 // NewFetcher builds a ready Fetcher pointed at the real reddit.com.
 func NewFetcher(feeds []FeedConfig, clientCfg rssclient.Config, logger appout.Logger) *Fetcher {
-	return &Fetcher{BaseURL: defaultBaseURL, feeds: feeds, clientCfg: clientCfg, logger: logger}
+	return &Fetcher{BaseURL: defaultBaseURL, feeds: feeds, clientCfg: clientCfg, logger: logger, imageHosts: defaultImageHosts}
+}
+
+// WithImageHosts replaces the hosts whose image links become media metadata.
+func (f *Fetcher) WithImageHosts(hosts ...string) *Fetcher {
+	f.imageHosts = hosts
+	return f
 }
 
 // Fetch fetches every configured subreddit. A single subreddit's failure is
@@ -137,8 +162,43 @@ func (f *Fetcher) fetchFeed(ctx context.Context, feed FeedConfig) ([]article.Art
 			PublishedAt: publishedAt,
 			FetchedAt:   now,
 			ContentType: sourcefilter.ContentTypeFor(feed.SourceType),
+			Metadata:    postImages(item.Content, f.imageHosts),
 			Status:      article.StatusFetched,
 		})
 	}
 	return out, nil
+}
+
+// postImages returns the metadata for the post's linked image, or nil when
+// the post links no accepted image (articles keep a nil Metadata).
+func postImages(content string, hosts []string) map[string]string {
+	m := postLinkRe.FindStringSubmatch(content)
+	if m == nil {
+		return nil
+	}
+	u, err := url.Parse(m[1])
+	if err != nil || u.Scheme != "https" || !hostAllowed(u.Hostname(), hosts) {
+		return nil
+	}
+	typ, ok := imageTypes[strings.ToLower(path.Ext(u.Path))]
+	if !ok {
+		return nil
+	}
+	b, err := json.Marshal([]struct {
+		URL  string `json:"url"`
+		Type string `json:"type"`
+	}{{URL: u.String(), Type: typ}})
+	if err != nil {
+		return nil
+	}
+	return map[string]string{article.MetadataMediaImages: string(b)}
+}
+
+func hostAllowed(host string, hosts []string) bool {
+	for _, h := range hosts {
+		if strings.EqualFold(host, h) {
+			return true
+		}
+	}
+	return false
 }

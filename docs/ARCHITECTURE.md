@@ -79,6 +79,10 @@ depends on `fetch_sources.<category>.on_missing_dependency` and the profile
 (see [CONFIG-REFERENCE.md](CONFIG-REFERENCE.md#profiles)). Zero active
 sources is always fatal.
 
+The `reddit` fetcher sets `article.MetadataMediaImages` (`media_images`, a
+JSON array of `{"url","type"}`) on image posts whose link is a `.jpg`,
+`.jpeg` or `.png` on `i.redd.it`, so event handlers can download the image.
+
 `cli.Root()` is the composition root of the operator tools. Commands that
 need something only a host can provide (a scraper, remote operations, a
 channel-history client) look it up in `cli/cmd/shared` and fail with a
