@@ -73,6 +73,7 @@ type feedViewPost struct {
 
 type postView struct {
 	URI    string     `json:"uri"`
+	CID    string     `json:"cid"`
 	Author authorView `json:"author"`
 	Record postRecord `json:"record"`
 }
@@ -87,6 +88,14 @@ type postRecord struct {
 	CreatedAt string       `json:"createdAt"`
 	Facets    []facet      `json:"facets"`
 	Embed     *recordEmbed `json:"embed"`
+	Reply     *recordReply `json:"reply"`
+}
+
+// recordReply is set on a post that replies to another.
+type recordReply struct {
+	Parent struct {
+		URI string `json:"uri"`
+	} `json:"parent"`
 }
 
 type facet struct {
@@ -111,7 +120,16 @@ type embedExternal struct {
 // GetAuthorFeed calls app.bsky.feed.getAuthorFeed for actor (a handle),
 // excluding replies, returning up to limit posts.
 func (c *Client) GetAuthorFeed(ctx context.Context, actor string, limit int) ([]feedViewPost, error) {
-	q := url.Values{"actor": {actor}, "filter": {"posts_no_replies"}, "limit": {strconv.Itoa(limit)}}
+	return c.getAuthorFeed(ctx, actor, "posts_no_replies", limit)
+}
+
+// GetAuthorFeedWithReplies is GetAuthorFeed including the actor's replies.
+func (c *Client) GetAuthorFeedWithReplies(ctx context.Context, actor string, limit int) ([]feedViewPost, error) {
+	return c.getAuthorFeed(ctx, actor, "posts_with_replies", limit)
+}
+
+func (c *Client) getAuthorFeed(ctx context.Context, actor, filter string, limit int) ([]feedViewPost, error) {
+	q := url.Values{"actor": {actor}, "filter": {filter}, "limit": {strconv.Itoa(limit)}}
 	return c.getFeed(ctx, "app.bsky.feed.getAuthorFeed", q)
 }
 
