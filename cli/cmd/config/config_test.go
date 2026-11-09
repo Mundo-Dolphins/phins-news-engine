@@ -52,6 +52,18 @@ youtube: {rss_base_url: "", accounts: []}
 	if !strings.Contains(got, "rss") {
 		t.Errorf("output = %q, want it to mention the rss category", got)
 	}
+	// Golden: the "inactive" lines come from a map, so their order is not fixed.
+	for _, want := range []string{
+		"config OK: " + settingsPath + " (profile=local)\n  active sources: rss\n",
+		"  inactive: website (",
+		"  sqlite.path=" + dbPath + "\n  scheduler.check_interval=5m0s\n  scheduler.cleanup_interval=24h0m0s\n" +
+			"  retention.rejected_articles_days=14\n  retention.duplicates_days=7\n  retention.audit_events_days=30\n" +
+			"  retention.publication_attempts_days=30\n  retention.clusters_days=14\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output = %q, want it to contain %q", got, want)
+		}
+	}
 }
 
 // configValidateFixtureYAML is self-contained (does not reuse cmd_test.go's

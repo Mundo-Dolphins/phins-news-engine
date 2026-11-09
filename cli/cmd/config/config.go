@@ -1,17 +1,14 @@
 package configcmd
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/Mundo-Dolphins/phins-news-engine/cli/cmd/shared"
 
 	"github.com/spf13/cobra"
 
-	"github.com/Mundo-Dolphins/phins-news-engine/infra/clock"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
-	"github.com/Mundo-Dolphins/phins-news-engine/infra/fetcherwiring"
-	"github.com/Mundo-Dolphins/phins-news-engine/infra/sourcesfile"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/configcheck"
 )
 
 func NewCommand() *cobra.Command {
@@ -23,26 +20,19 @@ func NewCommand() *cobra.Command {
 		Use:   "validate",
 		Short: "Load and strictly validate the YAML configuration file",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, err := config.Load(shared.ConfigPath)
-			if err != nil {
-				return err
-			}
 			profile, err := config.ResolveProfile(shared.ProfileFlag)
 			if err != nil {
 				return err
 			}
-			catalog, err := sourcesfile.Load(cfg.Fetch.SourcesPath)
-			if err != nil {
-				return fmt.Errorf("load sources: %w", err)
-			}
-			_, report, err := fetcherwiring.Build(cfg, catalog, profile, clock.Real{}, shared.DiscardLogger{}, shared.FetcherExtensions)
+			result, err := configcheck.Validate(shared.ConfigPath, profile, shared.FetcherExtensions)
 			if err != nil {
 				return err
 			}
+			cfg, report := result.Config, result
 
 			cmd.Printf("config OK: %s (profile=%s)\n", shared.ConfigPath, profile)
-			cmd.Printf("  active sources: %s\n", strings.Join(report.Active(), ", "))
-			for category, reason := range report.Inactive() {
+			cmd.Printf("  active sources: %s\n", strings.Join(report.Active, ", "))
+			for category, reason := range report.Inactive {
 				cmd.Printf("  inactive: %s (%s)\n", category, reason)
 			}
 			cmd.Printf("  sqlite.path=%s\n", cfg.SQLite.Path)

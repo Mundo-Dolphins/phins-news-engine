@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	sqliteadapter "github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqlite"
+	"github.com/Mundo-Dolphins/phins-news-engine/app/decisionaudit"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
 	infrasqlite "github.com/Mundo-Dolphins/phins-news-engine/infra/sqlite"
 	"github.com/Mundo-Dolphins/phins-news-engine/migrations"
@@ -52,18 +53,14 @@ func newDuplicatesCommand() *cobra.Command {
 			articles := sqliteadapter.NewArticleRepository(db)
 
 			since := time.Now().UTC().AddDate(0, 0, -days)
-			events, err := decisions.ListByEventTypesSince(cmd.Context(), []string{"dedup"}, since, limit)
+			rows, err := decisionaudit.Duplicates(cmd.Context(), decisions, articles, since, limit)
 			if err != nil {
 				return err
 			}
 
-			cmd.Printf("duplicate rejections in the last %d days (limit %d): %d total\n", days, limit, len(events))
-			for _, e := range events {
-				title := "(article not found)"
-				if a, err := articles.FindByID(cmd.Context(), e.ArticleID); err == nil {
-					title = a.Title
-				}
-				cmd.Printf("%s  %-40s  %s\n", e.OccurredAt.Format(time.RFC3339), title, e.ReasonDetail)
+			cmd.Printf("duplicate rejections in the last %d days (limit %d): %d total\n", days, limit, len(rows))
+			for _, r := range rows {
+				cmd.Printf("%s  %-40s  %s\n", r.OccurredAt.Format(time.RFC3339), r.Title, r.Detail)
 			}
 			return nil
 		},
@@ -101,27 +98,21 @@ func newQualityCommand() *cobra.Command {
 			articles := sqliteadapter.NewArticleRepository(db)
 
 			since := time.Now().UTC().AddDate(0, 0, -days)
-			events, err := decisions.ListByEventTypesSince(cmd.Context(), []string{"editorial_shadow", "editorial_ambiguous", "editorial"}, since, limit)
+			rows, belowThreshold, err := decisionaudit.Quality(cmd.Context(), decisions, articles, since, limit)
 			if err != nil {
 				return err
 			}
 
-			belowThreshold := 0
-			cmd.Printf("editorial decisions in the last %d days (limit %d): %d total\n", days, limit, len(events))
-			for _, e := range events {
-				title, status := "(article not found)", "(unknown)"
-				if a, err := articles.FindByID(cmd.Context(), e.ArticleID); err == nil {
-					title, status = a.Title, string(a.Status)
-				}
+			cmd.Printf("editorial decisions in the last %d days (limit %d): %d total\n", days, limit, len(rows))
+			for _, r := range rows {
 				flag := ""
-				if e.Score < e.Threshold {
+				if r.BelowThreshold {
 					flag = "  [below threshold]"
-					belowThreshold++
 				}
 				cmd.Printf("%s  score=%.1f threshold=%.1f  status=%-20s  %s%s\n",
-					e.OccurredAt.Format(time.RFC3339), e.Score, e.Threshold, status, title, flag)
+					r.OccurredAt.Format(time.RFC3339), r.Score, r.Threshold, r.Status, r.Title, flag)
 			}
-			cmd.Printf("%d of %d decisions were below their gating threshold\n", belowThreshold, len(events))
+			cmd.Printf("%d of %d decisions were below their gating threshold\n", belowThreshold, len(rows))
 			return nil
 		},
 	}
