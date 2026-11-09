@@ -4,38 +4,35 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
 	"time"
 
-	sqliteadapter "github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqlite"
+	"github.com/Mundo-Dolphins/phins-news-engine/app/dictionaryupdate"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/dictionary"
-	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionaryhistory"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionarysession"
-	"github.com/Mundo-Dolphins/phins-news-engine/ports/out"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionarywiring"
 )
 
-const dictionaryHistoryDir = "data/dictionary/history"
+// The wrappers below keep the names the bot's `dictionary update` command
+// imports from this package; the logic lives in dictionarywiring.
 
 // BackupPreviousDictionary preserves the outgoing dictionary version before
-// it is overwritten: it writes the full artifact set (dictionary, diff,
-// decision log, validation result) for previous under dictionaryHistoryDir
-// via dictionaryhistory.WriteVersion, then records the version in the
-// append-only dictionary_history SQLite ledger. It does not mark previous as
-// promoted — that status moves to the newly written version once the write
-// that follows this backup succeeds.
+// it is overwritten (see dictionarywiring.BackupPreviousDictionary), stamped
+// with the current time; errors carry the "dictionary update: " prefix.
 func BackupPreviousDictionary(ctx context.Context, db *sql.DB, previous dictionary.Dictionary, diff string, decisions []dictionarysession.Decision) error {
-	validation := dictionary.Validate(previous)
-	if err := dictionaryhistory.WriteVersion(dictionaryHistoryDir, dictionaryhistory.Artifacts{
-		Version: previous.Version, Dictionary: previous, Diff: diff, Decisions: decisions, Validation: validation,
-	}); err != nil {
-		return fmt.Errorf("dictionary update: %w", err)
-	}
-
-	repo := sqliteadapter.NewDictionaryHistoryRepository(db)
-	if err := repo.Record(ctx, out.DictionaryHistoryRecord{
-		Version: previous.Version, ContentHash: dictionary.ContentHash(previous), CreatedAt: time.Now().UTC(),
-		OperationKind: "update",
-	}); err != nil {
+	if err := dictionarywiring.BackupPreviousDictionary(ctx, db, previous, diff, decisions, time.Now()); err != nil {
 		return fmt.Errorf("dictionary update: %w", err)
 	}
 	return nil
+}
+
+// SourceEntitiesFromDictionary delegates to
+// dictionarywiring.SourceEntitiesFromDictionary.
+func SourceEntitiesFromDictionary(d dictionary.Dictionary) []dictionaryupdate.SourceEntity {
+	return dictionarywiring.SourceEntitiesFromDictionary(d)
+}
+
+// RenderDiffText delegates to dictionarywiring.RenderDiffText.
+func RenderDiffText(w io.Writer, proposals []dictionaryupdate.Proposal) error {
+	return dictionarywiring.RenderDiffText(w, proposals)
 }

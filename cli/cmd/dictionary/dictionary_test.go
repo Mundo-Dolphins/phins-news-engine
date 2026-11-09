@@ -675,3 +675,40 @@ func TestDictionaryUpdate_CatalogExclusionsApplyToMiningAndResumedCandidates(t *
 		t.Fatal("dictionary changed without approvals")
 	}
 }
+
+func TestValidateOutput(t *testing.T) {
+	path := writeDictionaryFixture(t, validDictionaryYAML)
+	out, err := testsupport.Execute(t, "dictionary", "validate", path)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, output: %s", err, out)
+	}
+	want := fmt.Sprintf("dictionary OK: %s (0 issue(s) reported)\n", path)
+	if out != want {
+		t.Errorf("valid output = %q, want %q", out, want)
+	}
+
+	bad := writeDictionaryFixture(t, invalidDictionaryYAML)
+	out, err = testsupport.Execute(t, "dictionary", "validate", bad)
+	if err == nil || err.Error() != fmt.Sprintf("dictionary validate: %s failed validation", bad) {
+		t.Fatalf("invalid error = %v", err)
+	}
+	want = fmt.Sprintf("[error] b/Isotopes: term \"Isotopes\" duplicates an entry already registered by a/isotopes\nError: dictionary validate: %s failed validation\n", bad)
+	if out != want {
+		t.Errorf("invalid output = %q, want %q", out, want)
+	}
+}
+
+func TestInspectOutput(t *testing.T) {
+	path := writeDictionaryFixture(t, validDictionaryYAML)
+	out, err := testsupport.Execute(t, "dictionary", "inspect", path)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	want := "version: 1.0.0\nname: test_dict\nlanguage: en\ncategories: 1\n" +
+		"  official_names: weight=12.0 strong_override=true entries=1 aliases=0\n" +
+		"total entries: 1\ntotal aliases: 0\n" +
+		"thresholds: positive_high=10.0 positive_medium=6.0 negative_high=0.0 title_multiplier=2.0 max_count_per_term=3\n"
+	if out != want {
+		t.Errorf("output = %q, want %q", out, want)
+	}
+}

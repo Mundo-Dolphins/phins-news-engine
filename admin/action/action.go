@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/fetcherwiring"
 )
 
 // Kind classifies the side effects of an action.
@@ -43,6 +44,13 @@ type Env struct {
 	// StatsLogPath is the process log the host wants stats.report to scan
 	// when the caller gives no log_path.
 	StatsLogPath string
+	// ConfigPath is the settings file the admin loaded.
+	ConfigPath string
+	// Profile is the resolved profile (local or production).
+	Profile config.Profile
+	// FetcherExtensions are the host's fetcher categories, as the CLI
+	// receives them, for actions that build the process fetcher.
+	FetcherExtensions fetcherwiring.Extensions
 }
 
 // Action is one admin operation.

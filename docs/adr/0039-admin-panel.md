@@ -50,6 +50,24 @@ run them, without the panel ever endangering the running bot.
   `WARNING` summary and keep the saved work. Their logic lives in
   `infra/entitywiring`, `app/editorialmetrics` and `app/lookback`, shared with
   the CLI.
+- **Step 2, batch 3.** 18 more engine actions in six groups: `audit.*`
+  (duplicates, quality), `config.validate`, `model.validate` and
+  `clustering.rules_validate`, `dictionary.*` (validate, inspect, history,
+  diff, regression_check, rollback, mine_candidates) and `events.*` (type_list,
+  brief, gate, impact, type_approve, type_reject). Production offers the 13
+  read-only ones; `dictionary.rollback` (destructive, so it needs `confirm`
+  and never prompts), `dictionary.regression_check`,
+  `dictionary.mine_candidates`, `events.type_approve` and `events.type_reject`
+  are local-only. A both-mode action accepts a path param in production only
+  when it equals the configured value. Reports whose CLI exits non-zero after
+  printing (`dictionary.validate` with errors, `dictionary.regression_check`
+  over its threshold, `events.gate` blocked) return a result whose summary
+  starts with `FAILED:` or `BLOCKED:`. `events.impact` is long-running.
+  A host adds its own actions with `admin.Add`; the engine hands them the
+  host's fetcher categories through `Options.FetcherExtensions` (the bot
+  uses both for `ocr.check` and `dictionary.fetch`). The logic lives in
+  `infra/dictionarywiring`, `infra/eventrules`, `infra/configcheck` and
+  `app/decisionaudit`, shared with the CLI.
 - **Production writes only operational state.** Reads everywhere, plus
   `claims.retry`, `claims.release`, `outbox.expire`, `outbox.repair` and the
   `label.*` writes. Training, promote and rollback are local-only and reach the Pi through the normal deploy; no CPU-heavy job runs

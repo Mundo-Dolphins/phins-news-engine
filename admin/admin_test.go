@@ -12,6 +12,7 @@ import (
 	"net/http/cookiejar"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -21,6 +22,8 @@ import (
 
 	"github.com/Mundo-Dolphins/phins-news-engine/admin"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/action"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/fetcherwiring"
 	infrasqlite "github.com/Mundo-Dolphins/phins-news-engine/infra/sqlite"
 	"github.com/Mundo-Dolphins/phins-news-engine/migrations"
 	"github.com/Mundo-Dolphins/phins-news-engine/testsupport/repofs"
@@ -35,6 +38,7 @@ var (
 	jobStarted  = make(chan struct{}, 1)
 	syncStarted = make(chan struct{}, 1)
 	jobFinished atomic.Bool
+	envSeen     = make(chan action.Env, 1)
 )
 
 func TestMain(m *testing.M) {
@@ -57,6 +61,15 @@ func TestMain(m *testing.M) {
 		Run: func(ctx context.Context, _ action.Env, _ any) (action.Result, error) {
 			syncStarted <- struct{}{}
 			time.Sleep(300 * time.Millisecond)
+			return action.Result{}, nil
+		},
+	})
+	// Reports the Env the host hooks produced (TestEnvCarriesHostHooks).
+	admin.Add(action.Action{
+		Name: "test.envhooks", Group: "test", Title: "Env hooks", Kind: action.KindRead,
+		Modes: []action.Mode{action.ModeLocal},
+		Run: func(_ context.Context, env action.Env, _ any) (action.Result, error) {
+			envSeen <- env
 			return action.Result{}, nil
 		},
 	})
@@ -557,5 +570,88 @@ func TestCatalogStep2Batch2(t *testing.T) {
 	}
 	if got, want := len(both)+len(localOnly), 26; got != want {
 		t.Fatalf("catalog lists %d new actions, want %d", got, want)
+	}
+}
+
+// TestCatalogStep2Batch3 pins which step 2 batch 3 engine actions each mode
+// offers (the host adds ocr.check and dictionary.fetch).
+func TestCatalogStep2Batch3(t *testing.T) {
+	both := []string{
+		"audit.duplicates", "audit.quality", "config.validate", "model.validate", "clustering.rules_validate",
+		"dictionary.validate", "dictionary.inspect", "dictionary.history", "dictionary.diff",
+		"events.brief", "events.gate", "events.impact", "events.type_list",
+	}
+	localOnly := []string{
+		"dictionary.rollback", "dictionary.regression_check", "dictionary.mine_candidates",
+		"events.type_approve", "events.type_reject",
+	}
+	set := func(m action.Mode) map[string]bool {
+		out := map[string]bool{}
+		for _, n := range admin.RegistryFor(m) {
+			out[n] = true
+		}
+		return out
+	}
+	local, prod := set(action.ModeLocal), set(action.ModeProduction)
+	for _, n := range append(append([]string{}, both...), localOnly...) {
+		if !local[n] {
+			t.Errorf("local mode lacks %s", n)
+		}
+	}
+	for _, n := range both {
+		if !prod[n] {
+			t.Errorf("production mode lacks %s", n)
+		}
+	}
+	for _, n := range localOnly {
+		if prod[n] {
+			t.Errorf("production mode offers local-only %s", n)
+		}
+	}
+	if got, want := len(both)+len(localOnly), 18; got != want {
+		t.Fatalf("catalog lists %d new actions, want %d", got, want)
+	}
+	if got, want := len(both), 13; got != want {
+		t.Fatalf("catalog lists %d both-mode actions, want %d", got, want)
+	}
+	// Production offers exactly these 13 actions in this batch's groups:
+	// nothing else in them leaks into production.
+	batchGroups := map[string]bool{"audit": true, "config": true, "model": true, "clustering": true, "dictionary": true, "events": true}
+	var prodBatch []string
+	for name, g := range admin.RegistryGroupsFor(action.ModeProduction) {
+		if batchGroups[g] {
+			prodBatch = append(prodBatch, name)
+		}
+	}
+	slices.Sort(prodBatch)
+	wantBoth := append([]string{}, both...)
+	slices.Sort(wantBoth)
+	if !slices.Equal(prodBatch, wantBoth) {
+		t.Errorf("production actions in this batch's groups = %v, want exactly %v", prodBatch, wantBoth)
+	}
+}
+
+func TestEnvCarriesHostHooks(t *testing.T) {
+	h := newHarness(t, "local", 1)
+	h.opts.FetcherExtensions = fetcherwiring.Extensions{
+		Categories: map[string]fetcherwiring.CategoryBuilder{},
+	}
+	h.start()
+	c := loggedIn(t, h.bases[0])
+	if code, body := postAction(t, c, h.bases[0], "test.envhooks", `{}`); code != http.StatusOK {
+		t.Fatalf("test.envhooks = %d %s", code, body)
+	}
+	env := <-envSeen
+	if env.ConfigPath != h.opts.ConfigPath {
+		t.Errorf("ConfigPath = %q, want %q", env.ConfigPath, h.opts.ConfigPath)
+	}
+	if env.Profile != config.ProfileLocal {
+		t.Errorf("Profile = %q, want local", env.Profile)
+	}
+	if env.FetcherExtensions.Categories == nil {
+		t.Error("FetcherExtensions.Categories is nil, want the host's map")
+	}
+	if err := h.stop(); err != nil {
+		t.Fatal(err)
 	}
 }

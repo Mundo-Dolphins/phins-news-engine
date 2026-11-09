@@ -22,3 +22,13 @@ func RegistryFor(mode action.Mode) []string {
 	}
 	return names
 }
+
+// RegistryGroupsFor maps the name of each action the built-in registry
+// offers in mode to its group.
+func RegistryGroupsFor(mode action.Mode) map[string]string {
+	groups := map[string]string{}
+	for _, a := range registry.For(mode) {
+		groups[a.Name] = a.Group
+	}
+	return groups
+}

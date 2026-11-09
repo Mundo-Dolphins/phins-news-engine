@@ -13,6 +13,10 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/app/dictionaryupdate"
 )
 
+// DefaultDir is the directory the fetcher writes dictionary snapshots to and
+// `dictionary diff` reads them from when no directory is given.
+const DefaultDir = "data/dictionary/snapshots"
+
 const (
 	ParserVersion = "1"
 	SchemaVersion = 1

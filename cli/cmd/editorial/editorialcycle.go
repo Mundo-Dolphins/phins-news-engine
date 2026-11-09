@@ -30,6 +30,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/clock"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionaryfile"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/eventrules"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/shellrunner"
 	infrasqlite "github.com/Mundo-Dolphins/phins-news-engine/infra/sqlite"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/trainwiring"
@@ -63,7 +64,7 @@ func newCycleCommand() *cobra.Command {
 				dryRun, resume, redecide, nonInteractive, sampleSize = false, false, false, false, 0
 				skipSync, skipDictionary, skipTrain, skipDeploy, skipTelegramImport, force = false, false, false, false, false, false
 				skipEntities, skipRosterSync, entitiesVerification = false, false, toolsentities.CycleVerificationLocal
-				skipEventRules, eventRulesDataset = false, toolsevents.DefaultDatasetPath
+				skipEventRules, eventRulesDataset = false, eventrules.DefaultDatasetPath
 				remote, keyPath = "", ""
 			}()
 
@@ -679,7 +680,7 @@ func newCycleCommand() *cobra.Command {
 					cmd.Println("editorial cycle stopped — event rule proposals saved; finish them with `" + shared.ProgramName + " events review`, then run the dictionary update, training and deployment again (the review session is already completed, so --resume does not re-enter this step)")
 					return nil
 				}
-				eventRulesDeployPaths = toolsevents.DeployPaths(cfg, res)
+				eventRulesDeployPaths = eventrules.DeployPaths(cfg, res)
 			}
 			if !skipDictionary {
 				approvedCount, paused, err := toolsdictionary.RunUpdateFlow(cmd, cfg, db, session.ID, false, scanner)
@@ -818,7 +819,7 @@ func newCycleCommand() *cobra.Command {
 	cycleCmd.Flags().BoolVar(&skipRosterSync, "skip-roster-sync", false, "do not download the nflverse roster before the review; the entity step uses the existing file")
 	cycleCmd.Flags().StringVar(&entitiesVerification, "entities-verification", toolsentities.CycleVerificationLocal, "verification depth of the entity step: local (noise, teams, roster, Wikidata), full (adds LLM + web search) or none")
 	cycleCmd.Flags().BoolVar(&skipEventRules, "skip-event-rules", false, "skip discovering and reviewing event rule trigger phrases from generic articles")
-	cycleCmd.Flags().StringVar(&eventRulesDataset, "event-rules-dataset", toolsevents.DefaultDatasetPath, "gold clustering dataset the event rules apply gate scores")
+	cycleCmd.Flags().StringVar(&eventRulesDataset, "event-rules-dataset", eventrules.DefaultDatasetPath, "gold clustering dataset the event rules apply gate scores")
 	cycleCmd.Flags().BoolVar(&skipDictionary, "skip-dictionary", false, "skip mining dictionary candidates from this session's review decisions")
 	cycleCmd.Flags().BoolVar(&skipTrain, "skip-train", false, "skip training and promotion entirely")
 	cycleCmd.Flags().BoolVar(&skipTelegramImport, "skip-telegram-import", false, "explicitly run without importing Telegram channel history first (strict by default: missing telegram.api_id/api_hash/channel_id/phone-or-session otherwise fails before any database write). Prints a warning and is recorded in this run's audit report — publications reconstructed from this session will be missing this source")

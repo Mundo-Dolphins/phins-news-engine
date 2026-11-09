@@ -1,7 +1,12 @@
 package dictionaryhistory_test
 
 import (
+	"errors"
+	"io/fs"
 	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/dictionary"
@@ -73,5 +78,48 @@ func TestWriteVersion_LeavesNoPartialDirOnFailure(t *testing.T) {
 		if name != "v1.0.0" {
 			t.Fatalf("expected only the final v1.0.0 directory, found leftover: %s", name)
 		}
+	}
+}
+
+func TestReadVersion_RejectsVersionsThatEscapeBaseDir(t *testing.T) {
+	base := t.TempDir()
+	// A readable version directory outside base proves the rejection
+	// happens before any read, not because the target is missing.
+	outside := t.TempDir()
+	if err := dictionaryhistory.WriteVersion(outside, dictionaryhistory.Artifacts{Version: "x", Dictionary: dictionary.Dictionary{Version: "x"}}); err != nil {
+		t.Fatalf("WriteVersion: %v", err)
+	}
+	escape, err := filepath.Rel(base, filepath.Join(outside, "vx"))
+	if err != nil {
+		t.Fatalf("Rel: %v", err)
+	}
+	// ReadVersion prefixes "v", so "/../<rel to base>" climbs out of the
+	// "v" segment first and lands on the readable outside directory.
+	cases := map[string]string{
+		"empty":            "",
+		"slash escape":     "/../" + escape,
+		"parent":           "../x",
+		"dotdot inside":    "1..2",
+		"backslash parent": `..\x`,
+		"slash":            "1/0",
+		"backslash":        `a\b`,
+	}
+	for name, version := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := dictionaryhistory.ReadVersion(base, version)
+			if !errors.Is(err, dictionaryhistory.ErrInvalidVersion) {
+				t.Fatalf("ReadVersion(%q) err = %v, want ErrInvalidVersion", version, err)
+			}
+			if version != "" && !strings.Contains(err.Error(), strconv.Quote(version)) {
+				t.Errorf("error %q does not name the version %q", err, version)
+			}
+		})
+	}
+}
+
+func TestReadVersion_MissingValidVersionIsNotExist(t *testing.T) {
+	_, err := dictionaryhistory.ReadVersion(t.TempDir(), "1.0.9")
+	if !errors.Is(err, fs.ErrNotExist) || errors.Is(err, dictionaryhistory.ErrInvalidVersion) {
+		t.Fatalf("err = %v, want fs.ErrNotExist only", err)
 	}
 }

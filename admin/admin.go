@@ -19,16 +19,20 @@ import (
 	"time"
 
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/action"
+	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/audit"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/claims"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/classifierdictionary"
+	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/dictionary"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/editorial"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/entities"
+	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/events"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/label"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/outbox"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/sourcepolicy"
 	sqliteactions "github.com/Mundo-Dolphins/phins-news-engine/admin/actions/sqlite"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/stats"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/train"
+	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/validation"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/auth"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/httpapi"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/jobs"
@@ -36,6 +40,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/store"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/web"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/fetcherwiring"
 	infrasqlite "github.com/Mundo-Dolphins/phins-news-engine/infra/sqlite"
 	"github.com/Mundo-Dolphins/phins-news-engine/migrations"
 )
@@ -63,6 +68,10 @@ func init() {
 	registry.Add(entities.Actions()...)
 	registry.Add(classifierdictionary.Actions()...)
 	registry.Add(editorial.Actions()...)
+	registry.Add(audit.Actions()...)
+	registry.Add(validation.Actions()...)
+	registry.Add(dictionary.Actions()...)
+	registry.Add(events.Actions()...)
 }
 
 // Add registers host actions, like cli.Add does for commands. Call it before
@@ -91,6 +100,9 @@ type Options struct {
 	// StatsLogPath is the process log stats.report scans by default; empty
 	// means "data/logs/out.log", the CLI default.
 	StatsLogPath string
+	// FetcherExtensions are the host's fetcher categories, copied into every
+	// action Env.
+	FetcherExtensions fetcherwiring.Extensions
 }
 
 // Run starts the admin panel and blocks until ctx is done or a server fails.
@@ -182,7 +194,8 @@ func Run(ctx context.Context, opts Options) error {
 		statsLogPath = "data/logs/out.log"
 	}
 	envFor := func(actor string) action.Env {
-		return action.Env{DB: opDB, Config: cfg, Mode: mode, Now: now, Log: log, Actor: actor, StatsLogPath: statsLogPath}
+		return action.Env{DB: opDB, Config: cfg, Mode: mode, Now: now, Log: log, Actor: actor, StatsLogPath: statsLogPath,
+			ConfigPath: opts.ConfigPath, Profile: profile, FetcherExtensions: opts.FetcherExtensions}
 	}
 	streamsDone := make(chan struct{})
 	handler := httpapi.NewHandler(httpapi.Deps{

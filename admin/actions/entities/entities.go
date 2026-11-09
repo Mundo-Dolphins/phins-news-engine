@@ -188,25 +188,6 @@ func or(v, def string) string {
 
 func orDash(s string) string { return or(s, "-") }
 
-// pathParam is a file path param of a both-mode action and the configured
-// value it overrides.
-type pathParam struct{ name, value, configured string }
-
-// refusePathOverrides rejects, in production, any path param that differs
-// from its configured value (like stats.report's log_path): any
-// authenticated caller could otherwise make the admin read arbitrary files.
-func refusePathOverrides(env action.Env, params ...pathParam) error {
-	if env.Mode != action.ModeProduction {
-		return nil
-	}
-	for _, p := range params {
-		if p.value != "" && p.value != p.configured {
-			return &action.Error{Code: action.CodeInvalidParams, Message: p.name + " cannot be changed in production"}
-		}
-	}
-	return nil
-}
-
 func runList(ctx context.Context, env action.Env, params any) (action.Result, error) {
 	p, ok := params.(*listParams)
 	if !ok {
@@ -387,13 +368,13 @@ func runExtract(_ context.Context, env action.Env, params any) (action.Result, e
 			Message: "give at least one of title, description or body", Err: entitywiring.ErrNoText}
 	}
 	cl := env.Config.Clustering
-	if err := refusePathOverrides(env,
-		pathParam{"rules", p.Rules, cl.RulesPath},
-		pathParam{"manual", p.Manual, cl.EntityCatalog.ManualPath},
-		pathParam{"generated", p.Generated, cl.EntityCatalog.GeneratedPath},
-		pathParam{"generated_rules", p.GeneratedRules, cl.GeneratedRulesPath},
-		pathParam{"roster", p.Roster, cl.EntityCatalog.League.RosterPath},
-		pathParam{"league_rules", p.LeagueRules, cl.EntityCatalog.League.RulesPath},
+	if err := action.RefusePathOverrides(env,
+		action.PathParam{Name: "rules", Value: p.Rules, Configured: cl.RulesPath},
+		action.PathParam{Name: "manual", Value: p.Manual, Configured: cl.EntityCatalog.ManualPath},
+		action.PathParam{Name: "generated", Value: p.Generated, Configured: cl.EntityCatalog.GeneratedPath},
+		action.PathParam{Name: "generated_rules", Value: p.GeneratedRules, Configured: cl.GeneratedRulesPath},
+		action.PathParam{Name: "roster", Value: p.Roster, Configured: cl.EntityCatalog.League.RosterPath},
+		action.PathParam{Name: "league_rules", Value: p.LeagueRules, Configured: cl.EntityCatalog.League.RulesPath},
 	); err != nil {
 		return action.Result{}, err
 	}
@@ -466,9 +447,9 @@ func runLeagueEvaluate(ctx context.Context, env action.Env, params any) (action.
 		return action.Result{}, errBadParams
 	}
 	cat := env.Config.Clustering.EntityCatalog
-	if err := refusePathOverrides(env,
-		pathParam{"manual", p.Manual, cat.ManualPath},
-		pathParam{"generated", p.Generated, cat.GeneratedPath},
+	if err := action.RefusePathOverrides(env,
+		action.PathParam{Name: "manual", Value: p.Manual, Configured: cat.ManualPath},
+		action.PathParam{Name: "generated", Value: p.Generated, Configured: cat.GeneratedPath},
 	); err != nil {
 		return action.Result{}, err
 	}

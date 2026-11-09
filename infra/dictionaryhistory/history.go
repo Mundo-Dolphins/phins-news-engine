@@ -7,6 +7,7 @@ package dictionaryhistory
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,6 +17,9 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionaryfile"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionarysession"
 )
+
+// DefaultDir is the directory the per-version history artifacts live under.
+const DefaultDir = "data/dictionary/history"
 
 // Artifacts is the full set of file artifacts recorded for one dictionary
 // version.
@@ -73,9 +77,27 @@ func WriteVersion(baseDir string, a Artifacts) error {
 	return nil
 }
 
+// ErrInvalidVersion reports a version that can never name a recorded
+// history directory: empty, or containing a path separator or "..", so it
+// could escape baseDir.
+var ErrInvalidVersion = errors.New("invalid dictionary history version")
+
+// ValidateVersion returns an error wrapping ErrInvalidVersion, naming the
+// version, when version is empty or contains "/", "\\" or "..".
+func ValidateVersion(version string) error {
+	if version == "" || strings.ContainsAny(version, `/\`) || strings.Contains(version, "..") {
+		return fmt.Errorf("dictionaryhistory: %w %q", ErrInvalidVersion, version)
+	}
+	return nil
+}
+
 // ReadVersion loads the artifacts previously written by WriteVersion for
-// version from baseDir/v<version>/.
+// version from baseDir/v<version>/. A version that fails ValidateVersion
+// is rejected before anything is read.
 func ReadVersion(baseDir, version string) (Artifacts, error) {
+	if err := ValidateVersion(version); err != nil {
+		return Artifacts{}, err
+	}
 	dir := filepath.Join(baseDir, "v"+version)
 	d, err := dictionaryfile.Load(filepath.Join(dir, "dictionary.yml"))
 	if err != nil {
