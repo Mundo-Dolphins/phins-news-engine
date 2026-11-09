@@ -190,6 +190,14 @@ type categoryJSON struct {
 	Aliases        int     `json:"aliases"`
 }
 
+type decisionJSON struct {
+	PositiveThresholdHigh   float64 `json:"positive_threshold_high"`
+	PositiveThresholdMedium float64 `json:"positive_threshold_medium"`
+	NegativeThresholdHigh   float64 `json:"negative_threshold_high"`
+	TitleWeightMultiplier   float64 `json:"title_weight_multiplier"`
+	MaxCountPerTerm         int     `json:"max_count_per_term"`
+}
+
 type inspectJSON struct {
 	Path         string         `json:"path"`
 	Version      string         `json:"version"`
@@ -198,7 +206,7 @@ type inspectJSON struct {
 	Categories   []categoryJSON `json:"categories"`
 	TotalEntries int            `json:"total_entries"`
 	TotalAliases int            `json:"total_aliases"`
-	Decision     any            `json:"decision"`
+	Decision     decisionJSON   `json:"decision"`
 }
 
 func runInspect(_ context.Context, env action.Env, params any) (action.Result, error) {
@@ -222,7 +230,11 @@ func runInspect(_ context.Context, env action.Env, params any) (action.Result, e
 		Render: "object",
 		Object: inspectJSON{
 			Path: path, Version: r.Version, Name: r.Name, Language: r.Language, Categories: cats,
-			TotalEntries: r.TotalEntries, TotalAliases: r.TotalAliases, Decision: r.Decision,
+			TotalEntries: r.TotalEntries, TotalAliases: r.TotalAliases, Decision: decisionJSON{
+				PositiveThresholdHigh: r.Decision.PositiveThresholdHigh, PositiveThresholdMedium: r.Decision.PositiveThresholdMedium,
+				NegativeThresholdHigh: r.Decision.NegativeThresholdHigh, TitleWeightMultiplier: r.Decision.TitleWeightMultiplier,
+				MaxCountPerTerm: r.Decision.MaxCountPerTerm,
+			},
 		},
 		Summary: fmt.Sprintf("dictionary %s v%s: %d entries, %d aliases", r.Name, r.Version, r.TotalEntries, r.TotalAliases),
 	}, nil
@@ -303,7 +315,7 @@ func runDiff(_ context.Context, env action.Env, params any) (action.Result, erro
 		FromFile: p.FromFile, ToFile: p.ToFile, From: p.From, To: p.To,
 	}, env.Now())
 	if err != nil {
-		if strings.Contains(err.Error(), "no snapshot files found") {
+		if errors.Is(err, dictionarywiring.ErrNoSnapshots) {
 			return action.Result{}, action.Conflict(err)
 		}
 		return action.Result{}, fileError(err)
@@ -430,9 +442,10 @@ func runRollback(ctx context.Context, env action.Env, params any) (action.Result
 		dictionarywiring.RollbackOptions{To: p.To, Previous: p.Previous, DryRun: p.DryRun}, env.Now())
 	if err != nil {
 		if res.Written != "" {
-			// The dictionary file has already changed; leave a trace of the
-			// version that was written before the late failure.
+			// The dictionary file has already changed: log the written
+			// version and say so in the error.
 			env.Log.Error("dictionary rollback: version written but not fully recorded", "from", res.From, "written", res.Written, "restored_from", res.RestoredFrom, "error", err)
+			return action.Result{}, fmt.Errorf("dictionary %s written (restored from v%s) but not recorded: %w", res.Written, res.RestoredFrom, err)
 		}
 		switch {
 		case errors.Is(err, dictionarywiring.ErrRollbackChecksum), errors.Is(err, dictionarywiring.ErrNoPreviousVersion):

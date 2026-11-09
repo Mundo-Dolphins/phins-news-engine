@@ -1,6 +1,7 @@
 package dictionarywiring
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +15,10 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionaryhistory"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionarysnapshot"
 )
+
+// ErrNoSnapshots reports that the snapshot directory holds no fetched
+// snapshot files.
+var ErrNoSnapshots = errors.New("no snapshot files found")
 
 // DiffOptions selects what Diff compares. From/To compare recorded history
 // versions; FromFile/ToFile compare two files; otherwise the dictionary at
@@ -157,7 +162,7 @@ func latestSnapshotPathsBySource(dir string) (map[dictionaryupdate.SourceKind]st
 		bySource[source] = append(bySource[source], name)
 	}
 	if len(bySource) == 0 {
-		return nil, fmt.Errorf("no snapshot files found in %s", dir)
+		return nil, fmt.Errorf("%w in %s", ErrNoSnapshots, dir)
 	}
 	latest := make(map[dictionaryupdate.SourceKind]string, len(bySource))
 	for source, names := range bySource {

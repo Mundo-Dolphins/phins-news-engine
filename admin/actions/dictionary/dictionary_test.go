@@ -273,6 +273,9 @@ func TestInspect(t *testing.T) {
 		Version      string `json:"version"`
 		TotalEntries int    `json:"total_entries"`
 	}
+	if !strings.Contains(string(b), `"positive_threshold_high":3`) || !strings.Contains(string(b), `"max_count_per_term":3`) {
+		t.Errorf("decision keys missing: %s", b)
+	}
 	if err := json.Unmarshal(b, &got); err != nil || got.Version != "1.0.1" || got.TotalEntries != 2 {
 		t.Errorf("object = %s", b)
 	}
@@ -453,6 +456,26 @@ func TestRollbackWrites(t *testing.T) {
 	}
 	if f.historyCount() != 3 {
 		t.Errorf("history rows = %d, want 3", f.historyCount())
+	}
+}
+
+func TestRollbackLateErrorSaysWritten(t *testing.T) {
+	f := newFixture(t)
+	// Fail only the ledger insert of the new rollback version, after the
+	// dictionary file has been written.
+	if _, err := f.db.Exec(`CREATE TRIGGER fail_rollback_record BEFORE INSERT ON dictionary_history
+		WHEN NEW.operation_kind = 'rollback' BEGIN SELECT RAISE(ABORT, 'record refused'); END`); err != nil {
+		t.Fatal(err)
+	}
+	_, err := f.run("dictionary.rollback", `{"to":"1.0.0"}`)
+	if err == nil || !strings.Contains(err.Error(), "dictionary 1.0.2 written (restored from v1.0.0) but not recorded") {
+		t.Fatalf("err = %v, want it to say the dictionary was written", err)
+	}
+	if !strings.Contains(f.log.String(), "written=1.0.2") {
+		t.Errorf("log = %q, want the written version", f.log.String())
+	}
+	if d, lerr := dictionaryfile.Load(f.cfg.Dictionary.Path); lerr != nil || d.Version != "1.0.2" {
+		t.Errorf("dictionary version = %q (%v), want 1.0.2", d.Version, lerr)
 	}
 }
 
