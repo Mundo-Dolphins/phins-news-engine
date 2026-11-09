@@ -341,3 +341,32 @@ func TestClassifyEvalNoExamplesIsConflict(t *testing.T) {
 	_, err := f.run("editorial.classify_eval", `{"dataset":"`+dataset+`","fold":"all","llm_base_url":"http://127.0.0.1:1","llm_model":"m"}`)
 	wantCode(t, err, action.CodeConflict)
 }
+
+func TestClassifyEvalFailedBatchesWarns(t *testing.T) {
+	f := newFixture(t)
+	f.cfg.OfflineTraining.LLM.TimeoutSeconds = 5
+	dataset := writeFile(t, "d.yml", "examples:\n  - article_id: x1\n    title: one\n    label: publish\n  - article_id: x2\n    title: two\n    label: reject\n")
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		calls++
+		content := "not json"
+		if calls == 1 {
+			content = `{"labels": [{"article_id": "x1", "label": "publish", "confidence": 0.9, "reason": "r"}]}`
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{"message": map[string]string{"role": "assistant", "content": content}}},
+		})
+	}))
+	defer srv.Close()
+	res, err := f.run("editorial.classify_eval", `{"dataset":"`+dataset+`","fold":"all","batch_size":1,"llm_base_url":"`+srv.URL+`","llm_model":"m"}`)
+	if err != nil {
+		t.Fatalf("classify_eval error = %v, want a result", err)
+	}
+	if !strings.HasPrefix(res.Summary, "WARNING: 1 of 2 batches failed; ") {
+		t.Fatalf("summary = %q", res.Summary)
+	}
+	if !strings.Contains(f.log.String(), "level=WARN") || !strings.Contains(f.log.String(), "classify-eval batch failed") {
+		t.Fatalf("log lacks the batch error:\n%s", f.log)
+	}
+}

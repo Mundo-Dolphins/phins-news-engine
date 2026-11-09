@@ -96,6 +96,9 @@ func TestEvaluate_FailedBatchIsCountedNotFatal(t *testing.T) {
 	if report.BatchesFailed != 1 {
 		t.Errorf("BatchesFailed = %d, want 1", report.BatchesFailed)
 	}
+	if len(report.BatchErrors) != 1 || report.BatchErrors[0] != "boom" {
+		t.Errorf("BatchErrors = %v, want [boom]", report.BatchErrors)
+	}
 }
 
 func TestSelectEvalExamples_SplitsDeterministicallyAndDisjointly(t *testing.T) {

@@ -337,7 +337,9 @@ func runClassifyEval(ctx context.Context, env action.Env, params any) (action.Re
 	s := rep.Summary
 	summary := fmt.Sprintf("precision=%.3f recall=%.3f on %d examples", s.ConfidentDiscardPrecision(), s.RejectRecall(), rep.Examples)
 	if rep.Report.BatchesFailed > 0 {
-		env.Log.Warn("classify-eval batches failed", "failed", rep.Report.BatchesFailed, "total", rep.Report.BatchesTotal)
+		for _, e := range rep.Report.BatchErrors {
+			env.Log.Warn("classify-eval batch failed", "error", e)
+		}
 		summary = fmt.Sprintf("WARNING: %d of %d batches failed; %s", rep.Report.BatchesFailed, rep.Report.BatchesTotal, summary)
 	}
 	return action.Result{Render: "object", Object: rep, Summary: summary}, nil
