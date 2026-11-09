@@ -13,12 +13,14 @@ import (
 
 // Report is the outcome of a successful validation.
 type Report struct {
+	// Profile is the profile the file was validated for.
 	Profile config.Profile
 	// Active lists the fetch categories that would run.
 	Active []string
 	// Inactive maps each skipped fetch category to the reason.
 	Inactive map[string]string
-	Config   *config.Config
+	// Config is the loaded settings.
+	Config *config.Config
 }
 
 // Validate loads the settings file at path, loads the source catalog it

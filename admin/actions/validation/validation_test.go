@@ -224,13 +224,37 @@ func TestRulesValidateEmptyConfig(t *testing.T) {
 	wantCode(t, err, action.CodeConflict)
 }
 
-func TestRulesValidateBrokenFileInLocal(t *testing.T) {
+func TestModelValidateCorruptIsFailedResult(t *testing.T) {
 	env := envFor(t, action.ModeLocal)
+	dir := writeModel(t)
+	if err := os.WriteFile(filepath.Join(dir, "CHECKSUMS.sha256"), []byte("garbage\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res, err := run(t, env, "model.validate", `{"dir":"`+dir+`"}`)
+	if err != nil {
+		t.Fatalf("err = %v, want a FAILED result", err)
+	}
+	if !strings.HasPrefix(res.Summary, "FAILED: ") {
+		t.Errorf("summary = %q", res.Summary)
+	}
+}
+
+func TestRulesValidateInvalidIsFailedResult(t *testing.T) {
+	env := envFor(t, action.ModeLocal)
+	res, err := run(t, env, "clustering.rules_validate", `{"path":"`+writeBadRules(t)+`"}`)
+	if err != nil {
+		t.Fatalf("err = %v, want a FAILED result", err)
+	}
+	if !strings.HasPrefix(res.Summary, "FAILED: ") {
+		t.Errorf("summary = %q", res.Summary)
+	}
+}
+
+func writeBadRules(t *testing.T) string {
+	t.Helper()
 	bad := filepath.Join(t.TempDir(), "rules.yml")
 	if err := os.WriteFile(bad, []byte("version: [unclosed"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := run(t, env, "clustering.rules_validate", `{"path":"`+bad+`"}`); err == nil {
-		t.Error("want an error for an invalid rules file")
-	}
+	return bad
 }

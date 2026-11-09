@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"sort"
 
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/action"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/clusteringrules"
@@ -89,14 +88,9 @@ func runConfigValidate(_ context.Context, env action.Env, _ any) (action.Result,
 	if active == nil {
 		active = []string{}
 	}
-	keys := make([]string, 0, len(rep.Inactive))
-	for k := range rep.Inactive {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	inactive := make(map[string]string, len(keys))
-	for _, k := range keys {
-		inactive[k] = rep.Inactive[k]
+	inactive := rep.Inactive
+	if inactive == nil {
+		inactive = map[string]string{}
 	}
 	return action.Result{
 		Render: "object",
@@ -155,7 +149,7 @@ func runModelValidate(_ context.Context, env action.Env, params any) (action.Res
 		return action.Result{}, action.NotFound(err)
 	}
 	if err != nil {
-		return action.Result{}, err
+		return failed(map[string]any{"directory": dir}, err), nil
 	}
 	var metrics any = metricsJSON
 	if json.Valid([]byte(metricsJSON)) {
@@ -204,11 +198,19 @@ func runRulesValidate(_ context.Context, env action.Env, params any) (action.Res
 		return action.Result{}, action.NotFound(err)
 	}
 	if err != nil {
-		return action.Result{}, err
+		return failed(map[string]any{"path": path}, err), nil
 	}
 	return action.Result{
 		Render:  "object",
 		Object:  rulesJSON{Path: path, Version: rf.Version, Name: rf.Name, Entities: len(rf.Entities)},
 		Summary: "clustering rules OK: " + path,
 	}, nil
+}
+
+// failed reports an invalid file as a result: the file is the subject of the
+// validation, not the request.
+func failed(obj map[string]any, err error) action.Result {
+	obj["ok"] = false
+	obj["error"] = err.Error()
+	return action.Result{Render: "object", Object: obj, Summary: "FAILED: " + err.Error()}
 }
