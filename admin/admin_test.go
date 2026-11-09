@@ -12,6 +12,7 @@ import (
 	"net/http/cookiejar"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -612,6 +613,21 @@ func TestCatalogStep2Batch3(t *testing.T) {
 	}
 	if got, want := len(both), 13; got != want {
 		t.Fatalf("catalog lists %d both-mode actions, want %d", got, want)
+	}
+	// Production offers exactly these 13 actions in this batch's groups:
+	// nothing else in them leaks into production.
+	batchGroups := map[string]bool{"audit": true, "config": true, "model": true, "clustering": true, "dictionary": true, "events": true}
+	var prodBatch []string
+	for name, g := range admin.RegistryGroupsFor(action.ModeProduction) {
+		if batchGroups[g] {
+			prodBatch = append(prodBatch, name)
+		}
+	}
+	slices.Sort(prodBatch)
+	wantBoth := append([]string{}, both...)
+	slices.Sort(wantBoth)
+	if !slices.Equal(prodBatch, wantBoth) {
+		t.Errorf("production actions in this batch's groups = %v, want exactly %v", prodBatch, wantBoth)
 	}
 }
 

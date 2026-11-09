@@ -50,7 +50,7 @@ run them, without the panel ever endangering the running bot.
   `WARNING` summary and keep the saved work. Their logic lives in
   `infra/entitywiring`, `app/editorialmetrics` and `app/lookback`, shared with
   the CLI.
-- **Step 2, batch 3.** 18 more engine actions in five groups: `audit.*`
+- **Step 2, batch 3.** 18 more engine actions in six groups: `audit.*`
   (duplicates, quality), `config.validate`, `model.validate` and
   `clustering.rules_validate`, `dictionary.*` (validate, inspect, history,
   diff, regression_check, rollback, mine_candidates) and `events.*` (type_list,

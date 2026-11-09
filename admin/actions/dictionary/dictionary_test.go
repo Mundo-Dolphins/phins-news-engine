@@ -97,6 +97,11 @@ func newFixture(t *testing.T) fixture {
 
 func (f fixture) runIn(mode action.Mode, name, params string) (action.Result, error) {
 	f.t.Helper()
+	return f.runCtx(context.Background(), mode, name, params)
+}
+
+func (f fixture) runCtx(ctx context.Context, mode action.Mode, name, params string) (action.Result, error) {
+	f.t.Helper()
 	for _, a := range dictionary.Actions() {
 		if a.Name != name {
 			continue
@@ -107,7 +112,7 @@ func (f fixture) runIn(mode action.Mode, name, params string) (action.Result, er
 		}
 		env := action.Env{DB: f.db, Config: f.cfg, Mode: mode, Now: func() time.Time { return now },
 			Log: slog.New(slog.NewTextHandler(f.log, nil)), Actor: "user:ana"}
-		return a.Run(context.Background(), env, p)
+		return a.Run(ctx, env, p)
 	}
 	f.t.Fatalf("no action %q", name)
 	return action.Result{}, nil
@@ -506,4 +511,120 @@ func TestMineCandidatesNoSessionIsConflict(t *testing.T) {
 	f := newFixture(t)
 	_, err := f.run("dictionary.mine_candidates", `{}`)
 	wantCode(t, err, action.CodeConflict)
+}
+
+// escapingVersion resolves, under dictionaryhistory.DefaultDir, to the
+// readable version directory data/dictionary/vx that plantEscapeTarget
+// writes, so a read that is not refused would succeed.
+const escapingVersion = "/../../vx"
+
+func (f fixture) plantEscapeTarget() {
+	f.t.Helper()
+	if err := dictionaryhistory.WriteVersion("data/dictionary", dictionaryhistory.Artifacts{Version: "x", Dictionary: dict("x", "Outside Entity")}); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+func (f fixture) recordVersion(version string) {
+	f.t.Helper()
+	if err := sqliteadapter.NewDictionaryHistoryRepository(f.db).Record(context.Background(), out.DictionaryHistoryRecord{
+		Version: version, ContentHash: domaindict.ContentHash(dict("x", "Outside Entity")), CreatedAt: now.Add(-time.Hour), OperationKind: "update",
+	}); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+func wantInvalidNaming(t *testing.T, err error, param string) {
+	t.Helper()
+	wantCode(t, err, action.CodeInvalidParams)
+	if !strings.HasPrefix(err.Error(), param+": ") {
+		t.Errorf("error %q does not name the param %s", err, param)
+	}
+}
+
+func TestDiffRefusesVersionsThatEscapeHistoryDir(t *testing.T) {
+	f := newFixture(t)
+	f.plantEscapeTarget()
+	for _, tc := range []struct{ params, param string }{
+		{`{"from":"` + escapingVersion + `"}`, "from"},
+		{`{"from":"../x"}`, "from"},
+		{`{"from":"1.0.0","to":"` + escapingVersion + `"}`, "to"},
+	} {
+		_, err := f.runIn(action.ModeProduction, "dictionary.diff", tc.params)
+		wantInvalidNaming(t, err, tc.param)
+	}
+}
+
+func TestHistoryRefusesVersionThatEscapesHistoryDir(t *testing.T) {
+	f := newFixture(t)
+	f.plantEscapeTarget()
+	f.recordVersion(escapingVersion)
+	_, err := f.runIn(action.ModeProduction, "dictionary.history", `{"version":"`+escapingVersion+`"}`)
+	wantInvalidNaming(t, err, "version")
+}
+
+func TestRollbackRefusesVersionThatEscapesHistoryDir(t *testing.T) {
+	f := newFixture(t)
+	f.plantEscapeTarget()
+	f.recordVersion(escapingVersion)
+	before, _ := os.ReadFile(f.cfg.Dictionary.Path)
+	rows := f.historyCount()
+	_, err := f.run("dictionary.rollback", `{"to":"`+escapingVersion+`"}`)
+	wantInvalidNaming(t, err, "to")
+	after, _ := os.ReadFile(f.cfg.Dictionary.Path)
+	if !bytes.Equal(before, after) || f.historyCount() != rows {
+		t.Error("a refused rollback changed the dictionary or the history")
+	}
+}
+
+func TestRollbackIgnoresClientCancellation(t *testing.T) {
+	f := newFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	res, err := f.runCtx(ctx, action.ModeLocal, "dictionary.rollback", `{"to":"1.0.0"}`)
+	if err != nil {
+		t.Fatalf("rollback with a cancelled request context: %v", err)
+	}
+	obj, _ := res.Object.(map[string]any)
+	if obj["written"] != "1.0.2" || f.historyCount() != 3 {
+		t.Errorf("object = %+v, history rows = %d, want 1.0.2 written and recorded", res.Object, f.historyCount())
+	}
+}
+
+const unparsableYAML = "version: [unclosed\n"
+
+func TestInspectUnparsableIsFailedResult(t *testing.T) {
+	f := newFixture(t)
+	bad := filepath.Join(f.dir, "bad.yml")
+	if err := os.WriteFile(bad, []byte(unparsableYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res, err := f.run("dictionary.inspect", `{"path":"`+bad+`"}`)
+	if err != nil {
+		t.Fatalf("an unparsable file must be a result, got error %v", err)
+	}
+	obj, _ := res.Object.(map[string]any)
+	if !strings.HasPrefix(res.Summary, "FAILED: ") || obj["ok"] != false || obj["path"] != bad {
+		t.Errorf("Summary = %q, object = %+v", res.Summary, res.Object)
+	}
+	_, err = f.run("dictionary.inspect", `{"path":"`+filepath.Join(f.dir, "missing.yml")+`"}`)
+	wantCode(t, err, action.CodeNotFound)
+}
+
+func TestRegressionCheckUnparsableIsFailedResult(t *testing.T) {
+	f := newFixture(t)
+	bad := filepath.Join(f.dir, "bad.yml")
+	if err := os.WriteFile(bad, []byte(unparsableYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res, err := f.run("dictionary.regression_check", `{"candidate":"`+bad+`"}`)
+	if err != nil {
+		t.Fatalf("an unparsable file must be a result, got error %v", err)
+	}
+	obj, _ := res.Object.(map[string]any)
+	if !strings.HasPrefix(res.Summary, "FAILED: ") || obj["ok"] != false || obj["candidate"] != bad {
+		t.Errorf("Summary = %q, object = %+v", res.Summary, res.Object)
+	}
+	_, err = f.run("dictionary.regression_check", `{"candidate":"`+filepath.Join(f.dir, "missing.yml")+`"}`)
+	wantCode(t, err, action.CodeNotFound)
 }

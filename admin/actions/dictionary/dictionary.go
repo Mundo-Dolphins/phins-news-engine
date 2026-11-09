@@ -18,6 +18,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/action"
 	"github.com/Mundo-Dolphins/phins-news-engine/app/dictionaryupdate"
 	"github.com/Mundo-Dolphins/phins-news-engine/app/regressioncheck"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionaryhistory"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionarysnapshot"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionarywiring"
 )
@@ -120,6 +121,25 @@ func fileError(err error) error {
 	return err
 }
 
+// versionParam is a history-version param, for naming it in errors.
+type versionParam struct{ name, value string }
+
+// versionError maps dictionaryhistory.ErrInvalidVersion to invalid_params
+// naming the first given param whose value is not a valid version. When
+// no given param is at fault (the version came from the ledger), it is a
+// conflict. It returns nil for any other error.
+func versionError(err error, params ...versionParam) error {
+	if !errors.Is(err, dictionaryhistory.ErrInvalidVersion) {
+		return nil
+	}
+	for _, p := range params {
+		if dictionaryhistory.ValidateVersion(p.value) != nil {
+			return invalid("%s: %v", p.name, err)
+		}
+	}
+	return action.Conflict(err)
+}
+
 func failed(obj map[string]any, err error) action.Result {
 	obj["ok"] = false
 	obj["error"] = err.Error()
@@ -219,8 +239,11 @@ func runInspect(_ context.Context, env action.Env, params any) (action.Result, e
 		return action.Result{}, err
 	}
 	r, err := dictionarywiring.Inspect(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return action.Result{}, action.NotFound(err)
+	}
 	if err != nil {
-		return action.Result{}, fileError(err)
+		return failed(map[string]any{"path": path}, err), nil
 	}
 	cats := make([]categoryJSON, 0, len(r.Categories))
 	for _, c := range r.Categories {
@@ -250,6 +273,9 @@ func runHistory(ctx context.Context, env action.Env, params any) (action.Result,
 	if p.Version != "" {
 		rec, artifacts, err := dictionarywiring.HistoryVersion(ctx, env.DB, p.Version)
 		if err != nil {
+			if verr := versionError(err, versionParam{"version", p.Version}); verr != nil {
+				return action.Result{}, verr
+			}
 			return action.Result{}, fileError(err)
 		}
 		return action.Result{
@@ -318,6 +344,9 @@ func runDiff(_ context.Context, env action.Env, params any) (action.Result, erro
 		if errors.Is(err, dictionarywiring.ErrNoSnapshots) {
 			return action.Result{}, action.Conflict(err)
 		}
+		if verr := versionError(err, versionParam{"from", p.From}, versionParam{"to", p.To}); verr != nil {
+			return action.Result{}, verr
+		}
 		return action.Result{}, fileError(err)
 	}
 	var rows []map[string]any
@@ -380,8 +409,11 @@ func runRegressionCheck(_ context.Context, env action.Env, params any) (action.R
 	if errors.Is(err, regressioncheck.ErrCasesDoNotFitDictionary) {
 		return action.Result{}, action.Conflict(err)
 	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return action.Result{}, action.NotFound(err)
+	}
 	if err != nil {
-		return action.Result{}, fileError(err)
+		return failed(map[string]any{"previous": prev, "candidate": p.Candidate}, err), nil
 	}
 	rows := make([]map[string]any, 0, len(report.Flips))
 	for _, f := range report.Flips {
@@ -437,6 +469,9 @@ func runRollback(ctx context.Context, env action.Env, params any) (action.Result
 	if !p.DryRun {
 		action.ConfigFilesMu.Lock()
 		defer action.ConfigFilesMu.Unlock()
+		// Once the dictionary file is saved, a client disconnect must not
+		// cancel the ledger writes that follow it.
+		ctx = context.WithoutCancel(ctx)
 	}
 	res, err := dictionarywiring.Rollback(ctx, env.DB, env.Config,
 		dictionarywiring.RollbackOptions{To: p.To, Previous: p.Previous, DryRun: p.DryRun}, env.Now())
@@ -450,6 +485,13 @@ func runRollback(ctx context.Context, env action.Env, params any) (action.Result
 		switch {
 		case errors.Is(err, dictionarywiring.ErrRollbackChecksum), errors.Is(err, dictionarywiring.ErrNoPreviousVersion):
 			return action.Result{}, action.Conflict(err)
+		}
+		var named []versionParam
+		if p.To != "" {
+			named = append(named, versionParam{"to", p.To})
+		}
+		if verr := versionError(err, named...); verr != nil {
+			return action.Result{}, verr
 		}
 		return action.Result{}, fileError(err)
 	}
