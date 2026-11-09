@@ -18,7 +18,8 @@ import (
 )
 
 // ErrNoCompletedSession reports that Mine was given no session and no
-// editorial review session has completed yet.
+// editorial review session has completed yet. Other failures of the session
+// lookup carry the same text without this sentinel.
 var ErrNoCompletedSession = errors.New("no completed session found")
 
 // MineSetupError wraps a failure of one of Mine's own preparation steps
@@ -66,8 +67,11 @@ func SelectMineCandidates(ctx context.Context, db *sql.DB, cfg *config.Config, s
 	targetSession := sessionID
 	if targetSession == "" {
 		s, err := sqliteadapter.NewEditorialCycleSessionRepository(db).GetLatestCompleted(ctx)
-		if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
 			return sel, &MineSetupError{fmt.Errorf("%w and --session not given: %w", ErrNoCompletedSession, err)}
+		}
+		if err != nil {
+			return sel, &MineSetupError{fmt.Errorf("no completed session found and --session not given: %w", err)}
 		}
 		targetSession = s.ID
 	}

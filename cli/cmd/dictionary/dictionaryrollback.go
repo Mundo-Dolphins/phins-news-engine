@@ -78,13 +78,16 @@ func newRollbackCommand() *cobra.Command {
 
 			opts.DryRun = false
 			res, err := dictionarywiring.Rollback(cmd.Context(), db, cfg, opts, time.Now())
-			if err != nil {
-				return fmt.Errorf("dictionary rollback: %w", err)
-			}
+			// A late failure (recording or promoting the new version) still
+			// returns the result: print its regression outcome first, as the
+			// check ran before the ledger write.
 			if res.Regression != nil {
 				PrintRegressionReport(cmd.OutOrStdout(), *res.Regression)
 			} else if res.RegressionErr != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "warning: dictionary rollback: regression check skipped: %v\n", res.RegressionErr)
+			}
+			if err != nil {
+				return fmt.Errorf("dictionary rollback: %w", err)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "dictionary rolled back: %s -> %s (content restored from v%s)\n", res.From, res.Written, res.RestoredFrom)
 			return nil

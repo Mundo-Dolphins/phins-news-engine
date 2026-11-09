@@ -254,3 +254,23 @@ func TestRollbackRecordsAndPromotes(t *testing.T) {
 		t.Errorf("backed-up diff = %q, want the rollback diff %q", art.Diff, res.DiffText)
 	}
 }
+
+func TestRollbackLateErrorKeepsResult(t *testing.T) {
+	db, cfg := seedRollback(t)
+	// Fail only the ledger insert of the new rollback version, after the
+	// dictionary file has been written.
+	if _, err := db.Exec(`CREATE TRIGGER fail_rollback_record BEFORE INSERT ON dictionary_history
+		WHEN NEW.operation_kind = 'rollback' BEGIN SELECT RAISE(ABORT, 'record refused'); END`); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Rollback(context.Background(), db, cfg, RollbackOptions{To: "1.0.0"}, rollbackNow)
+	if err == nil {
+		t.Fatal("Rollback() error = nil, want the record failure")
+	}
+	if res.Written != "1.0.2" || res.From != "1.0.1" || res.RestoredFrom != "1.0.0" {
+		t.Errorf("result = %+v, want the filled-in result", res)
+	}
+	if res.Regression == nil && res.RegressionErr == nil {
+		t.Error("regression outcome missing from the late-error result")
+	}
+}

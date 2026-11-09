@@ -71,7 +71,10 @@ type RollbackResult struct {
 // stored artifact no longer matches its recorded checksum. Unless DryRun, it
 // backs up the outgoing version, writes the restored content, runs a
 // report-only regression check, then records and promotes the new version.
-// An unknown To is a wrapped sql.ErrNoRows.
+// An unknown To is a wrapped sql.ErrNoRows. If recording or promoting the
+// new version fails after the write, the error comes with the filled-in
+// result (Written and the regression outcome set), because the dictionary
+// file has already changed.
 func Rollback(ctx context.Context, db *sql.DB, cfg *config.Config, opts RollbackOptions, now time.Time) (RollbackResult, error) {
 	if err := opts.Validate(); err != nil {
 		return RollbackResult{}, err
@@ -162,10 +165,10 @@ func Rollback(ctx context.Context, db *sql.DB, cfg *config.Config, opts Rollback
 		Version: written.Version, ContentHash: dictionary.ContentHash(written), CreatedAt: now.UTC(),
 		ChangeCount: changeCount, OperationKind: "rollback", PredecessorVersion: current.Version,
 	}); err != nil {
-		return RollbackResult{}, err
+		return res, err
 	}
 	if err := repo.SetPromoted(ctx, written.Version); err != nil {
-		return RollbackResult{}, err
+		return res, err
 	}
 	return res, nil
 }
