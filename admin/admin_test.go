@@ -619,7 +619,8 @@ func TestCatalogStep2Batch3(t *testing.T) {
 	batchGroups := map[string]bool{"audit": true, "config": true, "model": true, "clustering": true, "dictionary": true, "events": true}
 	var prodBatch []string
 	for name, g := range admin.RegistryGroupsFor(action.ModeProduction) {
-		if batchGroups[g] {
+		// clustering.evaluate belongs to batch 4 (see TestCatalogStep2Batch4).
+		if batchGroups[g] && name != "clustering.evaluate" {
 			prodBatch = append(prodBatch, name)
 		}
 	}
@@ -628,6 +629,42 @@ func TestCatalogStep2Batch3(t *testing.T) {
 	slices.Sort(wantBoth)
 	if !slices.Equal(prodBatch, wantBoth) {
 		t.Errorf("production actions in this batch's groups = %v, want exactly %v", prodBatch, wantBoth)
+	}
+}
+
+// TestCatalogStep2Batch4 pins which step 2 batch 4 engine actions each mode
+// offers (the host adds outbox.reconcile).
+func TestCatalogStep2Batch4(t *testing.T) {
+	both := []string{"clustering.evaluate", "dedup.evaluate"}
+	localOnly := []string{"backtest.candidate", "backtest.league"}
+	local, prod := admin.RegistryGroupsFor(action.ModeLocal), admin.RegistryGroupsFor(action.ModeProduction)
+	for _, n := range append(append([]string{}, both...), localOnly...) {
+		if _, ok := local[n]; !ok {
+			t.Errorf("local mode lacks %s", n)
+		}
+	}
+	for _, n := range both {
+		if _, ok := prod[n]; !ok {
+			t.Errorf("production mode lacks %s", n)
+		}
+	}
+	for _, n := range localOnly {
+		if _, ok := prod[n]; ok {
+			t.Errorf("production mode offers local-only %s", n)
+		}
+	}
+	// clustering.rules_validate (batch 3) shares the group, so only this
+	// batch's names are compared.
+	batchGroups := map[string]bool{"clustering": true, "dedup": true, "backtest": true}
+	var prodBatch []string
+	for name, g := range prod {
+		if batchGroups[g] && name != "clustering.rules_validate" {
+			prodBatch = append(prodBatch, name)
+		}
+	}
+	slices.Sort(prodBatch)
+	if !slices.Equal(prodBatch, both) {
+		t.Errorf("production actions in this batch's groups = %v, want exactly %v", prodBatch, both)
 	}
 }
 
