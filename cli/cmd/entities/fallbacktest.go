@@ -9,10 +9,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Mundo-Dolphins/phins-news-engine/cli/cmd/shared"
-	"github.com/Mundo-Dolphins/phins-news-engine/domain/entityproposal"
-	domainresolution "github.com/Mundo-Dolphins/phins-news-engine/domain/entityresolution"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
-	"github.com/Mundo-Dolphins/phins-news-engine/infra/llmclient"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/entitywiring"
 	appout "github.com/Mundo-Dolphins/phins-news-engine/ports/out"
 )
 
@@ -29,13 +27,10 @@ func newFallbackTestCommand() *cobra.Command {
 			}
 			fb := cfg.EntityExtraction.Fallback
 			if !fb.Enabled {
-				return fmt.Errorf("entities fallback-test: entity_extraction.fallback.enabled is false in %s", shared.ConfigPath)
+				return fmt.Errorf("entities fallback-test: %w in %s", entitywiring.ErrFallbackDisabled, shared.ConfigPath)
 			}
 
-			resolver := llmclient.NewResolver(llmclient.Config{
-				BaseURL: fb.BaseURL, APIKey: fb.APIKey, Model: fb.Model,
-				Temperature: fb.Temperature, MaxTokens: fb.MaxTokens, Timeout: fb.Timeout(),
-			})
+			resolver := entitywiring.NewFallbackResolver(fb)
 
 			ctx, cancel := context.WithTimeout(cmd.Context(), fb.Timeout())
 			defer cancel()
@@ -50,39 +45,25 @@ func newFallbackTestCommand() *cobra.Command {
 	return cmd
 }
 
-// runFallbackTest sends one candidate through resolver, runs the same
-// local validation the online fallback applies in production
-// (domainresolution.Validate), and writes a human-readable report to
+// runFallbackTest sends one candidate through resolver
+// (entitywiring.FallbackTest) and writes a human-readable report to
 // out. Separated from newFallbackTestCommand's RunE so tests can inject
 // a fake appout.EntityResolutionLLM without a config file or network
 // call — this command never opens the SQLite cache, unlike the real
 // fallback path (app/entityresolution.Resolve): it's a
 // prompt/provider diagnostic, not a pipeline simulator.
 func runFallbackTest(ctx context.Context, out io.Writer, resolver appout.EntityResolutionLLM, fb config.EntityFallbackConfig, candidate, contextText, field string) error {
-	normalized := entityproposal.Normalize(candidate)
-	result, err := resolver.Resolve(ctx, appout.EntityResolutionCandidate{
-		Text: candidate, NormalizedText: normalized, Field: field, Context: contextText,
-	})
-	provider := fb.Provider
-	if provider == "" {
-		provider = "unknown"
-	}
-	if err != nil {
-		fmt.Fprintf(out, "Provider: %s\nError: %v\n", provider, err)
+	report := entitywiring.FallbackTest(ctx, resolver, fb, candidate, contextText, field)
+	if report.Err != nil {
+		fmt.Fprintf(out, "Provider: %s\nError: %v\n", report.Provider, report.Err)
 		return nil
 	}
-
-	validateErr := domainresolution.Validate(
-		domainresolution.Candidate{Text: candidate, NormalizedText: normalized, Field: field, Context: contextText},
-		domainresolution.Resolution{Resolved: result.Resolved, Type: result.Type, CanonicalName: result.CanonicalName, Confidence: result.Confidence},
-		fb.MinConfidence,
-	)
-
+	result := report.Result
 	fmt.Fprintf(out, "Provider: %s\nResolved: %v\nType: %s\nCanonical name: %s\nConfidence: %.2f\n",
-		provider, result.Resolved, result.Type, result.CanonicalName, result.Confidence)
+		report.Provider, result.Resolved, result.Type, result.CanonicalName, result.Confidence)
 	switch {
-	case validateErr != nil:
-		fmt.Fprintf(out, "Local validation: REJECTED (%v)\n", validateErr)
+	case report.ValidateErr != nil:
+		fmt.Fprintf(out, "Local validation: REJECTED (%v)\n", report.ValidateErr)
 	case result.Resolved:
 		fmt.Fprintln(out, "Local validation: accepted")
 	}

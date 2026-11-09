@@ -30,39 +30,13 @@ func newApproveCommand() *cobra.Command {
 			defer db.Close()
 
 			repo := sqliteentityproposal.NewEntityProposalRepository(db)
-			p, err := repo.Get(cmd.Context(), args[0])
+			paths := entitydiscovery.CatalogPaths{DictionaryPath: dictionaryPath, ManualCatalogPath: manualPath, GeneratedCatalogPath: generatedPath}
+			resolved, err := entitydiscovery.Approve(cmd.Context(), repo, args[0], entitydiscovery.Resolution{MergeInto: mergeInto, AsNew: asNew}, paths, time.Now().UTC())
 			if err != nil {
 				return fmt.Errorf("entities approve: %w", err)
 			}
-			if p.Status != entityproposal.StatusPending {
-				return fmt.Errorf("entities approve: proposal %s is already %s", p.ID, p.Status)
-			}
 
-			resolved := p
-			if p.Kind == entityproposal.KindPossibleDuplicate {
-				switch {
-				case mergeInto != "" && asNew:
-					return fmt.Errorf("entities approve: pass only one of --merge-into or --as-new")
-				case mergeInto != "":
-					resolved.Kind = entityproposal.KindNewAlias
-					resolved.TargetEntityID = mergeInto
-				case asNew:
-					resolved.Kind = entityproposal.KindNewEntity
-				default:
-					return fmt.Errorf("entities approve: proposal %s is a possible duplicate — pass --merge-into <entity-id> or --as-new", p.ID)
-				}
-			}
-
-			now := time.Now().UTC()
-			paths := entitydiscovery.CatalogPaths{DictionaryPath: dictionaryPath, ManualCatalogPath: manualPath, GeneratedCatalogPath: generatedPath}
-			if err := entitydiscovery.ApplyApproval(resolved, paths, now); err != nil {
-				return fmt.Errorf("entities approve: %w", err)
-			}
-			if err := repo.UpdateStatus(cmd.Context(), p.ID, entityproposal.StatusApproved, now); err != nil {
-				return fmt.Errorf("entities approve: %w", err)
-			}
-
-			fmt.Fprintf(cmd.OutOrStdout(), "approved %s (%s)\n", p.CanonicalName, p.ID)
+			fmt.Fprintf(cmd.OutOrStdout(), "approved %s (%s)\n", resolved.CanonicalName, resolved.ID)
 			if resolved.EntityType != entityproposal.EntityTypeTeam {
 				fmt.Fprintln(cmd.OutOrStdout(), "remember to run `entities generate` to regenerate the deterministic entity catalog")
 			}

@@ -33,6 +33,9 @@ type EvalReport struct {
 	Predictions   []EvalPrediction
 	BatchesTotal  int
 	BatchesFailed int
+	// BatchErrors records the error of each failed batch, in order, like
+	// ClassifyResult.BatchErrors.
+	BatchErrors []string
 	// Missing counts examples the LLM returned no label for (failed batch
 	// or omitted entry).
 	Missing int
@@ -66,6 +69,7 @@ func Evaluate(ctx context.Context, llm appout.EditorialTeacherLLM, policyText st
 		res, err := llm.Classify(ctx, policyText, arts)
 		if err != nil {
 			report.BatchesFailed++
+			report.BatchErrors = append(report.BatchErrors, err.Error())
 			report.Missing += len(batch)
 			for _, ex := range batch {
 				report.Predictions = append(report.Predictions, EvalPrediction{EvalExample: ex})

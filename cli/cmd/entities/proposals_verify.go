@@ -6,32 +6,13 @@ import (
 
 	"github.com/spf13/cobra"
 
-	sqliteadapter "github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqlite"
-	sqliteentityproposal "github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqliteentityproposal"
-	"github.com/Mundo-Dolphins/phins-news-engine/app/entitydiscovery"
-	"github.com/Mundo-Dolphins/phins-news-engine/domain/entityproposal"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/entitywiring"
 )
 
 func newProposalsCommand() *cobra.Command {
 	cmd := &cobra.Command{Use: "proposals", Short: "Maintenance of stored entity proposals"}
 	cmd.AddCommand(newProposalsVerifyCommand())
 	return cmd
-}
-
-// applyProviderFlag maps --provider onto the verification stage flags.
-// wikidata means Wikidata only: no LLM/SearXNG fallback.
-func applyProviderFlag(provider string, f *verificationFlags) error {
-	switch provider {
-	case "":
-		return nil
-	case "wikidata":
-		if f.noWikidata || f.fallback || f.offline {
-			return fmt.Errorf("--provider wikidata conflicts with --no-wikidata, --fallback and --offline")
-		}
-		f.wikidata, f.noFallback = true, true
-		return nil
-	}
-	return fmt.Errorf("--provider must be wikidata (got %q)", provider)
 }
 
 func newProposalsVerifyCommand() *cobra.Command {
@@ -44,18 +25,18 @@ func newProposalsVerifyCommand() *cobra.Command {
 	var llmBaseURL, llmModel string
 	var llmMaxTokens int
 	var llmDisableThinking bool
-	var vflags verificationFlags
+	var vflags entitywiring.Stages
 
 	cmd := &cobra.Command{
 		Use:   "verify",
 		Short: "Verify the pending proposal backlog via web lookup using stored sources (idempotent, resumable, batched with --limit)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			switch entityproposal.EntityType(entityType) {
-			case "", entityproposal.EntityTypePlayer, entityproposal.EntityTypeCoach, entityproposal.EntityTypeExecutive, entityproposal.EntityTypeTeam:
-			default:
-				return fmt.Errorf("entities proposals verify: --type must be one of player, coach, executive, team (got %q)", entityType)
+			f := entitywiring.VerifyFlags{
+				Limit: limit, RetryAttempted: retryAttempted, DryRun: dryRun,
+				EntityType: entityType, Provider: provider, ManualPath: manualPath, GeneratedPath: generatedPath,
+				Stages: vflags,
 			}
-			if err := applyProviderFlag(provider, &vflags); err != nil {
+			if err := entitywiring.ValidateVerifyFlags(f); err != nil {
 				return fmt.Errorf("entities proposals verify: %w", err)
 			}
 			db, cfg, err := openDatabase(cmd)
@@ -64,40 +45,12 @@ func newProposalsVerifyCommand() *cobra.Command {
 			}
 			defer db.Close()
 
-			discoveryCfg, maxTokens, disableThinking, err := resolveDiscoveryConfig(cmd, cfg, llmFlagValues{
-				baseURL: llmBaseURL, model: llmModel, maxTokens: llmMaxTokens, disableThinking: llmDisableThinking,
-			})
+			f.LLM = llmOverrides(cmd, llmBaseURL, llmModel, llmMaxTokens, llmDisableThinking)
+			rep, err := entitywiring.VerifyProposals(cmd.Context(), db, cfg, f, cliLoggers(cmd))
 			if err != nil {
 				return fmt.Errorf("entities proposals verify: %w", err)
 			}
-			llm := newDiscoveryLLM(cmd, discoveryCfg, maxTokens, disableThinking)
-			// This command always verifies; web lookup config must be valid.
-
-			catalogIdx, err := loadCatalogIndex(manualPath, generatedPath)
-			if err != nil {
-				return fmt.Errorf("entities proposals verify: %w", err)
-			}
-
-			// webLookupEnabled is true: this command always verifies, so the
-			// fallback stage defaults on (subject to verification.fallback).
-			wikidataOn, fallbackOn := resolveVerificationStages(cfg.EntityDiscovery.Verification, true, vflags)
-			verifier, extras, err := buildChainVerifier(cmd, db, cfg, llm, catalogIdx, wikidataOn, fallbackOn, !vflags.noLLM && !vflags.offline)
-			if err != nil {
-				return fmt.Errorf("entities proposals verify: %w", err)
-			}
-			if verifier == nil {
-				return fmt.Errorf("entities proposals verify: no verification stage enabled (--offline, or --no-wikidata with --no-fallback; check entity_discovery.verification.wikidata_first and entity_discovery.verification.fallback)")
-			}
-
-			repo := sqliteentityproposal.NewEntityProposalRepository(db)
-			result, err := entitydiscovery.ReverifyPending(cmd.Context(), repo, verifier, catalogIdx, entitydiscovery.ReverifyOptions{
-				Limit: limit, EntityType: entityType, DryRun: dryRun, RetryAttempted: retryAttempted, Wikidata: wikidataOn,
-				Texts: articleTexts{finder: sqliteadapter.NewArticleRepository(db)},
-			})
-			if err != nil {
-				return fmt.Errorf("entities proposals verify: %w", err)
-			}
-			out := cmd.OutOrStdout()
+			result, out := rep.Result, cmd.OutOrStdout()
 			if dryRun {
 				fmt.Fprintln(out, "dry run: no changes written")
 			}
@@ -109,9 +62,8 @@ func newProposalsVerifyCommand() *cobra.Command {
 			fmt.Fprintf(out, "duplicates (rejected, duplicate_of_existing): %d\n", result.Duplicates)
 			fmt.Fprintf(out, "provider errors (left unmarked, retried next run): %d\n", result.ProviderErrors)
 			fmt.Fprintf(out, "skipped (already verified/attempted): %d\n", result.Skipped)
-			if sr, ok := verifier.(entitydiscovery.StatsReporter); ok {
-				cs := sr.ChainStats()
-				x := extras()
+			if cs := rep.Chain; cs != nil {
+				x := rep.Extras
 				printLeagueStats(out, cs.League)
 				fmt.Fprintf(out, "wikidata: cache hits (lookups) %d, verified NFL %d, verified non-NFL %d, ambiguous %d, not found %d, errors %d\n", x.CacheHits, cs.WikidataNFL, cs.WikidataNonNFL, cs.WikidataAmbiguous, cs.WikidataNotFound, cs.WikidataErrors)
 				fmt.Fprintf(out, "fallback: LLM calls %d, SearXNG searches %d\n", cs.FallbackCalls, x.SearXNGSearches)

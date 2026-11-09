@@ -8,16 +8,14 @@ import (
 	"github.com/spf13/cobra"
 
 	sqliteadapter "github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqlite"
+	"github.com/Mundo-Dolphins/phins-news-engine/app/editorialmetrics"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
 	infrasqlite "github.com/Mundo-Dolphins/phins-news-engine/infra/sqlite"
 	"github.com/Mundo-Dolphins/phins-news-engine/migrations"
 )
 
-// editorialReviewEventTypes are the event_type values ProcessCycle (Task
-// 25) writes for editorial decisions: shadow-mode audits, enforce-mode
-// ambiguous-zone flags, and enforce-mode rejects.
-var editorialReviewEventTypes = []string{"editorial_shadow", "editorial_ambiguous", "editorial"}
-
+// NewReviewCommand builds `editorial-review`, which reports recent
+// editorial-classifier decisions against each article's actual outcome.
 func NewReviewCommand() *cobra.Command {
 	var days, limit int
 	reviewCmd := &cobra.Command{
@@ -41,29 +39,21 @@ func NewReviewCommand() *cobra.Command {
 			articles := sqliteadapter.NewArticleRepository(db)
 
 			since := time.Now().UTC().AddDate(0, 0, -days)
-			events, err := decisions.ListByEventTypesSince(cmd.Context(), editorialReviewEventTypes, since, limit)
+			report, err := editorialmetrics.Review(cmd.Context(), decisions, articles, since, limit)
 			if err != nil {
 				return err
 			}
 
-			counts := map[string]int{}
-			for _, e := range events {
-				counts[e.EventType]++
-			}
-			cmd.Printf("editorial decisions in the last %d days (limit %d): %d total\n", days, limit, len(events))
-			for _, et := range editorialReviewEventTypes {
-				if counts[et] > 0 {
-					cmd.Printf("  %s: %d\n", et, counts[et])
+			cmd.Printf("editorial decisions in the last %d days (limit %d): %d total\n", days, limit, len(report.Rows))
+			for _, et := range editorialmetrics.ReviewEventTypes {
+				if report.Counts[et] > 0 {
+					cmd.Printf("  %s: %d\n", et, report.Counts[et])
 				}
 			}
 
-			for _, e := range events {
-				title, status := "(article not found)", "(unknown)"
-				if a, err := articles.FindByID(cmd.Context(), e.ArticleID); err == nil {
-					title, status = a.Title, string(a.Status)
-				}
+			for _, r := range report.Rows {
 				cmd.Printf("%s  %-20s score=%.1f  actual_status=%-24s  %s\n",
-					e.OccurredAt.Format(time.RFC3339), e.EventType, e.Score, status, title)
+					r.OccurredAt.Format(time.RFC3339), r.EventType, r.Score, r.ActualStatus, r.Title)
 			}
 			return nil
 		},

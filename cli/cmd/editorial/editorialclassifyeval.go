@@ -2,18 +2,14 @@
 package editorial
 
 import (
-	"encoding/csv"
+	"errors"
 	"fmt"
-	"os"
-	"sort"
 
 	"github.com/spf13/cobra"
 
-	"github.com/Mundo-Dolphins/phins-news-engine/app/editorialteacher"
-	"github.com/Mundo-Dolphins/phins-news-engine/app/editorialtrain"
 	"github.com/Mundo-Dolphins/phins-news-engine/cli/cmd/shared"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
-	"github.com/Mundo-Dolphins/phins-news-engine/infra/llmclient"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/trainwiring"
 )
 
 // newClassifyEvalCommand builds `editorial classify-eval`, which measures
@@ -37,59 +33,22 @@ func newClassifyEvalCommand() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("editorial classify-eval: %w", err)
 			}
-			llmCfg := cfg.OfflineTraining.LLM
-			if llmBaseURL != "" {
-				llmCfg.BaseURL = llmBaseURL
-			}
-			if llmModel != "" {
-				llmCfg.Model = llmModel
-			}
-			if llmCfg.BaseURL == "" || llmCfg.Model == "" || llmCfg.TimeoutSeconds <= 0 {
-				return fmt.Errorf("editorial classify-eval: offline_training.llm base_url, model and timeout_seconds are required")
-			}
-
-			policy := editorialteacher.PublicationPolicy
-			if policyFile != "" {
-				raw, err := os.ReadFile(policyFile) // #nosec G304 -- operator-provided CLI flag
-				if err != nil {
-					return fmt.Errorf("editorial classify-eval: read --policy-file: %w", err)
-				}
-				policy = string(raw)
-			}
-
-			dataset, err := editorialtrain.LoadDataset(datasetPath)
-			if err != nil {
-				return fmt.Errorf("editorial classify-eval: %w", err)
-			}
-			// telegramimport labels mean "was posted to the channel", not a
-			// human editorial judgment, so they are excluded by default.
-			var examples []editorialteacher.EvalExample
-			for _, ex := range dataset.Examples {
-				if !includeImported && ex.LabelSource == "telegramimport" {
-					continue
-				}
-				if ex.Label != "publish" && ex.Label != "reject" {
-					continue
-				}
-				examples = append(examples, editorialteacher.EvalExample{
-					ArticleID: ex.ArticleID, Title: ex.Title, Summary: ex.Body,
-					SourceType: ex.SourceType, Domain: ex.Domain, Truth: ex.Label,
-				})
-			}
-			examples = editorialteacher.SelectEvalExamples(examples, fold, sample, seed)
-			if len(examples) == 0 {
-				return fmt.Errorf("editorial classify-eval: no examples selected from %s", datasetPath)
-			}
-
-			llm := llmclient.New(shared.OfflineTrainingLLMClientConfig(llmCfg))
-			fmt.Fprintf(cmd.OutOrStdout(), "evaluating %d examples (fold=%s) with %s\n", len(examples), fold, llmCfg.Model)
-			report, err := editorialteacher.Evaluate(cmd.Context(), llm, policy, examples, batchSize)
-			if err != nil {
-				return fmt.Errorf("editorial classify-eval: %w", err)
-			}
-
-			s := report.Summarize(threshold)
+			rep, err := trainwiring.ClassifyEval(cmd.Context(), cfg, trainwiring.ClassifyEvalFlags{
+				DatasetPath: datasetPath, Fold: fold, PolicyFile: policyFile, MissesOut: missesOut,
+				BaseURL: llmBaseURL, Model: llmModel, Sample: sample, BatchSize: batchSize,
+				Seed: seed, Threshold: threshold, IncludeImported: includeImported,
+			})
 			out := cmd.OutOrStdout()
+			// The report is filled in as far as the run got: Examples once
+			// examples are selected, the summary once the evaluation ran.
+			if rep.Examples > 0 {
+				fmt.Fprintf(out, "evaluating %d examples (fold=%s) with %s\n", rep.Examples, rep.Fold, rep.Model)
+			}
+			if err != nil && !errors.Is(err, trainwiring.ErrWriteMisses) {
+				return fmt.Errorf("editorial classify-eval: %w", err)
+			}
+
+			report, s := rep.Report, rep.Summary
 			fmt.Fprintf(out, "batches: %d (failed: %d), labels missing: %d, uncertain: %d\n", report.BatchesTotal, report.BatchesFailed, s.Missing, s.Uncertain)
 			fmt.Fprintf(out, "human labels: %d reject, %d publish\n", s.RejectTotal, s.PublishTotal)
 			fmt.Fprintf(out, "discards (any confidence): %d, %d were human rejects\n", s.DiscardTotal, s.DiscardCorrect)
@@ -97,11 +56,11 @@ func newClassifyEvalCommand() *cobra.Command {
 			fmt.Fprintf(out, "human rejects caught confidently: %d/%d -> recall %.3f\n", s.ConfidentRejectsCaught, s.RejectTotal, s.RejectRecall())
 			fmt.Fprintf(out, "human publishes confidently discarded: %d/%d\n", s.PublishDiscarded, s.PublishTotal)
 
-			if missesOut != "" {
-				if err := writeEvalMisses(missesOut, report.Predictions, threshold); err != nil {
-					return fmt.Errorf("editorial classify-eval: %w", err)
-				}
-				fmt.Fprintf(out, "misses written to %s\n", missesOut)
+			if err != nil {
+				return fmt.Errorf("editorial classify-eval: %w", err)
+			}
+			if rep.MissesWritten != "" {
+				fmt.Fprintf(out, "misses written to %s\n", rep.MissesWritten)
 			}
 			return nil
 		},
@@ -118,26 +77,4 @@ func newClassifyEvalCommand() *cobra.Command {
 	cmd.Flags().StringVar(&llmBaseURL, "llm-base-url", "", "override offline_training.llm.base_url for this run")
 	cmd.Flags().StringVar(&llmModel, "llm-model", "", "override offline_training.llm.model for this run")
 	return cmd
-}
-
-func writeEvalMisses(path string, preds []editorialteacher.EvalPrediction, threshold float64) error {
-	var misses []editorialteacher.EvalPrediction
-	for _, p := range preds {
-		if p.Label == "discard" && p.Confidence >= threshold && p.Truth == "publish" {
-			misses = append(misses, p)
-		}
-	}
-	sort.Slice(misses, func(i, j int) bool { return misses[i].Confidence > misses[j].Confidence })
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) // #nosec G304 -- operator-provided CLI flag
-	if err != nil {
-		return fmt.Errorf("create %s: %w", path, err)
-	}
-	defer f.Close()
-	w := csv.NewWriter(f)
-	_ = w.Write([]string{"article_id", "confidence", "domain", "title", "llm_reason"})
-	for _, p := range misses {
-		_ = w.Write([]string{p.ArticleID, fmt.Sprintf("%.2f", p.Confidence), p.Domain, p.Title, p.Reason})
-	}
-	w.Flush()
-	return w.Error()
 }

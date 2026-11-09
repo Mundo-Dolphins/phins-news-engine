@@ -517,3 +517,45 @@ func TestCatalogStep2Batch1(t *testing.T) {
 		t.Fatalf("catalog lists %d new actions, want %d", got, want)
 	}
 }
+
+// TestCatalogStep2Batch2 pins which step 2 batch 2 actions each mode offers.
+func TestCatalogStep2Batch2(t *testing.T) {
+	both := []string{
+		"entities.list", "entities.show", "entities.extract", "entities.league_evaluate",
+		"classifier_dictionary.list", "classifier_dictionary.show", "classifier_dictionary.metrics",
+		"editorial.metrics", "editorial.review", "editorial.canary_status",
+		"editorial.canary_promote", "editorial.canary_abort",
+	}
+	localOnly := []string{
+		"entities.approve", "entities.reject", "entities.generate", "entities.roster_sync",
+		"entities.discover", "entities.proposals_verify", "entities.fallback_test", "entities.wikidata_evaluate",
+		"classifier_dictionary.approve", "classifier_dictionary.reject", "classifier_dictionary.analyze",
+		"editorial.classify", "editorial.classify_eval", "editorial.veto_report",
+	}
+	set := func(m action.Mode) map[string]bool {
+		out := map[string]bool{}
+		for _, n := range admin.RegistryFor(m) {
+			out[n] = true
+		}
+		return out
+	}
+	local, prod := set(action.ModeLocal), set(action.ModeProduction)
+	for _, n := range append(append([]string{}, both...), localOnly...) {
+		if !local[n] {
+			t.Errorf("local mode lacks %s", n)
+		}
+	}
+	for _, n := range both {
+		if !prod[n] {
+			t.Errorf("production mode lacks %s", n)
+		}
+	}
+	for _, n := range localOnly {
+		if prod[n] {
+			t.Errorf("production mode offers local-only %s", n)
+		}
+	}
+	if got, want := len(both)+len(localOnly), 26; got != want {
+		t.Fatalf("catalog lists %d new actions, want %d", got, want)
+	}
+}

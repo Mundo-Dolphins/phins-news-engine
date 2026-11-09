@@ -3,8 +3,6 @@ package entities
 import (
 	"bytes"
 	"context"
-	"os"
-	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -18,43 +16,6 @@ func TestEntitiesCommand_RegistersWikidataEvaluate(t *testing.T) {
 	found, _, err := NewCommand().Find([]string{"wikidata", "evaluate"})
 	if err != nil || found == nil || found.Name() != "evaluate" {
 		t.Fatalf("Find = %v, %v", found, err)
-	}
-}
-
-func TestValidateEvaluateFlags(t *testing.T) {
-	for _, tc := range []struct {
-		format, status, kind, typ string
-		ok                        bool
-	}{
-		{"text", "pending", "", "", true},
-		{"json", "all", "new_entity", "player", true},
-		{"yaml", "pending", "", "", false},
-		{"text", "bogus", "", "", false},
-		{"text", "pending", "bogus", "", false},
-		{"text", "pending", "", "mascot", false},
-	} {
-		err := validateEvaluateFlags(tc.format, tc.status, tc.kind, tc.typ)
-		if (err == nil) != tc.ok {
-			t.Errorf("%+v: err = %v", tc, err)
-		}
-	}
-}
-
-func TestLoadReviewed(t *testing.T) {
-	dir := t.TempDir()
-	good := filepath.Join(dir, "good.csv")
-	_ = os.WriteFile(good, []byte("proposal_id,verdict\nabc,correct\ndef,wrong\n"), 0o600)
-	got, err := loadReviewed(good)
-	if err != nil || !reflect.DeepEqual(got, map[string]string{"abc": "correct", "def": "wrong"}) {
-		t.Fatalf("got=%v err=%v", got, err)
-	}
-	bad := filepath.Join(dir, "bad.csv")
-	_ = os.WriteFile(bad, []byte("abc,maybe\n"), 0o600)
-	if _, err := loadReviewed(bad); err == nil {
-		t.Fatal("want error for unknown verdict")
-	}
-	if m, err := loadReviewed(""); err != nil || m != nil {
-		t.Fatalf("empty path: %v %v", m, err)
 	}
 }
 
@@ -94,5 +55,15 @@ func TestEvaluate_RealSQLite_DoesNotMutate(t *testing.T) {
 	var buf bytes.Buffer
 	if err := rep.WriteText(&buf); err != nil || buf.Len() == 0 {
 		t.Fatalf("text render: %v", err)
+	}
+}
+
+func TestWikidataEvaluateCommand_RejectsUnknownFormat(t *testing.T) {
+	cmd := newWikidataEvaluateCommand()
+	cmd.SetArgs([]string{"--format", "yaml"})
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	if err := cmd.Execute(); err == nil || err.Error() != `entities wikidata evaluate: --format must be text or json (got "yaml")` {
+		t.Fatalf("Execute() error = %v, want --format validation error", err)
 	}
 }

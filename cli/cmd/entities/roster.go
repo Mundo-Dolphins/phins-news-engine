@@ -4,17 +4,13 @@ package entities
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/Mundo-Dolphins/phins-news-engine/cli/cmd/shared"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
-	"github.com/Mundo-Dolphins/phins-news-engine/infra/netguard"
-	"github.com/Mundo-Dolphins/phins-news-engine/infra/nflverse"
-	"github.com/Mundo-Dolphins/phins-news-engine/infra/nflverse/rostersync"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/entitywiring"
 )
 
 func newRosterCommand() *cobra.Command {
@@ -23,45 +19,9 @@ func newRosterCommand() *cobra.Command {
 	return cmd
 }
 
-// SyncRoster downloads the nflverse roster atomically and validates it. The
-// destination is pathOverride, else rc.Path; the URL is urlOverride, else
-// rc.URL, else the nflverse default for the current year. The previous file is
-// kept when the download or its validation fails.
+// SyncRoster downloads the nflverse roster; see entitywiring.SyncRoster.
 func SyncRoster(ctx context.Context, rc config.RosterConfig, urlOverride, pathOverride string) (int, string, error) {
-	dest, src := pathOverride, urlOverride
-	if dest == "" {
-		dest = rc.Path
-		if src == "" {
-			src = rc.URL
-		}
-	}
-	if dest == "" {
-		return 0, "", fmt.Errorf("no roster path (set entity_discovery.roster.path or pass --path)")
-	}
-	if src == "" {
-		src = nflverse.DefaultURL(time.Now().Year())
-	}
-	var count int
-	validate := func(p string) error {
-		f, err := os.OpenInRoot(filepath.Dir(p), filepath.Base(p))
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		players, err := nflverse.ParseRoster(f)
-		if err != nil {
-			return err
-		}
-		if len(players) == 0 {
-			return fmt.Errorf("roster file has no players")
-		}
-		count = len(players)
-		return nil
-	}
-	if err := rostersync.Download(ctx, netguard.NewClient(60*time.Second, 60*time.Second, netguard.AllowPrivate), src, dest, validate); err != nil {
-		return 0, "", err
-	}
-	return count, dest, nil
+	return entitywiring.SyncRoster(ctx, rc, urlOverride, pathOverride, time.Now())
 }
 
 func newRosterSyncCommand() *cobra.Command {

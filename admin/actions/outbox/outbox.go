@@ -10,7 +10,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
 	"time"
 
@@ -108,16 +107,6 @@ func Actions() []action.Action {
 type clock func() time.Time
 
 func (c clock) Now() time.Time { return c() }
-
-// logger adapts a slog.Logger to the out.Logger port.
-type logger struct{ l *slog.Logger }
-
-func (g logger) Debug(msg string, kv ...any) { g.l.Debug(msg, kv...) }
-func (g logger) Info(msg string, kv ...any)  { g.l.Info(msg, kv...) }
-func (g logger) Warn(msg string, kv ...any)  { g.l.Warn(msg, kv...) }
-func (g logger) Error(msg string, err error, kv ...any) {
-	g.l.Error(msg, append([]any{"error", err}, kv...)...)
-}
 
 func badParam(format string, args ...any) error {
 	return &action.Error{Code: action.CodeInvalidParams, Message: fmt.Sprintf(format, args...)}
@@ -350,7 +339,7 @@ func runRepair(ctx context.Context, env action.Env, params any) (action.Result, 
 		sqliteadapter.NewDecisionRepository(db),
 		sqliteadapter.NewUnitOfWork(db),
 		clock(env.Now),
-		logger{env.Log},
+		action.PortLogger(env.Log),
 	)
 	err := repair.Run(ctx, p.ID, publishing.RepairAction(p.Action), p.ArticleID, p.Reason)
 	switch {

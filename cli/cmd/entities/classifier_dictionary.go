@@ -14,8 +14,6 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/app/classifierdictionary"
 	"github.com/Mundo-Dolphins/phins-news-engine/cli/cmd/shared"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/classifierproposal"
-	"github.com/Mundo-Dolphins/phins-news-engine/domain/dictionary"
-	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionaryfile"
 )
 
 func newClassifierDictionaryCommand() *cobra.Command {
@@ -58,14 +56,9 @@ func newClassifierAnalyzeCommand() *cobra.Command {
 				limit = 10_000_000
 			}
 
-			dict, err := dictionaryfile.Load(dictionaryPath)
+			dict, err := classifierdictionary.LoadValidated(dictionaryPath)
 			if err != nil {
 				return fmt.Errorf("entities classifier-dictionary analyze: %w", err)
-			}
-			for _, issue := range dictionary.Validate(dict) {
-				if issue.Severity == dictionary.SeverityError {
-					return fmt.Errorf("entities classifier-dictionary analyze: %s failed validation: %s", dictionaryPath, issue)
-				}
 			}
 
 			articlesRepo := sqliteadapter.NewArticleRepository(db)
@@ -185,18 +178,8 @@ func newClassifierApproveCommand() *cobra.Command {
 			}
 			defer db.Close()
 			repo := sqliteclassifierproposal.NewClassifierProposalRepository(db)
-			p, err := repo.Get(cmd.Context(), args[0])
+			p, err := classifierdictionary.Approve(cmd.Context(), repo, args[0], dictionaryPath, time.Now().UTC())
 			if err != nil {
-				return fmt.Errorf("entities classifier-dictionary approve: %w", err)
-			}
-			if p.Status != classifierproposal.StatusPending {
-				return fmt.Errorf("entities classifier-dictionary approve: proposal %s is already %s", p.ID, p.Status)
-			}
-			now := time.Now().UTC()
-			if err := classifierdictionary.ApplyApproval(p, dictionaryPath, now); err != nil {
-				return fmt.Errorf("entities classifier-dictionary approve: %w", err)
-			}
-			if err := repo.UpdateStatus(cmd.Context(), p.ID, classifierproposal.StatusApproved, now); err != nil {
 				return fmt.Errorf("entities classifier-dictionary approve: %w", err)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "approved %s (%s)\n", p.Value, p.ID)
@@ -219,14 +202,8 @@ func newClassifierRejectCommand() *cobra.Command {
 			}
 			defer db.Close()
 			repo := sqliteclassifierproposal.NewClassifierProposalRepository(db)
-			p, err := repo.Get(cmd.Context(), args[0])
+			p, err := classifierdictionary.Reject(cmd.Context(), repo, args[0], time.Now().UTC())
 			if err != nil {
-				return fmt.Errorf("entities classifier-dictionary reject: %w", err)
-			}
-			if p.Status != classifierproposal.StatusPending {
-				return fmt.Errorf("entities classifier-dictionary reject: proposal %s is already %s", p.ID, p.Status)
-			}
-			if err := repo.UpdateStatus(cmd.Context(), p.ID, classifierproposal.StatusRejected, time.Now().UTC()); err != nil {
 				return fmt.Errorf("entities classifier-dictionary reject: %w", err)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "rejected %s (%s)\n", p.Value, p.ID)

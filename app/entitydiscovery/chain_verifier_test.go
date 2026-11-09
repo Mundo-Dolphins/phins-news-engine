@@ -200,7 +200,7 @@ func (budgetLogger) Info(string, ...any)         {}
 func (budgetLogger) Warn(string, ...any)         {}
 func (budgetLogger) Error(string, error, ...any) {}
 
-// budgetAdapter mirrors verifierAdapter in cmd/.../entities/discover.go.
+// budgetAdapter mirrors verifierAdapter in infra/entitywiring/verifier.go.
 type budgetAdapter struct{ svc *catalogverification.Service }
 
 func (a budgetAdapter) Verify(ctx context.Context, c VerifyCandidate) VerifyResult {

@@ -441,3 +441,52 @@ func runDiscoverWithWikidataConfig(t *testing.T, offline bool) int64 {
 	}
 	return wikidataRequests.Load()
 }
+
+// The --verify-has-no-effect warning is printed once, before the run: it
+// precedes every [llm] retry line, run summary line and batch error.
+func TestDiscoverCommand_VerifyNoEffectWarningComesFirstAndOnce(t *testing.T) {
+	dbPath, db := newDiscoverTestDB(t)
+	sourceID, err := source.NewID(source.TypeWeb, "example-com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sqliteadapter.NewArticleRepository(db).Save(context.Background(), article.Article{
+		ID: "a1", OriginalURL: "https://example.com/a1", CanonicalURL: "https://example.com/a1",
+		Source: source.Source{ID: sourceID, Name: "Example", Type: source.TypeWeb},
+		Title:  "Isotopes sign CB Jai'Rene' Mossbank", Summary: "Springfield signs a cornerback.",
+		FetchedAt: time.Now().UTC(), Status: article.StatusFetched,
+	}); err != nil {
+		t.Fatalf("save article: %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	settingsPath := writeSettingsWithEntityDiscovery(t, dbPath, server.URL)
+	appendToFile(t, settingsPath, "  verification:\n    fallback: false\n")
+	shared.ConfigPath = settingsPath
+	defer func() { shared.ConfigPath = "configs/settings.yml" }()
+
+	dir := filepath.Dir(settingsPath)
+	cmd := newDiscoverCommand()
+	cmd.SetArgs([]string{"--all", "--verify", "--manual", filepath.Join(dir, "manual.yml"), "--generated", filepath.Join(dir, "generated.yml")})
+	// OutOrStderr falls back to the out writer once SetOut is used, so the
+	// command's "stderr" lines and stdout share one stream here.
+	var combined bytes.Buffer
+	cmd.SetOut(&combined)
+	cmd.SetErr(&combined)
+	cmd.SilenceUsage, cmd.SilenceErrors = true, true
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "batches failed") {
+		t.Fatalf("Execute() error = %v, want the failed-batches error", err)
+	}
+
+	const warning = "warning: --verify has no effect unless --fallback is given, because entity_discovery.verification.fallback is false\n"
+	got := combined.String()
+	if !strings.HasPrefix(got, warning) || strings.Count(got, warning) != 1 {
+		t.Fatalf("output must start with the warning exactly once, got:\n%s", got)
+	}
+	if !strings.Contains(got[len(warning):], "batch error") {
+		t.Fatalf("expected the run output (batch errors) after the warning, got:\n%s", got)
+	}
+}

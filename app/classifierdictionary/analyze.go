@@ -11,6 +11,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/article"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/classifierproposal"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/dictionary"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionaryfile"
 	"github.com/Mundo-Dolphins/phins-news-engine/ports/classifierproposalport"
 )
 
@@ -235,4 +236,20 @@ func confidenceFor(c *candidate) float64 {
 		return 0.9
 	}
 	return conf
+}
+
+// LoadValidated reads the dictionary at path and rejects it when validation
+// reports any error-severity issue (warnings are tolerated). It is the load
+// step of an analyze run, shared by the CLI and the admin action.
+func LoadValidated(path string) (dictionary.Dictionary, error) {
+	dict, err := dictionaryfile.Load(path)
+	if err != nil {
+		return dictionary.Dictionary{}, err
+	}
+	for _, issue := range dictionary.Validate(dict) {
+		if issue.Severity == dictionary.SeverityError {
+			return dictionary.Dictionary{}, fmt.Errorf("%s failed validation: %s", path, issue)
+		}
+	}
+	return dict, nil
 }

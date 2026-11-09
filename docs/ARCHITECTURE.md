@@ -112,7 +112,7 @@ A host adds its own actions with `admin.Add` before `Run`.
 
 | Piece | Package |
 |---|---|
-| Typed actions, one definition for REST, MCP and the form | `admin/action`, `admin/actions/{claims,train,outbox,stats,sqlite,label,sourcepolicy}`; shared logic in `app/pipelinestats`, `app/dbinspect`, `app/humanlabels`, `app/datasetaudit` |
+| Typed actions, one definition for REST, MCP and the form | `admin/action`, `admin/actions/{claims,train,outbox,stats,sqlite,label,sourcepolicy,entities,classifierdictionary,editorial}`; shared logic in `app/pipelinestats`, `app/dbinspect`, `app/humanlabels`, `app/datasetaudit`, `app/editorialmetrics`, `app/lookback`, `infra/entitywiring` |
 | Jobs, logs, audit and sessions in `admin.db` | `admin/store`, `admin/jobs` |
 | Login, session cookie, LAN allow-list, bearer token | `admin/auth` |
 | REST API, SSE job events, embedded SPA | `admin/httpapi`, `admin/web` |

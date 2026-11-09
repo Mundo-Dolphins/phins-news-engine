@@ -8,12 +8,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/Mundo-Dolphins/phins-news-engine/app/entitycatalogbuild"
 	"github.com/Mundo-Dolphins/phins-news-engine/cli/cmd/shared"
-	"github.com/Mundo-Dolphins/phins-news-engine/domain/dictionary"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
-	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionaryfile"
-	"github.com/Mundo-Dolphins/phins-news-engine/infra/entitycatalog"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/entitywiring"
 	infrasqlite "github.com/Mundo-Dolphins/phins-news-engine/infra/sqlite"
 	"github.com/Mundo-Dolphins/phins-news-engine/migrations"
 )
@@ -57,26 +54,10 @@ func openDatabase(cmd *cobra.Command) (*sql.DB, *config.Config, error) {
 	return db, cfg, nil
 }
 
-// GenerateCatalog rebuilds the generated half of the entity catalog from the
-// team dictionary and returns how many entities it wrote.
+// GenerateCatalog rebuilds the generated half of the entity catalog; see
+// entitywiring.GenerateCatalog.
 func GenerateCatalog(dictionaryPath, out string) (int, error) {
-	d, err := dictionaryfile.Load(dictionaryPath)
-	if err != nil {
-		return 0, err
-	}
-	for _, issue := range dictionary.Validate(d) {
-		if issue.Severity == dictionary.SeverityError {
-			return 0, fmt.Errorf("%s failed validation: %s", dictionaryPath, issue)
-		}
-	}
-	entitiesList, err := entitycatalogbuild.Build(d)
-	if err != nil {
-		return 0, err
-	}
-	if err := entitycatalog.WriteGenerated(out, entitiesList); err != nil {
-		return 0, err
-	}
-	return len(entitiesList), nil
+	return entitywiring.GenerateCatalog(dictionaryPath, out)
 }
 
 func newGenerateCommand() *cobra.Command {

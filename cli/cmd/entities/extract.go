@@ -12,11 +12,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Mundo-Dolphins/phins-news-engine/cli/cmd/shared"
-	"github.com/Mundo-Dolphins/phins-news-engine/domain/article"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals"
-	"github.com/Mundo-Dolphins/phins-news-engine/infra/clusteringrules"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
-	"github.com/Mundo-Dolphins/phins-news-engine/infra/leaguecatalog"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/entitywiring"
 )
 
 // newExtractCommand runs the production deterministic extractor
@@ -63,70 +61,30 @@ mentions_only does in production), ignoring roster staleness; --roster and
 				body = text
 			}
 			if strings.TrimSpace(title+description+body) == "" {
-				return fmt.Errorf("entities extract: give at least one of --title, --description, --body or --body-file")
+				return fmt.Errorf("entities extract: %w", entitywiring.ErrNoText)
 			}
 
+			in := entitywiring.ExtractInput{
+				Title: title, Description: description, Body: body,
+				RulesPath: rulesPath, ManualPath: manualPath, GeneratedPath: generatedPath,
+				GeneratedRulesPath: generatedRulesPath,
+				League:             league, RosterPath: rosterPath, LeagueRulesPath: leagueRulesPath,
+			}
 			var cfg *config.Config
-			needConfig := rulesPath == "" || manualPath == "" || generatedPath == "" ||
-				(league && (rosterPath == "" || leagueRulesPath == ""))
-			if needConfig {
+			if entitywiring.NeedsConfig(in) {
 				c, err := config.Load(shared.ConfigPath)
 				if err != nil {
 					return fmt.Errorf("entities extract: %w (or pass --rules, --manual and --generated)", err)
 				}
 				cfg = c
 			}
-			if rulesPath == "" {
-				rulesPath = cfg.Clustering.RulesPath
-			}
-			if manualPath == "" {
-				manualPath = cfg.Clustering.EntityCatalog.ManualPath
-			}
-			if generatedPath == "" {
-				generatedPath = cfg.Clustering.EntityCatalog.GeneratedPath
-			}
-			rulesFile, err := clusteringrules.LoadWithEntityCatalog(rulesPath, manualPath, generatedPath)
-			if err != nil {
-				return fmt.Errorf("entities extract: %w", err)
-			}
-			// Merged like engine/run.go (empty path: none).
-			if generatedRulesPath == "" && cfg != nil {
-				generatedRulesPath = cfg.Clustering.GeneratedRulesPath
-			}
-			rulesFile, genWarnings, err := clusteringrules.LoadWithGenerated(rulesFile, generatedRulesPath)
+			rep, genWarnings, err := entitywiring.Extract(cfg, in, time.Now(), discoveryLogger{out: cmd.ErrOrStderr(), component: "extract"})
 			if err != nil {
 				return fmt.Errorf("entities extract: %w", err)
 			}
 			for _, w := range genWarnings {
 				cmd.PrintErrln("warning: " + w)
 			}
-			rules := rulesFile.ToEventSignalsRules()
-
-			if league {
-				if rosterPath == "" {
-					rosterPath = cfg.Clustering.EntityCatalog.League.RosterPath
-				}
-				if rosterPath == "" {
-					rosterPath = cfg.EntityDiscovery.Roster.Path
-				}
-				if leagueRulesPath == "" {
-					leagueRulesPath = cfg.Clustering.EntityCatalog.League.RulesPath
-				}
-				if leagueRulesPath == "" {
-					leagueRulesPath = "configs/league_alias_rules.yml"
-				}
-				provider := leaguecatalog.New(leaguecatalog.Config{RosterPath: rosterPath, RulesPath: leagueRulesPath}, rules.Entities, discoveryLogger{out: cmd.ErrOrStderr(), component: "extract"})
-				provider.Refresh(time.Now())
-				if st := provider.Status(); !st.Loaded {
-					return fmt.Errorf("entities extract: league rules unavailable: %s", st.Reason)
-				}
-				rules.Entities = append(append([]eventsignals.EntityRule(nil), rules.Entities...), provider.Entities()...)
-			}
-
-			now := time.Now().UTC()
-			rep := eventsignals.Extract(article.Article{
-				ID: "adhoc-extract", Title: title, Summary: description, Body: body, PublishedAt: now,
-			}, rules, now)
 
 			if format == "json" {
 				enc := json.NewEncoder(cmd.OutOrStdout())
