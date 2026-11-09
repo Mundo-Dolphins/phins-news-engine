@@ -2,30 +2,14 @@
 package entities
 
 import (
-	"context"
-	"database/sql"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
-	"github.com/Mundo-Dolphins/phins-news-engine/app/catalogverification"
-	"github.com/Mundo-Dolphins/phins-news-engine/app/entitydiscovery"
 	"github.com/Mundo-Dolphins/phins-news-engine/app/lookback"
-	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals"
-	"github.com/Mundo-Dolphins/phins-news-engine/domain/weblookup"
-	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
-	"github.com/Mundo-Dolphins/phins-news-engine/infra/entitycatalog"
-	"github.com/Mundo-Dolphins/phins-news-engine/infra/llmclient"
-	"github.com/Mundo-Dolphins/phins-news-engine/infra/websearch"
-	appout "github.com/Mundo-Dolphins/phins-news-engine/ports/out"
-
-	sqliteadapter "github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqlite"
-	sqliteentityproposal "github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqliteentityproposal"
-	sqlitewebsearchcache "github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqlitewebsearchcache"
 	"github.com/Mundo-Dolphins/phins-news-engine/cli/cmd/shared"
-	"github.com/Mundo-Dolphins/phins-news-engine/domain/entityproposal"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/entitywiring"
 )
 
 // resolveSince parses --since into a lower time bound (see lookback.Parse).
@@ -45,7 +29,7 @@ func newDiscoverCommand() *cobra.Command {
 	var limit int
 	var verifyMinConfidence float64
 	var verify bool
-	var vflags verificationFlags
+	var vflags entitywiring.Stages
 	var dictionaryPath, manualPath, generatedPath string
 	var llmBaseURL, llmModel string
 	var llmMaxTokens int
@@ -61,99 +45,50 @@ func newDiscoverCommand() *cobra.Command {
 			}
 			defer db.Close()
 
-			discoveryCfg, llmMaxTokens, llmDisableThinking, err := resolveDiscoveryConfig(cmd, cfg, llmFlagValues{
-				baseURL: llmBaseURL, model: llmModel, maxTokens: llmMaxTokens, disableThinking: llmDisableThinking,
-			})
-			if err != nil {
+			f := entitywiring.DiscoverFlags{
+				All: all, Force: force, ManualPath: manualPath, GeneratedPath: generatedPath,
+				LLM:                 llmOverrides(cmd, llmBaseURL, llmModel, llmMaxTokens, llmDisableThinking),
+				VerifyMinConfidence: verifyMinConfidence, Stages: vflags,
+			}
+			// A discovery config error is reported before a --since error,
+			// as it always has been.
+			if _, _, _, err := entitywiring.DiscoveryConfig(cfg, f.LLM); err != nil {
 				return fmt.Errorf("entities discover: %w", err)
 			}
-
-			sinceTime, err := resolveSince(since, all)
-			if err != nil {
+			if f.Since, err = resolveSince(since, all); err != nil {
 				return fmt.Errorf("entities discover: %w", err)
 			}
-
-			manualRules, err := entitycatalog.LoadOne(manualPath)
-			if err != nil {
-				return fmt.Errorf("entities discover: %w", err)
+			// Unset --batch-size/--limit (0) let entity_discovery.batch_size/
+			// limit win over the 20/500 defaults.
+			if cmd.Flags().Changed("batch-size") {
+				f.BatchSize = batchSize
 			}
-			generatedRules, err := entitycatalog.LoadOne(generatedPath)
-			if err != nil {
-				return fmt.Errorf("entities discover: %w", err)
+			if cmd.Flags().Changed("limit") {
+				f.Limit = limit
 			}
-			allRules := make([]eventsignals.EntityRule, 0, len(manualRules)+len(generatedRules))
-			allRules = append(allRules, manualRules...)
-			allRules = append(allRules, generatedRules...)
-			catalogIdx := entitydiscovery.BuildCatalogIndex(allRules)
-
-			articlesRepo := sqliteadapter.NewArticleRepository(db)
-			proposalsRepo := sqliteentityproposal.NewEntityProposalRepository(db)
-			llm := newDiscoveryLLM(cmd, discoveryCfg, llmMaxTokens, llmDisableThinking)
-
-			// --batch-size/--limit have their own flag defaults (20/500,
-			// matching entity_discovery's YAML defaults) so the command
-			// works with zero flags; but when the operator relies on
-			// configs/settings.yml instead of passing a flag, the
-			// configured value must win — otherwise entity_discovery.
-			// batch_size/limit would be silently ignored, defeating the
-			// point of making them configurable for small local models.
-			if !cmd.Flags().Changed("batch-size") && discoveryCfg.BatchSize > 0 {
-				batchSize = discoveryCfg.BatchSize
-			}
-			if !cmd.Flags().Changed("limit") && discoveryCfg.Limit > 0 {
-				limit = discoveryCfg.Limit
-			}
-
-			webLookupCfg := cfg.CatalogMaintenance.WebLookup
-			verifyEnabled := webLookupCfg.Enabled
 			if cmd.Flags().Changed("verify") {
-				verifyEnabled = verify
+				f.Verify = &verify
 			}
-			wikidataOn, fallbackOn := resolveVerificationStages(cfg.EntityDiscovery.Verification, verifyEnabled, vflags)
-			if cmd.Flags().Changed("verify") && verify && !cfg.EntityDiscovery.Verification.Fallback && !vflags.fallback && !vflags.offline {
-				fmt.Fprintln(cmd.OutOrStderr(), "warning: --verify has no effect unless --fallback is given, because entity_discovery.verification.fallback is false")
+
+			rep, err := entitywiring.Discover(cmd.Context(), db, cfg, f, time.Now(), cliLoggers(cmd))
+			for _, w := range rep.Warnings {
+				fmt.Fprintln(cmd.OutOrStderr(), w)
 			}
-			verifier, extras, err := buildChainVerifier(cmd, db, cfg, llm, catalogIdx, wikidataOn, fallbackOn, !vflags.noLLM && !vflags.offline)
 			if err != nil {
 				return fmt.Errorf("entities discover: %w", err)
 			}
 
-			opts := entitydiscovery.DiscoverOptions{
-				Since: sinceTime, BatchSize: batchSize, Limit: limit,
-				ExtractorVersion: discoveryCfg.ExtractorVersion, Force: force,
-				VerifyMinConfidence: verifyMinConfidence,
+			result, x, out := rep.Result, rep.Extras, cmd.OutOrStdout()
+			fmt.Fprintf(out, "articles considered: %d\n", result.ArticlesConsidered)
+			fmt.Fprintf(out, "batches: %d (failed: %d)\n", result.BatchesTotal, result.BatchesFailed)
+			fmt.Fprintf(out, "proposals created/updated: %d\n", result.ProposalsUpserted)
+			if rep.LeagueOn {
+				fmt.Fprintf(out, "league: skipped %d as noise, %d already-known league entities\n", result.SkippedNoise, result.AlreadyKnownLeague)
 			}
-			if all {
-				opts.Limit = 10_000_000
-			}
-			leagueStage, err := buildLeagueStage(cfg, catalogIdx, time.Now(), discoveryLogger{out: cmd.OutOrStderr(), component: "discover"})
-			if err != nil {
-				return fmt.Errorf("entities discover: %w", err)
-			}
-			if leagueStage != nil {
-				opts.League = leagueStage.Index
-			}
-
-			result, err := entitydiscovery.Discover(cmd.Context(), articlesRepo, llm, proposalsRepo, catalogIdx, opts, time.Now().UTC(), verifier)
-			if err != nil {
-				return fmt.Errorf("entities discover: %w", err)
-			}
-
-			fmt.Fprintf(cmd.OutOrStdout(), "articles considered: %d\n", result.ArticlesConsidered)
-			fmt.Fprintf(cmd.OutOrStdout(), "batches: %d (failed: %d)\n", result.BatchesTotal, result.BatchesFailed)
-			fmt.Fprintf(cmd.OutOrStdout(), "proposals created/updated: %d\n", result.ProposalsUpserted)
-			if opts.League != nil {
-				fmt.Fprintf(cmd.OutOrStdout(), "league: skipped %d as noise, %d already-known league entities\n", result.SkippedNoise, result.AlreadyKnownLeague)
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "auto-rejected (non-NFL): %d\n", result.AutoRejected)
-			fmt.Fprintf(cmd.OutOrStdout(), "uncertain (left pending): %d\n", result.Uncertain)
-			fmt.Fprintf(cmd.OutOrStdout(), "duplicates (rejected, duplicate_of_existing): %d\n", result.Duplicates)
+			fmt.Fprintf(out, "auto-rejected (non-NFL): %d\n", result.AutoRejected)
+			fmt.Fprintf(out, "uncertain (left pending): %d\n", result.Uncertain)
+			fmt.Fprintf(out, "duplicates (rejected, duplicate_of_existing): %d\n", result.Duplicates)
 			v := result.Verification
-			var x metricsExtras
-			if extras != nil {
-				x = extras()
-			}
-			out := cmd.OutOrStdout()
 			fmt.Fprintf(out, "verification: candidates considered: %d, local catalog hits (counted per extracted mention): %d\n", v.CandidatesConsidered, v.CatalogHits)
 			printLeagueStats(out, v.Chain.League)
 			fmt.Fprintf(out, "wikidata: cache hits (lookups) %d, verified NFL %d, verified non-NFL %d, ambiguous %d, not found %d, errors %d\n", x.CacheHits, v.Chain.WikidataNFL, v.Chain.WikidataNonNFL, v.Chain.WikidataAmbiguous, v.Chain.WikidataNotFound, v.Chain.WikidataErrors)
@@ -187,128 +122,9 @@ func newDiscoverCommand() *cobra.Command {
 	return cmd
 }
 
-// llmFlagValues carries the --llm-* flag values shared by discover and
-// proposals verify.
-type llmFlagValues struct {
-	baseURL, model  string
-	maxTokens       int
-	disableThinking bool
-}
-
-// resolveDiscoveryConfig layers the --llm-* flags over entity_discovery
-// config (flags win only when set), enforces the enabled/override rule and
-// validates. It returns the effective config plus max-tokens/thinking.
-func resolveDiscoveryConfig(cmd *cobra.Command, cfg *config.Config, f llmFlagValues) (config.EntityDiscoveryConfig, int, bool, error) {
-	discoveryCfg := cfg.EntityDiscovery
-	if f.baseURL != "" {
-		discoveryCfg.LLM.BaseURL = f.baseURL
-	}
-	if f.model != "" {
-		discoveryCfg.LLM.Model = f.model
-	}
-	maxTokens, disableThinking := f.maxTokens, f.disableThinking
-	if !cmd.Flags().Changed("llm-max-tokens") {
-		maxTokens = discoveryCfg.LLM.MaxTokens
-	}
-	if !cmd.Flags().Changed("llm-disable-thinking") {
-		disableThinking = discoveryCfg.LLM.DisableThinking
-	}
-	if !discoveryCfg.Enabled && f.baseURL == "" {
-		return discoveryCfg, 0, false, fmt.Errorf("entity_discovery.enabled is false in config — pass --llm-base-url to override for a one-off run")
-	}
-	discoveryCfg.Enabled = true
-	if err := discoveryCfg.Validate(); err != nil {
-		return discoveryCfg, 0, false, err
-	}
-	return discoveryCfg, maxTokens, disableThinking, nil
-}
-
-// newDiscoveryLLM builds the LLM client from the effective discovery config.
-func newDiscoveryLLM(cmd *cobra.Command, discoveryCfg config.EntityDiscoveryConfig, maxTokens int, disableThinking bool) *llmclient.Client {
-	llmConfig := llmclient.Config{
-		BaseURL: discoveryCfg.LLM.BaseURL, APIKey: discoveryCfg.LLM.APIKey,
-		Model: discoveryCfg.LLM.Model, Temperature: discoveryCfg.LLM.Temperature,
-		MaxTokens: maxTokens, Timeout: discoveryCfg.LLM.Timeout(),
-		// Surface bounded transport retries and timeouts to the operator.
-		// This command is an offline, interactive workflow, so a silent
-		// logger turns a stalled local Ollama instance into an opaque list
-		// of identical batch errors.
-		Logger: discoveryLogger{out: cmd.OutOrStderr(), component: "llm"},
-	}
-	if disableThinking {
-		llmConfig = llmConfig.WithThinkingDisabled()
-	}
-	return llmclient.New(llmConfig)
-}
-
-// buildVerifier validates the *effective* (enabled=true) web_lookup config
-// and assembles the web searcher, cache and catalogverification.Service
-// behind a verifierAdapter. Shared by discover and proposals verify.
-func buildVerifier(cmd *cobra.Command, db *sql.DB, webLookupCfg config.WebLookupConfig, llm appout.EntityDiscoveryLLM) (verifierAdapter, error) {
-	effective := webLookupCfg
-	effective.Enabled = true
-	if err := effective.Validate(); err != nil {
-		return verifierAdapter{}, fmt.Errorf("catalog_maintenance.web_lookup: %w", err)
-	}
-	searcher, err := websearch.New(effective.Provider, websearch.SearXNGConfig{
-		BaseURL:      effective.BaseURL,
-		APIKey:       effective.APIKey,
-		Timeout:      effective.Timeout(),
-		EngineGroups: parseEngineGroups(effective.EngineGroups),
-	})
-	if err != nil {
-		return verifierAdapter{}, fmt.Errorf("catalog_maintenance.web_lookup: %w", err)
-	}
-	if fb := effective.Fallback; fb.Provider != "" {
-		if fb.APIKey == "" {
-			return verifierAdapter{}, fmt.Errorf("catalog_maintenance.web_lookup.fallback: TAVILY_API_KEY environment variable is required when fallback.provider is set")
-		}
-		secondary, err := websearch.New(fb.Provider, websearch.SearXNGConfig{BaseURL: fb.BaseURL, APIKey: fb.APIKey, Timeout: effective.Timeout()})
-		if err != nil {
-			return verifierAdapter{}, fmt.Errorf("catalog_maintenance.web_lookup.fallback: %w", err)
-		}
-		logger := discoveryLogger{out: cmd.OutOrStderr(), component: "verify"}
-		searcher = websearch.NewFallbackChain(searcher, secondary, fb.MaxSearchesPerRun, func(err error) {
-			logger.Warn("primary search provider unavailable; using fallback provider", "fallback", fb.Provider, "error", err)
-		})
-	}
-	return verifierAdapter{svc: &catalogverification.Service{
-		LLM:      llm,
-		Searcher: searcher,
-		Cache:    sqlitewebsearchcache.NewCache(db),
-		Logger:   discoveryLogger{out: cmd.OutOrStderr(), component: "verify"},
-		Config:   effective,
-	}}, nil
-}
-
-// verifierAdapter satisfies entitydiscovery.Verifier by translating to/
-// from catalogverification's own request/result types.
-// catalogverification.Service.Verify deliberately uses its own
-// VerifyRequest/VerifyResult (not entitydiscovery.VerifyCandidate/
-// VerifyResult) so that package stays reusable outside entitydiscovery;
-// this adapter is the one place the two type sets meet.
-type verifierAdapter struct{ svc *catalogverification.Service }
-
-func (a verifierAdapter) Verify(ctx context.Context, c entitydiscovery.VerifyCandidate) entitydiscovery.VerifyResult {
-	var articles []appout.EntityDiscoveryArticle
-	for _, t := range c.Texts {
-		articles = append(articles, appout.EntityDiscoveryArticle{ArticleID: t.ID, Title: t.Title, Summary: t.Summary})
-	}
-	r := a.svc.Verify(ctx, catalogverification.VerifyRequest{
-		Name: c.Name, Type: string(c.Type), Metadata: c.Metadata,
-		Confidence: c.Confidence, Sources: c.Sources, Articles: articles, FallbackHistory: c.FallbackHistory,
-	})
-	return entitydiscovery.VerifyResult{
-		Disposition: r.Disposition, CanonicalName: r.CanonicalName,
-		EntityType: entityproposal.EntityType(r.EntityType), Metadata: r.Metadata,
-		Confidence: r.Confidence, WebSources: r.WebSources, Reason: r.Reason,
-		Resolved: r.Disposition != weblookup.DispositionUncertain, ProviderError: r.ProviderError,
-	}
-}
-
 // discoveryLogger is a minimal appout.Logger adapter over the command's
-// stderr writer; entities discover has no existing logger dependency,
-// and catalogverification.Service requires one.
+// stderr writer: the entity commands have no existing logger dependency,
+// and the verification wiring requires one per component.
 type discoveryLogger struct {
 	out       interface{ Write([]byte) (int, error) }
 	component string
@@ -325,22 +141,4 @@ func (l discoveryLogger) Warn(msg string, kv ...any) {
 
 func (l discoveryLogger) Error(msg string, err error, kv ...any) {
 	fmt.Fprintf(l.out, "[%s] ERROR %s: %v %v\n", l.component, msg, err, kv)
-}
-
-// parseEngineGroups turns "bing,yahoo" entries into engine name lists,
-// dropping blanks.
-func parseEngineGroups(groups []string) [][]string {
-	var out [][]string
-	for _, g := range groups {
-		var names []string
-		for _, n := range strings.Split(g, ",") {
-			if n = strings.TrimSpace(n); n != "" {
-				names = append(names, n)
-			}
-		}
-		if len(names) > 0 {
-			out = append(out, names)
-		}
-	}
-	return out
 }

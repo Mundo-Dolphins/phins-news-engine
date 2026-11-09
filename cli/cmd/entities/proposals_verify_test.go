@@ -175,25 +175,6 @@ func TestProposalsVerifyCommand_RejectsUnknownType(t *testing.T) {
 	}
 }
 
-func TestApplyProviderFlag(t *testing.T) {
-	var f verificationFlags
-	if err := applyProviderFlag("", &f); err != nil || f != (verificationFlags{}) {
-		t.Fatalf("empty: %+v %v", f, err)
-	}
-	if err := applyProviderFlag("wikidata", &f); err != nil || !f.wikidata || !f.noFallback {
-		t.Fatalf("wikidata: %+v %v", f, err)
-	}
-	for _, bad := range []verificationFlags{{noWikidata: true}, {fallback: true}, {offline: true}} {
-		bad := bad
-		if err := applyProviderFlag("wikidata", &bad); err == nil {
-			t.Errorf("want conflict error for %+v", bad)
-		}
-	}
-	if err := applyProviderFlag("llm", &verificationFlags{}); err == nil {
-		t.Error("want error for unknown provider")
-	}
-}
-
 func TestProposalsVerifyCommand_RejectsUnknownProvider(t *testing.T) {
 	cmd := newProposalsVerifyCommand()
 	cmd.SetArgs([]string{"--provider", "llm"})

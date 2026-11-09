@@ -15,6 +15,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/app/entitydiscovery"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/entityproposal"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/entitywiring"
 	appout "github.com/Mundo-Dolphins/phins-news-engine/ports/out"
 )
 
@@ -39,7 +40,7 @@ func ValidateCycleVerification(v string) error {
 
 // NewCycleLLM builds the discovery LLM; a variable so tests can substitute it.
 var NewCycleLLM = func(cmd *cobra.Command, cfg config.EntityDiscoveryConfig, maxTokens int, disableThinking bool) appout.EntityDiscoveryLLM {
-	return newDiscoveryLLM(cmd, cfg, maxTokens, disableThinking)
+	return entitywiring.NewDiscoveryLLM(cfg, maxTokens, disableThinking, discoveryLogger{out: cmd.OutOrStderr(), component: "llm"})
 }
 
 // CycleStepDisabledReason returns why the entity step cannot run with cfg, or ""
@@ -61,7 +62,7 @@ func CycleStepDisabledReason(cfg *config.Config) string {
 func cycleStages(cfg *config.Config, mode string) (wikidataOn, fallbackOn, chooserOn, verify bool) {
 	switch mode {
 	case CycleVerificationFull:
-		w, f := resolveVerificationStages(cfg.EntityDiscovery.Verification, cfg.CatalogMaintenance.WebLookup.Enabled, verificationFlags{fallback: true})
+		w, f := entitywiring.ResolveStages(cfg.EntityDiscovery.Verification, cfg.CatalogMaintenance.WebLookup.Enabled, entitywiring.Stages{Fallback: true})
 		return w, f, true, true
 	case CycleVerificationNone:
 		return false, false, false, false
@@ -107,24 +108,24 @@ func RunCycleStep(cmd *cobra.Command, cfg *config.Config, db *sql.DB, sessionID 
 		return zero, nil
 	}
 
-	discoveryCfg, maxTokens, disableThinking, err := resolveDiscoveryConfig(cmd, cfg, llmFlagValues{})
+	discoveryCfg, maxTokens, disableThinking, err := entitywiring.DiscoveryConfig(cfg, entitywiring.LLMOverrides{})
 	if err != nil {
 		return zero, fmt.Errorf("entities: %w", err)
 	}
-	catalog, err := loadCatalogIndex(cfg.Clustering.EntityCatalog.ManualPath, cfg.Clustering.EntityCatalog.GeneratedPath)
+	catalog, err := entitywiring.CatalogIndex(cfg.Clustering.EntityCatalog.ManualPath, cfg.Clustering.EntityCatalog.GeneratedPath)
 	if err != nil {
 		return zero, fmt.Errorf("entities: %w", err)
 	}
 	llm := NewCycleLLM(cmd, discoveryCfg, maxTokens, disableThinking)
 
 	wikidataOn, fallbackOn, chooserOn, verify := cycleStages(cfg, opts.Verification)
-	leagueStage, err := buildLeagueStage(cfg, catalog, time.Now(), discoveryLogger{out: cmd.OutOrStderr(), component: "entities"})
+	leagueStage, err := entitywiring.LeagueStage(cfg, catalog, time.Now(), discoveryLogger{out: cmd.OutOrStderr(), component: "entities"})
 	if err != nil {
 		return zero, fmt.Errorf("entities: %w", err)
 	}
 	var verifier entitydiscovery.Verifier
 	if verify {
-		verifier, _, err = buildChainVerifier(cmd, db, cfg, llm, catalog, wikidataOn, fallbackOn, chooserOn)
+		verifier, _, err = entitywiring.ChainVerifier(cmd.Context(), db, cfg, llm, catalog, wikidataOn, fallbackOn, chooserOn, cliLoggers(cmd))
 		if err != nil {
 			return zero, fmt.Errorf("entities: %w", err)
 		}
