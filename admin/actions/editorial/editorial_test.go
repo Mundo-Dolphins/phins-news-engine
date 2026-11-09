@@ -370,3 +370,34 @@ func TestClassifyEvalFailedBatchesWarns(t *testing.T) {
 		t.Fatalf("log lacks the batch error:\n%s", f.log)
 	}
 }
+
+func TestClassifyEvalMissesWriteFailureKeepsReport(t *testing.T) {
+	f := newFixture(t)
+	f.cfg.OfflineTraining.LLM.TimeoutSeconds = 5
+	dataset := writeFile(t, "d.yml", "examples:\n  - article_id: x1\n    title: one\n    label: publish\n")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{"message": map[string]string{"role": "assistant",
+				"content": `{"labels": [{"article_id": "x1", "label": "publish", "confidence": 0.9, "reason": "r"}]}`}}},
+		})
+	}))
+	defer srv.Close()
+	misses := filepath.Join(t.TempDir(), "missing-dir", "misses.csv")
+	res, err := f.run("editorial.classify_eval", `{"dataset":"`+dataset+`","fold":"all","misses_out":"`+misses+
+		`","llm_base_url":"`+srv.URL+`","llm_model":"m"}`)
+	if err != nil {
+		t.Fatalf("classify_eval error = %v, want a result", err)
+	}
+	if !strings.HasPrefix(res.Summary, "WARNING: could not write misses CSV: ") ||
+		!strings.Contains(res.Summary, "; precision=") || !strings.HasSuffix(res.Summary, "on 1 examples") {
+		t.Fatalf("summary = %q", res.Summary)
+	}
+	rep, ok := res.Object.(trainwiring.ClassifyEvalReport)
+	if !ok || rep.Examples != 1 || rep.Report.BatchesTotal != 1 || rep.MissesWritten != "" {
+		t.Fatalf("object = %#v", res.Object)
+	}
+	if !strings.Contains(f.log.String(), "level=WARN") || !strings.Contains(f.log.String(), "misses CSV") {
+		t.Fatalf("log lacks the misses warning:\n%s", f.log)
+	}
+}

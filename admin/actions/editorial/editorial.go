@@ -328,7 +328,9 @@ func runClassifyEval(ctx context.Context, env action.Env, params any) (action.Re
 		BaseURL: p.LLMBaseURL, Model: p.LLMModel, Sample: p.Sample, BatchSize: p.BatchSize,
 		Seed: p.Seed, Threshold: p.Threshold, IncludeImported: p.IncludeImported,
 	})
-	if err != nil {
+	// A misses-CSV error comes with a complete report: keep it and warn.
+	missesErr := err
+	if err != nil && !errors.Is(err, trainwiring.ErrWriteMisses) {
 		if strings.HasPrefix(err.Error(), "no examples selected") {
 			return action.Result{}, action.Conflict(err)
 		}
@@ -341,6 +343,10 @@ func runClassifyEval(ctx context.Context, env action.Env, params any) (action.Re
 			env.Log.Warn("classify-eval batch failed", "error", e)
 		}
 		summary = fmt.Sprintf("WARNING: %d of %d batches failed; %s", rep.Report.BatchesFailed, rep.Report.BatchesTotal, summary)
+	}
+	if missesErr != nil {
+		env.Log.Warn("classify-eval could not write the misses CSV", "error", missesErr, "path", p.MissesOut)
+		summary = fmt.Sprintf("WARNING: could not write misses CSV: %v; %s", missesErr, summary)
 	}
 	return action.Result{Render: "object", Object: rep, Summary: summary}, nil
 }
