@@ -3,8 +3,6 @@ package editorial
 
 import (
 	"fmt"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -14,6 +12,7 @@ import (
 	sqlitereviewqueue "github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqlitereviewqueue"
 	"github.com/Mundo-Dolphins/phins-news-engine/app/editorialreview"
 	"github.com/Mundo-Dolphins/phins-news-engine/app/editorialteacher"
+	"github.com/Mundo-Dolphins/phins-news-engine/app/lookback"
 	"github.com/Mundo-Dolphins/phins-news-engine/cli/cmd/shared"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/reviewpriority"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
@@ -24,24 +23,12 @@ import (
 )
 
 // resolveClassifySince parses --since the same way `entities discover`
-// does: a Go duration ("24h"), a bare day count ("7d"), an RFC3339 date,
-// or "" (no lower bound).
+// does (see lookback.Parse); all forces no lower bound.
 func resolveClassifySince(since string, all bool) (time.Time, error) {
-	if all || since == "" {
+	if all {
 		return time.Time{}, nil
 	}
-	if d, err := time.ParseDuration(since); err == nil {
-		return time.Now().UTC().Add(-d), nil
-	}
-	if t, err := time.Parse(time.RFC3339, since); err == nil {
-		return t.UTC(), nil
-	}
-	if strings.HasSuffix(since, "d") {
-		if n, err := strconv.Atoi(strings.TrimSuffix(since, "d")); err == nil && n > 0 {
-			return time.Now().UTC().Add(-time.Duration(n) * 24 * time.Hour), nil
-		}
-	}
-	return time.Time{}, fmt.Errorf("invalid --since value %q: want a Go duration (24h), a day count (7d), or an RFC3339 date", since)
+	return lookback.Parse(since, time.Now().UTC())
 }
 
 func newClassifyCommand() *cobra.Command {

@@ -5,7 +5,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -13,6 +12,7 @@ import (
 
 	"github.com/Mundo-Dolphins/phins-news-engine/app/catalogverification"
 	"github.com/Mundo-Dolphins/phins-news-engine/app/entitydiscovery"
+	"github.com/Mundo-Dolphins/phins-news-engine/app/lookback"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/weblookup"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
@@ -28,26 +28,13 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/entityproposal"
 )
 
-// resolveSince parses --since into a lower time bound: a Go duration
-// ("24h"), a bare day count ("7d", "30d" — time.ParseDuration has no "d"
-// unit), an RFC3339 date, or "" (no lower bound). all forces the zero
-// value regardless of since.
+// resolveSince parses --since into a lower time bound (see lookback.Parse).
+// all forces the zero value regardless of since.
 func resolveSince(since string, all bool) (time.Time, error) {
-	if all || since == "" {
+	if all {
 		return time.Time{}, nil
 	}
-	if d, err := time.ParseDuration(since); err == nil {
-		return time.Now().UTC().Add(-d), nil
-	}
-	if t, err := time.Parse(time.RFC3339, since); err == nil {
-		return t.UTC(), nil
-	}
-	if strings.HasSuffix(since, "d") {
-		if n, err := strconv.Atoi(strings.TrimSuffix(since, "d")); err == nil && n > 0 {
-			return time.Now().UTC().Add(-time.Duration(n) * 24 * time.Hour), nil
-		}
-	}
-	return time.Time{}, fmt.Errorf("invalid --since value %q: want a Go duration (24h), a day count (7d), or an RFC3339 date", since)
+	return lookback.Parse(since, time.Now().UTC())
 }
 
 func newDiscoverCommand() *cobra.Command {
