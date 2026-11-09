@@ -37,6 +37,19 @@ run them, without the panel ever endangering the running bot.
   `outbox.expire` and `outbox.repair` are destructive and need `confirm`.
   Their logic lives in `app/pipelinestats`, `app/dbinspect`,
   `app/humanlabels` and `app/datasetaudit`, shared with the CLI.
+- **Step 2, batch 2.** 26 more actions in three groups: `entities.*` (list,
+  show, extract, league_evaluate, approve, reject, generate, roster_sync,
+  discover, proposals_verify, fallback_test, wikidata_evaluate),
+  `classifier_dictionary.*` (list, show, metrics, approve, reject, analyze)
+  and `editorial.*` (metrics, review, canary_status, canary_promote,
+  canary_abort, veto_report, classify, classify_eval). Production offers only
+  the 12 read-only ones; approvals, rejects, generation, the LLM and web
+  actions and the dataset reports are local-only. `editorial.canary_promote`
+  and `editorial.canary_abort` are `read`: like the CLI they only print the
+  config change to make. LLM runs with failed batches finish with a
+  `WARNING` summary and keep the saved work. Their logic lives in
+  `infra/entitywiring`, `app/editorialmetrics` and `app/lookback`, shared with
+  the CLI.
 - **Production writes only operational state.** Reads everywhere, plus
   `claims.retry`, `claims.release`, `outbox.expire`, `outbox.repair` and the
   `label.*` writes. Training, promote and rollback are local-only and reach the Pi through the normal deploy; no CPU-heavy job runs
