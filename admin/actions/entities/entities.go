@@ -188,6 +188,25 @@ func or(v, def string) string {
 
 func orDash(s string) string { return or(s, "-") }
 
+// pathParam is a file path param of a both-mode action and the configured
+// value it overrides.
+type pathParam struct{ name, value, configured string }
+
+// refusePathOverrides rejects, in production, any path param that differs
+// from its configured value (like stats.report's log_path): any
+// authenticated caller could otherwise make the admin read arbitrary files.
+func refusePathOverrides(env action.Env, params ...pathParam) error {
+	if env.Mode != action.ModeProduction {
+		return nil
+	}
+	for _, p := range params {
+		if p.value != "" && p.value != p.configured {
+			return &action.Error{Code: action.CodeInvalidParams, Message: p.name + " cannot be changed in production"}
+		}
+	}
+	return nil
+}
+
 func runList(ctx context.Context, env action.Env, params any) (action.Result, error) {
 	p, ok := params.(*listParams)
 	if !ok {
@@ -363,6 +382,17 @@ func runExtract(_ context.Context, env action.Env, params any) (action.Result, e
 		return action.Result{}, &action.Error{Code: action.CodeInvalidParams,
 			Message: "give at least one of title, description or body", Err: entitywiring.ErrNoText}
 	}
+	cl := env.Config.Clustering
+	if err := refusePathOverrides(env,
+		pathParam{"rules", p.Rules, cl.RulesPath},
+		pathParam{"manual", p.Manual, cl.EntityCatalog.ManualPath},
+		pathParam{"generated", p.Generated, cl.EntityCatalog.GeneratedPath},
+		pathParam{"generated_rules", p.GeneratedRules, cl.GeneratedRulesPath},
+		pathParam{"roster", p.Roster, cl.EntityCatalog.League.RosterPath},
+		pathParam{"league_rules", p.LeagueRules, cl.EntityCatalog.League.RulesPath},
+	); err != nil {
+		return action.Result{}, err
+	}
 	in := entitywiring.ExtractInput{
 		Title: p.Title, Description: p.Description, Body: p.Body,
 		RulesPath: p.Rules, ManualPath: p.Manual, GeneratedPath: p.Generated, GeneratedRulesPath: p.GeneratedRules,
@@ -432,6 +462,12 @@ func runLeagueEvaluate(ctx context.Context, env action.Env, params any) (action.
 		return action.Result{}, errBadParams
 	}
 	cat := env.Config.Clustering.EntityCatalog
+	if err := refusePathOverrides(env,
+		pathParam{"manual", p.Manual, cat.ManualPath},
+		pathParam{"generated", p.Generated, cat.GeneratedPath},
+	); err != nil {
+		return action.Result{}, err
+	}
 	rep, err := entitywiring.EvaluateLeague(ctx, env.DB, env.Config, or(p.Manual, cat.ManualPath), or(p.Generated, cat.GeneratedPath), env.Now(), loggers(env))
 	if errors.Is(err, entitywiring.ErrLeagueDisabled) {
 		return action.Result{}, action.Conflict(err)

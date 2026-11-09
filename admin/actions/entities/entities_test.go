@@ -105,6 +105,11 @@ func write(t *testing.T, path, body string) {
 
 func (f fixture) run(name, params string) (action.Result, error) {
 	f.t.Helper()
+	return f.runIn(action.ModeLocal, name, params)
+}
+
+func (f fixture) runIn(mode action.Mode, name, params string) (action.Result, error) {
+	f.t.Helper()
 	var a action.Action
 	for _, c := range entities.Actions() {
 		if c.Name == name {
@@ -118,7 +123,7 @@ func (f fixture) run(name, params string) (action.Result, error) {
 	if err != nil {
 		return action.Result{}, err
 	}
-	env := action.Env{DB: f.db, Config: f.cfg, Mode: action.ModeLocal, Now: func() time.Time { return now },
+	env := action.Env{DB: f.db, Config: f.cfg, Mode: mode, Now: func() time.Time { return now },
 		Log: slog.New(slog.NewTextHandler(f.log, nil)), Actor: "user:ana"}
 	return a.Run(context.Background(), env, p)
 }
@@ -460,5 +465,43 @@ func TestGenerateWritesConfiguredPath(t *testing.T) {
 	}
 	if res.Text != "wrote 0 entities to "+f.generated {
 		t.Fatalf("text = %q", res.Text)
+	}
+}
+
+func TestExtractProductionRefusesPathOverrides(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing.yml")
+	for _, field := range []string{"rules", "manual", "generated", "generated_rules", "roster", "league_rules"} {
+		t.Run(field, func(t *testing.T) {
+			f := newFixture(t)
+			_, err := f.runIn(action.ModeProduction, "entities.extract",
+				`{"title":"Isotopes win","league":true,"`+field+`":"`+missing+`"}`)
+			var ae *action.Error
+			if !errors.As(err, &ae) || ae.Code != action.CodeInvalidParams || ae.Message != field+" cannot be changed in production" {
+				t.Fatalf("err = %v, want the production refusal for %s", err, field)
+			}
+		})
+	}
+}
+
+func TestExtractProductionUsesConfiguredPaths(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.runIn(action.ModeProduction, "entities.extract",
+		`{"title":"Isotopes win","manual":"`+f.manual+`"}`); err != nil {
+		t.Fatalf("configured paths refused in production: %v", err)
+	}
+}
+
+func TestLeagueEvaluateProductionRefusesPathOverrides(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing.yml")
+	for _, field := range []string{"manual", "generated"} {
+		t.Run(field, func(t *testing.T) {
+			f := newFixture(t)
+			f.cfg.EntityDiscovery.League.Enabled = true
+			_, err := f.runIn(action.ModeProduction, "entities.league_evaluate", `{"`+field+`":"`+missing+`"}`)
+			var ae *action.Error
+			if !errors.As(err, &ae) || ae.Code != action.CodeInvalidParams || ae.Message != field+" cannot be changed in production" {
+				t.Fatalf("err = %v, want the production refusal for %s", err, field)
+			}
+		})
 	}
 }
