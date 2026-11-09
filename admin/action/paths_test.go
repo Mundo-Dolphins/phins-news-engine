@@ -9,7 +9,7 @@ import (
 )
 
 func TestRefusePathOverrides(t *testing.T) {
-	p := action.PathParam{Name: "dir", Value: "/etc", Configured: "data/model"}
+	p := action.PathParam{Name: "dir", Value: "other/dir", Configured: "data/model"}
 	if err := action.RefusePathOverrides(action.Env{Mode: action.ModeLocal}, p); err != nil {
 		t.Fatalf("local = %v, want nil", err)
 	}
