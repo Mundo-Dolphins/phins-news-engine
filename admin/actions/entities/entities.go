@@ -325,6 +325,8 @@ func runApprove(ctx context.Context, env action.Env, params any) (action.Result,
 		return action.Result{}, conflictingResolution()
 	}
 	cat := env.Config.Clustering.EntityCatalog
+	action.ConfigFilesMu.Lock()
+	defer action.ConfigFilesMu.Unlock()
 	paths := entitydiscovery.CatalogPaths{
 		DictionaryPath:       or(p.Dictionary, env.Config.Dictionary.Path),
 		ManualCatalogPath:    or(p.Manual, cat.ManualPath),
@@ -366,6 +368,8 @@ func runGenerate(_ context.Context, env action.Env, params any) (action.Result, 
 		return action.Result{}, errBadParams
 	}
 	outPath := or(p.Out, env.Config.Clustering.EntityCatalog.GeneratedPath)
+	action.ConfigFilesMu.Lock()
+	defer action.ConfigFilesMu.Unlock()
 	n, err := entitywiring.GenerateCatalog(or(p.Dictionary, env.Config.Dictionary.Path), outPath)
 	if err != nil {
 		return action.Result{}, err
@@ -487,6 +491,8 @@ func runRosterSync(ctx context.Context, env action.Env, params any) (action.Resu
 	if p.Path == "" && rc.Path == "" {
 		return action.Result{}, action.Conflict(errors.New("entity_discovery.roster.path is empty (or pass path)"))
 	}
+	action.ConfigFilesMu.Lock()
+	defer action.ConfigFilesMu.Unlock()
 	count, dest, err := entitywiring.SyncRoster(ctx, rc, p.URL, p.Path, env.Now())
 	if err != nil {
 		return action.Result{}, err

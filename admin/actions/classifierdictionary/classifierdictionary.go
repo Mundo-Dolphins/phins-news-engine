@@ -243,6 +243,8 @@ func runApprove(ctx context.Context, env action.Env, params any) (action.Result,
 	if !ok {
 		return action.Result{}, errBadParams
 	}
+	action.ConfigFilesMu.Lock()
+	defer action.ConfigFilesMu.Unlock()
 	pr, err := classifierdictionary.Approve(ctx, repo(env), p.ID, or(p.Dictionary, env.Config.Dictionary.Path), env.Now().UTC())
 	if err != nil {
 		return action.Result{}, proposalError(err)

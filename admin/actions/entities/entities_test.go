@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -465,6 +466,43 @@ func TestGenerateWritesConfiguredPath(t *testing.T) {
 	}
 	if res.Text != "wrote 0 entities to "+f.generated {
 		t.Fatalf("text = %q", res.Text)
+	}
+}
+
+func TestApproveConcurrentCallsBothLand(t *testing.T) {
+	f := newFixture(t)
+	ids := []string{
+		f.seed(entityproposal.Proposal{CanonicalName: "Zeno Ashbury", Confidence: 0.9, Occurrences: 3,
+			Metadata: map[string]string{"position": "LB", "affiliation_status": "team", "team_id": "springfield-isotopes"}}),
+		f.seed(entityproposal.Proposal{CanonicalName: "Orrin Tellwater", Confidence: 0.9, Occurrences: 3,
+			Metadata: map[string]string{"position": "QB", "affiliation_status": "team", "team_id": "springfield-isotopes"}}),
+	}
+	var wg sync.WaitGroup
+	errs := make([]error, len(ids))
+	for i, id := range ids {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, errs[i] = f.run("entities.approve", `{"id":"`+id+`"}`)
+		}()
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("approve %s: %v", ids[i], err)
+		}
+		if f.status(ids[i]) != entityproposal.StatusApproved {
+			t.Fatalf("%s not approved", ids[i])
+		}
+	}
+	b, err := os.ReadFile(f.dict)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"Zeno Ashbury", "Orrin Tellwater"} {
+		if !strings.Contains(string(b), name) {
+			t.Fatalf("dictionary lacks %s (lost update):\n%s", name, b)
+		}
 	}
 }
 
