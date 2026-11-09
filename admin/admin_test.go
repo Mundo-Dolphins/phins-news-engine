@@ -21,6 +21,8 @@ import (
 
 	"github.com/Mundo-Dolphins/phins-news-engine/admin"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/action"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/fetcherwiring"
 	infrasqlite "github.com/Mundo-Dolphins/phins-news-engine/infra/sqlite"
 	"github.com/Mundo-Dolphins/phins-news-engine/migrations"
 	"github.com/Mundo-Dolphins/phins-news-engine/testsupport/repofs"
@@ -35,6 +37,7 @@ var (
 	jobStarted  = make(chan struct{}, 1)
 	syncStarted = make(chan struct{}, 1)
 	jobFinished atomic.Bool
+	envSeen     = make(chan action.Env, 1)
 )
 
 func TestMain(m *testing.M) {
@@ -57,6 +60,15 @@ func TestMain(m *testing.M) {
 		Run: func(ctx context.Context, _ action.Env, _ any) (action.Result, error) {
 			syncStarted <- struct{}{}
 			time.Sleep(300 * time.Millisecond)
+			return action.Result{}, nil
+		},
+	})
+	// Reports the Env the host hooks produced (TestEnvCarriesHostHooks).
+	admin.Add(action.Action{
+		Name: "test.envhooks", Group: "test", Title: "Env hooks", Kind: action.KindRead,
+		Modes: []action.Mode{action.ModeLocal},
+		Run: func(_ context.Context, env action.Env, _ any) (action.Result, error) {
+			envSeen <- env
 			return action.Result{}, nil
 		},
 	})
@@ -557,5 +569,30 @@ func TestCatalogStep2Batch2(t *testing.T) {
 	}
 	if got, want := len(both)+len(localOnly), 26; got != want {
 		t.Fatalf("catalog lists %d new actions, want %d", got, want)
+	}
+}
+
+func TestEnvCarriesHostHooks(t *testing.T) {
+	h := newHarness(t, "local", 1)
+	h.opts.FetcherExtensions = fetcherwiring.Extensions{
+		Categories: map[string]fetcherwiring.CategoryBuilder{},
+	}
+	h.start()
+	c := loggedIn(t, h.bases[0])
+	if code, body := postAction(t, c, h.bases[0], "test.envhooks", `{}`); code != http.StatusOK {
+		t.Fatalf("test.envhooks = %d %s", code, body)
+	}
+	env := <-envSeen
+	if env.ConfigPath != h.opts.ConfigPath {
+		t.Errorf("ConfigPath = %q, want %q", env.ConfigPath, h.opts.ConfigPath)
+	}
+	if env.Profile != config.ProfileLocal {
+		t.Errorf("Profile = %q, want local", env.Profile)
+	}
+	if env.FetcherExtensions.Categories == nil {
+		t.Error("FetcherExtensions.Categories is nil, want the host's map")
+	}
+	if err := h.stop(); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -36,6 +36,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/store"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/web"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/fetcherwiring"
 	infrasqlite "github.com/Mundo-Dolphins/phins-news-engine/infra/sqlite"
 	"github.com/Mundo-Dolphins/phins-news-engine/migrations"
 )
@@ -91,6 +92,9 @@ type Options struct {
 	// StatsLogPath is the process log stats.report scans by default; empty
 	// means "data/logs/out.log", the CLI default.
 	StatsLogPath string
+	// FetcherExtensions are the host's fetcher categories, copied into every
+	// action Env.
+	FetcherExtensions fetcherwiring.Extensions
 }
 
 // Run starts the admin panel and blocks until ctx is done or a server fails.
@@ -182,7 +186,8 @@ func Run(ctx context.Context, opts Options) error {
 		statsLogPath = "data/logs/out.log"
 	}
 	envFor := func(actor string) action.Env {
-		return action.Env{DB: opDB, Config: cfg, Mode: mode, Now: now, Log: log, Actor: actor, StatsLogPath: statsLogPath}
+		return action.Env{DB: opDB, Config: cfg, Mode: mode, Now: now, Log: log, Actor: actor, StatsLogPath: statsLogPath,
+			ConfigPath: opts.ConfigPath, Profile: profile, FetcherExtensions: opts.FetcherExtensions}
 	}
 	streamsDone := make(chan struct{})
 	handler := httpapi.NewHandler(httpapi.Deps{
