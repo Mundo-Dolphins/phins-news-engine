@@ -24,6 +24,9 @@ var (
 	// ErrNoBrief reports a type proposal whose status is neither pending nor
 	// approved; errors.Is matches it.
 	ErrNoBrief = errors.New("proposal has no brief")
+	// ErrAlreadyDecided reports a type proposal that is not in a state the
+	// decision applies to; errors.Is matches it.
+	ErrAlreadyDecided = errors.New("proposal already decided")
 )
 
 // textError carries a fixed message and matches a sentinel through errors.Is.
@@ -55,8 +58,8 @@ func ListTypes(ctx context.Context, db *sql.DB) ([]eventruleproposal.Proposal, e
 
 // DecideType approves or rejects the type proposal id at now and stores the
 // result. A phrase proposal returns ErrNotTypeProposal, an already decided
-// one the domain error, and an unknown id the repository's not-found error
-// (errors.Is(err, sql.ErrNoRows)). Nothing is applied: a type needs a code
+// one ErrAlreadyDecided (carrying the domain error text), and an unknown id
+// the repository's not-found error (errors.Is(err, sql.ErrNoRows)). Nothing is applied: a type needs a code
 // change, see Brief.
 func DecideType(ctx context.Context, db *sql.DB, id string, approve bool, now time.Time) (eventruleproposal.Proposal, error) {
 	repo := sqliteeventruleproposal.NewRepository(db)
@@ -76,7 +79,7 @@ func DecideType(ctx context.Context, db *sql.DB, id string, approve bool, now ti
 	}
 	decided, err := decide(p, now)
 	if err != nil {
-		return eventruleproposal.Proposal{}, err
+		return eventruleproposal.Proposal{}, &textError{msg: err.Error(), sentinel: ErrAlreadyDecided}
 	}
 	if err := repo.Save(ctx, decided); err != nil {
 		return eventruleproposal.Proposal{}, err

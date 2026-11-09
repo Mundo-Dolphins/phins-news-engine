@@ -572,6 +572,49 @@ func TestCatalogStep2Batch2(t *testing.T) {
 	}
 }
 
+// TestCatalogStep2Batch3 pins which step 2 batch 3 engine actions each mode
+// offers (the host adds ocr.check and dictionary.fetch).
+func TestCatalogStep2Batch3(t *testing.T) {
+	both := []string{
+		"audit.duplicates", "audit.quality", "config.validate", "model.validate", "clustering.rules_validate",
+		"dictionary.validate", "dictionary.inspect", "dictionary.history", "dictionary.diff",
+		"events.brief", "events.gate", "events.impact", "events.type_list",
+	}
+	localOnly := []string{
+		"dictionary.rollback", "dictionary.regression_check", "dictionary.mine_candidates",
+		"events.type_approve", "events.type_reject",
+	}
+	set := func(m action.Mode) map[string]bool {
+		out := map[string]bool{}
+		for _, n := range admin.RegistryFor(m) {
+			out[n] = true
+		}
+		return out
+	}
+	local, prod := set(action.ModeLocal), set(action.ModeProduction)
+	for _, n := range append(append([]string{}, both...), localOnly...) {
+		if !local[n] {
+			t.Errorf("local mode lacks %s", n)
+		}
+	}
+	for _, n := range both {
+		if !prod[n] {
+			t.Errorf("production mode lacks %s", n)
+		}
+	}
+	for _, n := range localOnly {
+		if prod[n] {
+			t.Errorf("production mode offers local-only %s", n)
+		}
+	}
+	if got, want := len(both)+len(localOnly), 18; got != want {
+		t.Fatalf("catalog lists %d new actions, want %d", got, want)
+	}
+	if got, want := len(both), 13; got != want {
+		t.Fatalf("catalog lists %d both-mode actions, want %d", got, want)
+	}
+}
+
 func TestEnvCarriesHostHooks(t *testing.T) {
 	h := newHarness(t, "local", 1)
 	h.opts.FetcherExtensions = fetcherwiring.Extensions{

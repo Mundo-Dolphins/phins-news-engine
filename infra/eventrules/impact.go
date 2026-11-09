@@ -5,7 +5,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
 	"time"
@@ -19,6 +18,15 @@ import (
 // impactListLimit bounds the generic and the typed articles re-extracted by
 // Impact.
 const impactListLimit = 20000
+
+var (
+	// ErrNoRulesPath reports that clustering.rules_path is empty; errors.Is
+	// matches it.
+	ErrNoRulesPath = errors.New("clustering.rules_path is empty")
+	// ErrInvalidDays reports a non-positive look-back window; errors.Is
+	// matches it.
+	ErrInvalidDays = errors.New("days must be positive")
+)
 
 // ImpactReport is the shadow report of the generated rules file over the
 // recent articles. Nothing is written.
@@ -49,15 +57,16 @@ type ImpactReport struct {
 
 // Impact compares the hand-written rules with the hand-written rules plus
 // the generated file over the generic and typed articles of the last days
-// days. It errors when days is not positive or clustering.rules_path is
-// empty.
+// days. It returns ErrInvalidDays when days is not positive and
+// ErrNoRulesPath when clustering.rules_path is empty; it stops with the
+// context's error once ctx is done.
 func Impact(ctx context.Context, db *sql.DB, cfg *config.Config, days int, now time.Time) (ImpactReport, error) {
 	var zero ImpactReport
 	if cfg.Clustering.RulesPath == "" {
-		return zero, fmt.Errorf("clustering.rules_path is empty")
+		return zero, &textError{msg: "clustering.rules_path is empty", sentinel: ErrNoRulesPath}
 	}
 	if days <= 0 {
-		return zero, fmt.Errorf("--days must be positive")
+		return zero, &textError{msg: "--days must be positive", sentinel: ErrInvalidDays}
 	}
 	base, err := HandWrittenRules(cfg)
 	if err != nil {
@@ -95,6 +104,9 @@ func Impact(ctx context.Context, db *sql.DB, cfg *config.Config, days int, now t
 	}
 	beforeRules, afterRules := base.ToEventSignalsRules(), merged.ToEventSignalsRules()
 	for _, s := range samples {
+		if err := ctx.Err(); err != nil {
+			return zero, err
+		}
 		was := eventsignals.Extract(s.Article, beforeRules, now).EventType
 		is := eventsignals.Extract(s.Article, afterRules, now).EventType
 		if was == is {
@@ -106,6 +118,9 @@ func Impact(ctx context.Context, db *sql.DB, cfg *config.Config, days int, now t
 	// Typed control: an already-typed article whose type changes is a
 	// regression the checker should have caught.
 	for _, s := range typed {
+		if err := ctx.Err(); err != nil {
+			return zero, err
+		}
 		was := eventsignals.Extract(s.Article, beforeRules, now).EventType
 		is := eventsignals.Extract(s.Article, afterRules, now).EventType
 		if was == is {

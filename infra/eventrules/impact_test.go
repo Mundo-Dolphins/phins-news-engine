@@ -3,6 +3,7 @@ package eventrules
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -73,5 +74,30 @@ func TestImpactNeedsRulesPath(t *testing.T) {
 	cfg.Clustering.RulesPath = ""
 	if _, err := Impact(context.Background(), db, cfg, 7, time.Now()); err == nil || !strings.Contains(err.Error(), "clustering.rules_path is empty") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestImpactSentinelsKeepTheCLIText(t *testing.T) {
+	db := openTestDB(t)
+	cfg := enabledConfig(t)
+	if _, err := Impact(context.Background(), db, cfg, 0, time.Now()); !errors.Is(err, ErrInvalidDays) {
+		t.Fatalf("err = %v, want ErrInvalidDays", err)
+	}
+	cfg.Clustering.RulesPath = ""
+	if _, err := Impact(context.Background(), db, cfg, 7, time.Now()); !errors.Is(err, ErrNoRulesPath) {
+		t.Fatalf("err = %v, want ErrNoRulesPath", err)
+	}
+}
+
+func TestImpactStopsOnCancelledContext(t *testing.T) {
+	db := openTestDB(t)
+	cfg := enabledConfig(t)
+	cfg.Clustering.GeneratedRulesPath = filepath.Join(t.TempDir(), "absent.yml")
+	seedArticles(t, db, "g", eventsignals.EventTypeGeneric, "Isotopes zzqx pens a pact with veteran")
+	ctx, cancel := context.WithCancel(context.Background())
+	// The error may come from the article listing or from the loops.
+	cancel()
+	if _, err := Impact(ctx, db, cfg, 7, time.Now()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
 	}
 }
