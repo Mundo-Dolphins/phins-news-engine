@@ -235,7 +235,8 @@ type ClassifyEvalFlags struct {
 	BaseURL, Model string
 	// Sample evaluates a random sample of this many examples (0 = all).
 	Sample int
-	// BatchSize is the articles per LLM request (0 = 20).
+	// BatchSize is the articles per LLM request: 0 = offline_training.llm
+	// value, else 20.
 	BatchSize int
 	// Seed seeds Sample.
 	Seed int64
@@ -314,7 +315,14 @@ func ClassifyEval(ctx context.Context, cfg *config.Config, f ClassifyEvalFlags) 
 	rep.Examples, rep.Fold, rep.Model = len(examples), f.Fold, llmCfg.Model
 
 	llm := llmclient.New(LLMClientConfig(llmCfg))
-	report, err := editorialteacher.Evaluate(ctx, llm, policy, examples, f.BatchSize)
+	batchSize := f.BatchSize
+	if batchSize == 0 {
+		batchSize = defaultClassifyBatchSize
+		if llmCfg.BatchSize > 0 {
+			batchSize = llmCfg.BatchSize
+		}
+	}
+	report, err := editorialteacher.Evaluate(ctx, llm, policy, examples, batchSize)
 	if err != nil {
 		return rep, err
 	}

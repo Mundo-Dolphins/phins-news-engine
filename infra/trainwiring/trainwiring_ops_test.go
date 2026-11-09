@@ -252,3 +252,25 @@ func TestClassifyEvalMissesWriteErrorKeepsReport(t *testing.T) {
 		t.Errorf("report = %+v, want the evaluated report without MissesWritten", rep)
 	}
 }
+
+func TestClassifyEvalZeroBatchSizeUsesConfigured(t *testing.T) {
+	_, cfg := opsFixture(t)
+	cfg.OfflineTraining.LLM.TimeoutSeconds = 5
+	cfg.OfflineTraining.LLM.BatchSize = 1
+	dataset := filepath.Join(t.TempDir(), "d.yml")
+	if err := os.WriteFile(dataset, []byte("examples:\n  - article_id: x1\n    title: t\n    label: publish\n  - article_id: x2\n    title: u\n    label: reject\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv := teacherLLM(t, `{"labels": [{"article_id": "x1", "label": "publish", "confidence": 0.9, "reason": "r"}]}`)
+	rep, err := trainwiring.ClassifyEval(context.Background(), cfg, trainwiring.ClassifyEvalFlags{
+		DatasetPath: dataset, Fold: "all", BaseURL: srv.URL, Model: "m", Threshold: 0.9,
+	})
+	if err != nil {
+		t.Fatalf("ClassifyEval: %v", err)
+	}
+	// offline_training.llm.batch_size 1 wins over the default 20: one
+	// request per example.
+	if rep.Report.BatchesTotal != 2 {
+		t.Errorf("BatchesTotal = %d, want 2 (configured batch size 1)", rep.Report.BatchesTotal)
+	}
+}
