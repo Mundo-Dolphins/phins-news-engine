@@ -17,6 +17,9 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionarysession"
 )
 
+// DefaultDir is the directory the per-version history artifacts live under.
+const DefaultDir = "data/dictionary/history"
+
 // Artifacts is the full set of file artifacts recorded for one dictionary
 // version.
 type Artifacts struct {

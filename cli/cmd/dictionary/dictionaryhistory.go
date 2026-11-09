@@ -9,9 +9,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqlite"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionaryhistory"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionarywiring"
 	infrasqlite "github.com/Mundo-Dolphins/phins-news-engine/infra/sqlite"
 	"github.com/Mundo-Dolphins/phins-news-engine/migrations"
 	"github.com/Mundo-Dolphins/phins-news-engine/ports/out"
@@ -22,7 +22,7 @@ import (
 // DictionaryHistoryRepository.List's contract) or, with --version, the
 // full detail for one version: its SQLite ledger record combined with its
 // on-disk artifacts (dictionary, diff, decisions, validation) written by
-// `dictionary update` under dictionaryHistoryDir.
+// `dictionary update` under dictionaryhistory.DefaultDir.
 func newHistoryCommand() *cobra.Command {
 	var version, format string
 
@@ -50,21 +50,15 @@ func newHistoryCommand() *cobra.Command {
 			if err := infrasqlite.Migrate(cmd.Context(), db, migrations.FS); err != nil {
 				return fmt.Errorf("dictionary history: %w", err)
 			}
-			repo := sqlite.NewDictionaryHistoryRepository(db)
-
 			if version != "" {
-				rec, err := repo.Get(cmd.Context(), version)
-				if err != nil {
-					return fmt.Errorf("dictionary history: %w", err)
-				}
-				artifacts, err := dictionaryhistory.ReadVersion(dictionaryHistoryDir, version)
+				rec, artifacts, err := dictionarywiring.HistoryVersion(cmd.Context(), db, version)
 				if err != nil {
 					return fmt.Errorf("dictionary history: %w", err)
 				}
 				return renderHistoryDetail(cmd.OutOrStdout(), rec, artifacts, format)
 			}
 
-			list, err := repo.List(cmd.Context())
+			list, err := dictionarywiring.History(cmd.Context(), db)
 			if err != nil {
 				return fmt.Errorf("dictionary history: %w", err)
 			}

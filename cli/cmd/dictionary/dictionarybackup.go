@@ -13,18 +13,16 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/ports/out"
 )
 
-const dictionaryHistoryDir = "data/dictionary/history"
-
 // BackupPreviousDictionary preserves the outgoing dictionary version before
 // it is overwritten: it writes the full artifact set (dictionary, diff,
-// decision log, validation result) for previous under dictionaryHistoryDir
+// decision log, validation result) for previous under dictionaryhistory.DefaultDir
 // via dictionaryhistory.WriteVersion, then records the version in the
 // append-only dictionary_history SQLite ledger. It does not mark previous as
 // promoted — that status moves to the newly written version once the write
 // that follows this backup succeeds.
 func BackupPreviousDictionary(ctx context.Context, db *sql.DB, previous dictionary.Dictionary, diff string, decisions []dictionarysession.Decision) error {
 	validation := dictionary.Validate(previous)
-	if err := dictionaryhistory.WriteVersion(dictionaryHistoryDir, dictionaryhistory.Artifacts{
+	if err := dictionaryhistory.WriteVersion(dictionaryhistory.DefaultDir, dictionaryhistory.Artifacts{
 		Version: previous.Version, Dictionary: previous, Diff: diff, Decisions: decisions, Validation: validation,
 	}); err != nil {
 		return fmt.Errorf("dictionary update: %w", err)

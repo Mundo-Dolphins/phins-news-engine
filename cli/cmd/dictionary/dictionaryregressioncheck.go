@@ -7,9 +7,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/Mundo-Dolphins/phins-news-engine/app/regressioncheck"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
-	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionaryfile"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionarywiring"
 )
 
 func newRegressionCheckCommand() *cobra.Command {
@@ -34,16 +33,7 @@ func newRegressionCheckCommand() *cobra.Command {
 				return fmt.Errorf("dictionary regression-check: --candidate is required")
 			}
 
-			prevDict, err := dictionaryfile.Load(prevPath)
-			if err != nil {
-				return fmt.Errorf("dictionary regression-check: %w", err)
-			}
-			candDict, err := dictionaryfile.Load(candidatePath)
-			if err != nil {
-				return fmt.Errorf("dictionary regression-check: %w", err)
-			}
-
-			report, err := regressioncheck.Run(prevDict, candDict)
+			report, err := dictionarywiring.RegressionCheck(prevPath, candidatePath)
 			if err != nil {
 				return fmt.Errorf("dictionary regression-check: %w", err)
 			}

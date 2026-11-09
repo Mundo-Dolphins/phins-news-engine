@@ -95,7 +95,7 @@ func newRollbackCommand() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("dictionary rollback: %w", err)
 			}
-			artifacts, err := dictionaryhistory.ReadVersion(dictionaryHistoryDir, targetVersion)
+			artifacts, err := dictionaryhistory.ReadVersion(dictionaryhistory.DefaultDir, targetVersion)
 			if err != nil {
 				return fmt.Errorf("dictionary rollback: %w", err)
 			}

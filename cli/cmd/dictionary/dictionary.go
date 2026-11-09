@@ -20,6 +20,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionaryfile"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionaryminingfile"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionarywiring"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/entitycatalog"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/nflverse"
 	infrasqlite "github.com/Mundo-Dolphins/phins-news-engine/infra/sqlite"
@@ -45,19 +46,14 @@ func newValidateCommand() *cobra.Command {
 		Short: "Validate a dictionary YAML file",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			d, err := dictionaryfile.Load(args[0])
+			_, issues, err := dictionarywiring.Validate(args[0])
 			if err != nil {
 				return err
 			}
-			issues := dictionary.Validate(d)
-			hasError := false
 			for _, issue := range issues {
 				cmd.Println(issue.String())
-				if issue.Severity == dictionary.SeverityError {
-					hasError = true
-				}
 			}
-			if hasError {
+			if dictionarywiring.HasErrors(issues) {
 				return fmt.Errorf("dictionary validate: %s failed validation", args[0])
 			}
 			cmd.Printf("dictionary OK: %s (%d issue(s) reported)\n", args[0], len(issues))
@@ -72,27 +68,20 @@ func newInspectCommand() *cobra.Command {
 		Short: "Print summary statistics for a dictionary YAML file",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			d, err := dictionaryfile.Load(args[0])
+			r, err := dictionarywiring.Inspect(args[0])
 			if err != nil {
 				return err
 			}
-			cmd.Printf("version: %s\nname: %s\nlanguage: %s\n", d.Version, d.Name, d.Language)
-			cmd.Printf("categories: %d\n", len(d.Categories))
-			totalEntries, totalAliases := 0, 0
-			for _, cat := range d.Categories {
-				aliases := 0
-				for _, e := range cat.Entries {
-					aliases += len(e.Aliases)
-				}
-				totalEntries += len(cat.Entries)
-				totalAliases += aliases
+			cmd.Printf("version: %s\nname: %s\nlanguage: %s\n", r.Version, r.Name, r.Language)
+			cmd.Printf("categories: %d\n", len(r.Categories))
+			for _, cat := range r.Categories {
 				cmd.Printf("  %s: weight=%.1f strong_override=%v entries=%d aliases=%d\n",
-					cat.Name, cat.Weight, cat.StrongOverride, len(cat.Entries), aliases)
+					cat.Name, cat.Weight, cat.StrongOverride, cat.Entries, cat.Aliases)
 			}
-			cmd.Printf("total entries: %d\ntotal aliases: %d\n", totalEntries, totalAliases)
+			cmd.Printf("total entries: %d\ntotal aliases: %d\n", r.TotalEntries, r.TotalAliases)
 			cmd.Printf("thresholds: positive_high=%.1f positive_medium=%.1f negative_high=%.1f title_multiplier=%.1f max_count_per_term=%d\n",
-				d.Decision.PositiveThresholdHigh, d.Decision.PositiveThresholdMedium, d.Decision.NegativeThresholdHigh,
-				d.Decision.TitleWeightMultiplier, d.Decision.MaxCountPerTerm)
+				r.Decision.PositiveThresholdHigh, r.Decision.PositiveThresholdMedium, r.Decision.NegativeThresholdHigh,
+				r.Decision.TitleWeightMultiplier, r.Decision.MaxCountPerTerm)
 			return nil
 		},
 	}
