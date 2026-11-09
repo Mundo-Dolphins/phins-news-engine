@@ -8,7 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	sqliteentityproposal "github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqliteentityproposal"
-	"github.com/Mundo-Dolphins/phins-news-engine/domain/entityproposal"
+	"github.com/Mundo-Dolphins/phins-news-engine/app/entitydiscovery"
 )
 
 func newRejectCommand() *cobra.Command {
@@ -24,14 +24,8 @@ func newRejectCommand() *cobra.Command {
 			defer db.Close()
 
 			repo := sqliteentityproposal.NewEntityProposalRepository(db)
-			p, err := repo.Get(cmd.Context(), args[0])
+			p, err := entitydiscovery.Reject(cmd.Context(), repo, args[0], time.Now().UTC())
 			if err != nil {
-				return fmt.Errorf("entities reject: %w", err)
-			}
-			if p.Status != entityproposal.StatusPending {
-				return fmt.Errorf("entities reject: proposal %s is already %s", p.ID, p.Status)
-			}
-			if err := repo.UpdateStatus(cmd.Context(), p.ID, entityproposal.StatusRejected, time.Now().UTC()); err != nil {
 				return fmt.Errorf("entities reject: %w", err)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "rejected %s (%s)\n", p.CanonicalName, p.ID)
