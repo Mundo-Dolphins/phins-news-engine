@@ -3,6 +3,7 @@ package entities_test
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -108,5 +109,48 @@ func TestClassifierDictionaryApproveRejectGolden(t *testing.T) {
 	}
 	if want := fmt.Sprintf("entities classifier-dictionary reject: proposal %s is already rejected", rejectID); err.Error() != want {
 		t.Fatalf("second reject error = %q, want %q", err.Error(), want)
+	}
+}
+
+func TestClassifierDictionaryAnalyzeGolden(t *testing.T) {
+	configPath, dictPath := testsupport.WriteFixtureWithDictionary(t)
+
+	out, err := testsupport.Execute(t, "--config", configPath, "entities", "classifier-dictionary", "analyze", "--dictionary", dictPath)
+	if err != nil {
+		t.Fatalf("analyze error = %v\n%s", err, out)
+	}
+	want := "articles considered: 0\narticle proposals created/updated: 0\nunknown-entity proposals created/updated: 0\n"
+	if out != want {
+		t.Fatalf("analyze output =\n%q\nwant\n%q", out, want)
+	}
+
+	bad := filepath.Join(t.TempDir(), "bad.yml")
+	body := `
+meta:
+  version: "1.0.0"
+  name: test_dictionary
+  language: en
+decision:
+  positive_threshold_high: 10
+  positive_threshold_medium: 7
+  negative_threshold_high: 0
+  title_weight_multiplier: 2
+  max_count_per_term: 3
+categories:
+  nfl_people_context:
+    weight: 1
+    requires_any_of: [missing_category]
+    entries: []
+`
+	if err := os.WriteFile(bad, []byte(body), 0o600); err != nil {
+		t.Fatalf("write dictionary: %v", err)
+	}
+	_, err = testsupport.Execute(t, "--config", configPath, "entities", "classifier-dictionary", "analyze", "--dictionary", bad)
+	if err == nil {
+		t.Fatal("analyze with an invalid dictionary error = nil")
+	}
+	wantErr := "entities classifier-dictionary analyze: " + bad + " failed validation: " + `[error] nfl_people_context: requires_any_of references unknown category "missing_category"`
+	if err.Error() != wantErr {
+		t.Fatalf("analyze error = %q, want %q", err.Error(), wantErr)
 	}
 }

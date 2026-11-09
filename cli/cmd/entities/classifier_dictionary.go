@@ -14,8 +14,6 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/app/classifierdictionary"
 	"github.com/Mundo-Dolphins/phins-news-engine/cli/cmd/shared"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/classifierproposal"
-	"github.com/Mundo-Dolphins/phins-news-engine/domain/dictionary"
-	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionaryfile"
 )
 
 func newClassifierDictionaryCommand() *cobra.Command {
@@ -58,14 +56,9 @@ func newClassifierAnalyzeCommand() *cobra.Command {
 				limit = 10_000_000
 			}
 
-			dict, err := dictionaryfile.Load(dictionaryPath)
+			dict, err := classifierdictionary.LoadValidated(dictionaryPath)
 			if err != nil {
 				return fmt.Errorf("entities classifier-dictionary analyze: %w", err)
-			}
-			for _, issue := range dictionary.Validate(dict) {
-				if issue.Severity == dictionary.SeverityError {
-					return fmt.Errorf("entities classifier-dictionary analyze: %s failed validation: %s", dictionaryPath, issue)
-				}
 			}
 
 			articlesRepo := sqliteadapter.NewArticleRepository(db)
