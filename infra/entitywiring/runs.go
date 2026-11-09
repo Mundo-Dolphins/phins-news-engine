@@ -66,6 +66,16 @@ type DiscoverReport struct {
 // fallback stage stays off.
 const verifyNoEffectWarning = "warning: --verify has no effect unless --fallback is given, because entity_discovery.verification.fallback is false"
 
+// VerifyNoEffectWarning returns the operator warning for a run that forces
+// Verify on while the fallback stage stays off, or "" when it does not
+// apply. It is pure, so the CLI can print it before the run starts.
+func VerifyNoEffectWarning(cfg *config.Config, f DiscoverFlags) string {
+	if f.Verify != nil && *f.Verify && !cfg.EntityDiscovery.Verification.Fallback && !f.Stages.Fallback && !f.Stages.Offline {
+		return verifyNoEffectWarning
+	}
+	return ""
+}
+
 // Discover runs one discovery pass. Failed LLM batches are not an error:
 // they are counted in Result.BatchesFailed (with Result.BatchErrors) and
 // the proposals of the other batches stay saved. On error the report
@@ -106,8 +116,8 @@ func Discover(ctx context.Context, db *sql.DB, cfg *config.Config, f DiscoverFla
 		verifyEnabled = *f.Verify
 	}
 	wikidataOn, fallbackOn := ResolveStages(cfg.EntityDiscovery.Verification, verifyEnabled, f.Stages)
-	if f.Verify != nil && *f.Verify && !cfg.EntityDiscovery.Verification.Fallback && !f.Stages.Fallback && !f.Stages.Offline {
-		rep.Warnings = append(rep.Warnings, verifyNoEffectWarning)
+	if w := VerifyNoEffectWarning(cfg, f); w != "" {
+		rep.Warnings = append(rep.Warnings, w)
 	}
 	verifier, extras, err := ChainVerifier(ctx, db, cfg, llm, catalogIdx, wikidataOn, fallbackOn, f.Stages.chooserOn(), logs)
 	if err != nil {

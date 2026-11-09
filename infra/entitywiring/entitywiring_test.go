@@ -167,3 +167,25 @@ func TestEvaluateLeagueDisabled(t *testing.T) {
 		t.Fatalf("EvaluateLeague() error = %v, want ErrLeagueDisabled", err)
 	}
 }
+
+func TestVerifyNoEffectWarning(t *testing.T) {
+	on, off := true, false
+	cfg := &config.Config{} // verification.fallback false
+	if w := VerifyNoEffectWarning(cfg, DiscoverFlags{Verify: &on}); w != verifyNoEffectWarning {
+		t.Fatalf("forced verify without fallback: %q", w)
+	}
+	for name, f := range map[string]DiscoverFlags{
+		"verify unset": {},
+		"verify false": {Verify: &off},
+		"--fallback":   {Verify: &on, Stages: Stages{Fallback: true}},
+		"--offline":    {Verify: &on, Stages: Stages{Offline: true}},
+	} {
+		if w := VerifyNoEffectWarning(cfg, f); w != "" {
+			t.Errorf("%s: warning = %q, want none", name, w)
+		}
+	}
+	cfg.EntityDiscovery.Verification.Fallback = true
+	if w := VerifyNoEffectWarning(cfg, DiscoverFlags{Verify: &on}); w != "" {
+		t.Errorf("config fallback on: warning = %q, want none", w)
+	}
+}

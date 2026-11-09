@@ -70,10 +70,12 @@ func newDiscoverCommand() *cobra.Command {
 				f.Verify = &verify
 			}
 
-			rep, err := entitywiring.Discover(cmd.Context(), db, cfg, f, time.Now(), cliLoggers(cmd))
-			for _, w := range rep.Warnings {
+			// Warn up front, before the (possibly long) run; Discover also
+			// returns it in rep.Warnings, which the CLI does not reprint.
+			if w := entitywiring.VerifyNoEffectWarning(cfg, f); w != "" {
 				fmt.Fprintln(cmd.OutOrStderr(), w)
 			}
+			rep, err := entitywiring.Discover(cmd.Context(), db, cfg, f, time.Now(), cliLoggers(cmd))
 			if err != nil {
 				return fmt.Errorf("entities discover: %w", err)
 			}
