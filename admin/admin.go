@@ -20,6 +20,7 @@ import (
 
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/action"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/claims"
+	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/entities"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/label"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/outbox"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/sourcepolicy"
@@ -57,6 +58,7 @@ func init() {
 	registry.Add(stats.Actions()...)
 	registry.Add(sqliteactions.Actions()...)
 	registry.Add(train.Actions()...)
+	registry.Add(entities.Actions()...)
 }
 
 // Add registers host actions, like cli.Add does for commands. Call it before
