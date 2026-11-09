@@ -6,21 +6,12 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Mundo-Dolphins/phins-news-engine/app/editorialmetrics"
 	"github.com/Mundo-Dolphins/phins-news-engine/app/editorialtrain"
 	"github.com/Mundo-Dolphins/phins-news-engine/cli/cmd/shared"
-	"github.com/Mundo-Dolphins/phins-news-engine/domain/editorialveto"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
 	infraeditorialveto "github.com/Mundo-Dolphins/phins-news-engine/infra/editorialveto"
 )
-
-type vetoImpactReport struct {
-	Dataset   string              `json:"dataset"`
-	Total     int                 `json:"total"`
-	Blocked   int                 `json:"blocked"`
-	Reduction float64             `json:"reduction"`
-	ByReason  map[string]int      `json:"by_reason_code"`
-	Examples  map[string][]string `json:"examples_by_reason_code"`
-}
 
 func newVetoReportCommand() *cobra.Command {
 	var datasetPath, vetoPath string
@@ -44,7 +35,7 @@ func newVetoReportCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			report := evaluateVetoImpact(dataset.Examples, vetoCfg, datasetPath)
+			report := editorialmetrics.VetoImpact(dataset.Examples, vetoCfg, datasetPath)
 			if jsonOut {
 				return json.NewEncoder(cmd.OutOrStdout()).Encode(report)
 			}
@@ -64,29 +55,4 @@ func newVetoReportCommand() *cobra.Command {
 	cmd.Flags().StringVar(&vetoPath, "veto-config", "", "deterministic veto config (defaults to editorial.veto_path)")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "print JSON")
 	return cmd
-}
-
-func evaluateVetoImpact(examples []editorialtrain.TrainingExample, cfg editorialveto.Config, dataset string) vetoImpactReport {
-	report := vetoImpactReport{Dataset: dataset, Total: len(examples), ByReason: map[string]int{}, Examples: map[string][]string{}}
-	for _, example := range examples {
-		matches := editorialveto.EvaluateAll(example.Title+" "+example.Body, cfg)
-		if len(matches) == 0 {
-			continue
-		}
-		report.Blocked++
-		// Blocked is unique-article reduction. Per-rule counts include every
-		// matching rule so operators can see the independent impact of each
-		// rule; online processing still uses the first-match-wins result.
-		for _, match := range matches {
-			code := match.ReasonCode
-			report.ByReason[code]++
-			if len(report.Examples[code]) < 5 {
-				report.Examples[code] = append(report.Examples[code], example.ArticleID)
-			}
-		}
-	}
-	if report.Total > 0 {
-		report.Reduction = float64(report.Blocked) / float64(report.Total)
-	}
-	return report
 }
