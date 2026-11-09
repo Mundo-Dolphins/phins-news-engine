@@ -12,7 +12,6 @@ import (
 
 	"github.com/Mundo-Dolphins/phins-news-engine/app/dictionaryupdate"
 	"github.com/Mundo-Dolphins/phins-news-engine/app/regressioncheck"
-	"github.com/Mundo-Dolphins/phins-news-engine/domain/dictionary"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionarywiring"
 )
@@ -60,7 +59,7 @@ func newDiffCommand() *cobra.Command {
 			case "markdown":
 				return renderDiffMarkdown(cmd.OutOrStdout(), proposals)
 			case "text", "":
-				return RenderDiffText(cmd.OutOrStdout(), proposals)
+				return dictionarywiring.RenderDiffText(cmd.OutOrStdout(), proposals)
 			default:
 				return fmt.Errorf("dictionary diff: unknown --format %q (want text, json, or markdown)", format)
 			}
@@ -78,41 +77,6 @@ func newDiffCommand() *cobra.Command {
 	return cmd
 }
 
-// SourceEntitiesFromDictionary delegates to dictionarywiring; it stays here
-// until rollback moves out of the CLI package.
-func SourceEntitiesFromDictionary(d dictionary.Dictionary) []dictionaryupdate.SourceEntity {
-	return dictionarywiring.SourceEntitiesFromDictionary(d)
-}
-
-var diffSectionOrder = []struct {
-	title string
-	kinds []dictionaryupdate.ProposalKind
-}{
-	{"New entities", []dictionaryupdate.ProposalKind{dictionaryupdate.ProposalAddEntity}},
-	{"Possible departures", []dictionaryupdate.ProposalKind{dictionaryupdate.ProposalDeactivateEntity, dictionaryupdate.ProposalNeedsReview}},
-	{"Reactivations", []dictionaryupdate.ProposalKind{dictionaryupdate.ProposalReactivateEntity}},
-	{"Role changes", []dictionaryupdate.ProposalKind{dictionaryupdate.ProposalUpdateRole}},
-	{"Position changes", []dictionaryupdate.ProposalKind{dictionaryupdate.ProposalUpdatePosition}},
-	{"Number changes", []dictionaryupdate.ProposalKind{dictionaryupdate.ProposalUpdateNumber}},
-	{"Roster status changes", []dictionaryupdate.ProposalKind{dictionaryupdate.ProposalUpdateRosterStatus}},
-	{"New aliases", []dictionaryupdate.ProposalKind{dictionaryupdate.ProposalAddAlias}},
-	{"Ambiguous aliases", []dictionaryupdate.ProposalKind{dictionaryupdate.ProposalMarkAliasAmbiguous}},
-	{"Conflicts", []dictionaryupdate.ProposalKind{dictionaryupdate.ProposalConflict}},
-}
-
-func groupProposals(proposals []dictionaryupdate.Proposal) (map[dictionaryupdate.ProposalKind][]dictionaryupdate.Proposal, int) {
-	grouped := make(map[dictionaryupdate.ProposalKind][]dictionaryupdate.Proposal)
-	unchanged := 0
-	for _, p := range proposals {
-		if p.Kind == dictionaryupdate.ProposalNoChange {
-			unchanged++
-			continue
-		}
-		grouped[p.Kind] = append(grouped[p.Kind], p)
-	}
-	return grouped, unchanged
-}
-
 // PrintRegressionReport prints the regression-check flip summary shared by
 // `dictionary update` and `dictionary rollback`: report-only, printed after a
 // successful write, never blocking. Both commands print nothing when
@@ -127,25 +91,6 @@ func PrintRegressionReport(w io.Writer, report regressioncheck.Report) {
 	}
 }
 
-func RenderDiffText(w io.Writer, proposals []dictionaryupdate.Proposal) error {
-	grouped, unchanged := groupProposals(proposals)
-	for _, section := range diffSectionOrder {
-		var items []dictionaryupdate.Proposal
-		for _, k := range section.kinds {
-			items = append(items, grouped[k]...)
-		}
-		if len(items) == 0 {
-			continue
-		}
-		fmt.Fprintf(w, "%s (%d):\n", section.title, len(items))
-		for _, p := range items {
-			fmt.Fprintf(w, "  - %s: %s\n", p.CanonicalKey, p.Detail)
-		}
-	}
-	fmt.Fprintf(w, "Unchanged: %d\n", unchanged)
-	return nil
-}
-
 func renderDiffJSON(w io.Writer, proposals []dictionaryupdate.Proposal) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
@@ -153,17 +98,10 @@ func renderDiffJSON(w io.Writer, proposals []dictionaryupdate.Proposal) error {
 }
 
 func renderDiffMarkdown(w io.Writer, proposals []dictionaryupdate.Proposal) error {
-	grouped, unchanged := groupProposals(proposals)
-	for _, section := range diffSectionOrder {
-		var items []dictionaryupdate.Proposal
-		for _, k := range section.kinds {
-			items = append(items, grouped[k]...)
-		}
-		if len(items) == 0 {
-			continue
-		}
-		fmt.Fprintf(w, "## %s (%d)\n\n", section.title, len(items))
-		for _, p := range items {
+	sections, unchanged := dictionarywiring.DiffSections(proposals)
+	for _, section := range sections {
+		fmt.Fprintf(w, "## %s (%d)\n\n", section.Title, len(section.Proposals))
+		for _, p := range section.Proposals {
 			fmt.Fprintf(w, "- **%s**: %s\n", p.CanonicalKey, p.Detail)
 		}
 		fmt.Fprintln(w)

@@ -3,8 +3,8 @@ package dictionary
 import (
 	"bufio"
 	"database/sql"
+	"errors"
 	"fmt"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,15 +14,12 @@ import (
 	"github.com/spf13/cobra"
 
 	sqliteadapter "github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqlite"
-	"github.com/Mundo-Dolphins/phins-news-engine/app/dictionarymining"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/dictionary"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/clock"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionaryfile"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionaryminingfile"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionarywiring"
-	"github.com/Mundo-Dolphins/phins-news-engine/infra/entitycatalog"
-	"github.com/Mundo-Dolphins/phins-news-engine/infra/nflverse"
 	infrasqlite "github.com/Mundo-Dolphins/phins-news-engine/infra/sqlite"
 	"github.com/Mundo-Dolphins/phins-news-engine/migrations"
 	"github.com/Mundo-Dolphins/phins-news-engine/ports/out"
@@ -127,76 +124,21 @@ func newMineCandidatesCommand() *cobra.Command {
 // paused signals quit or EOF before the review finished. A supplied scanner
 // preserves input buffered by the preceding article review.
 func RunUpdateFlow(cmd *cobra.Command, cfg *config.Config, db *sql.DB, sessionID string, dryRun bool, scanner *bufio.Scanner) (approvedCount int, paused bool, err error) {
-	sessions := sqliteadapter.NewEditorialCycleSessionRepository(db)
-	reviewDecisions := sqliteadapter.NewReviewDecisionRepository(db)
-	articles := sqliteadapter.NewArticleRepository(db)
 	candidatesRepo := sqliteadapter.NewDictionaryCandidateRepository(db)
 	realClock := clock.Real{}
 
-	targetSession := sessionID
-	if targetSession == "" {
-		s, err := sessions.GetLatestCompleted(cmd.Context())
-		if err != nil {
-			return 0, false, fmt.Errorf("dictionary update: no completed session found and --session not given: %w", err)
-		}
-		targetSession = s.ID
+	sel, err := dictionarywiring.SelectMineCandidates(cmd.Context(), db, cfg, sessionID)
+	for _, w := range sel.Report.Warnings {
+		cmd.Printf("%s\n", w)
 	}
-
-	dict, err := dictionaryfile.Load(cfg.Dictionary.Path)
 	if err != nil {
+		var setupErr *dictionarywiring.MineSetupError
+		if errors.As(err, &setupErr) {
+			return 0, false, fmt.Errorf("dictionary update: %w", err)
+		}
 		return 0, false, err
 	}
-	matcher, err := dictionary.Prepare(dict)
-	if err != nil {
-		return 0, false, fmt.Errorf("dictionary update: prepare matcher: %w", err)
-	}
-
-	filter, err := dictionaryMiningFilter(cfg)
-	if err != nil {
-		return 0, false, err
-	}
-	catalogPaths := cfg.Clustering.EntityCatalog
-	if catalogPaths.ManualPath != "" || catalogPaths.GeneratedPath != "" {
-		entities, err := entitycatalog.Load(catalogPaths.ManualPath, catalogPaths.GeneratedPath)
-		if err != nil {
-			return 0, false, fmt.Errorf("dictionary update: load entity catalog: %w", err)
-		}
-		for _, entity := range entities {
-			filter.KnownEntityTerms = append(filter.KnownEntityTerms, entity.CanonicalName)
-			filter.KnownEntityTerms = append(filter.KnownEntityTerms, entity.Terms...)
-		}
-	}
-	if p := catalogPaths.League.RosterPath; p != "" {
-		if f, openErr := os.Open(p); openErr == nil { // #nosec G304 -- operator-configured roster path
-			players, parseErr := nflverse.ParseRoster(f)
-			_ = f.Close()
-			if parseErr == nil {
-				filter.KnownNames, filter.KnownSurnames = dictionaryminingfile.NamesFromRoster(players)
-			} else {
-				cmd.Printf("WARNING: nflverse roster %s unreadable (%v); people it covers are not filtered out\n", p, parseErr)
-			}
-		} else {
-			cmd.Printf("WARNING: nflverse roster %s not found; people it covers are not filtered out\n", p)
-		}
-	}
-	if p := cfg.DictionaryMining.EnglishWordsPath; p != "" {
-		if words, wordsErr := dictionaryminingfile.LoadEnglishWords(p); wordsErr == nil {
-			filter.EnglishWords = words
-		} else {
-			cmd.Printf("WARNING: english word list unavailable (%v); coined words (nicknames, slang) are not mined\n", wordsErr)
-		}
-	}
-	rejectedTerms, err := candidatesRepo.ListRejectedTerms(cmd.Context())
-	if err != nil {
-		return 0, false, err
-	}
-	filter.IgnoredTerms = append(filter.IgnoredTerms, rejectedTerms...)
-	mined, err := dictionarymining.Select(cmd.Context(), dictionarymining.Deps{
-		ReviewDecisions: reviewDecisions, Articles: articles,
-	}, targetSession, matcher, cfg.Normalization.Text.Policy(), filter)
-	if err != nil {
-		return 0, false, err
-	}
+	targetSession, mined, dict, filter := sel.Report.Session, sel.Report.Candidates, sel.Dictionary, sel.Filter
 
 	cmd.Printf("session %s: %d candidate term(s) mined\n", targetSession, len(mined))
 	for _, c := range mined {
@@ -294,17 +236,6 @@ func RunUpdateFlow(cmd *cobra.Command, cfg *config.Config, db *sql.DB, sessionID
 
 	approvedCount, err = writeDictionaryIfApproved(cmd, cfg.Dictionary.Path, candidatesRepo, targetSession, realClock)
 	return approvedCount, paused, err
-}
-
-func dictionaryMiningFilter(cfg *config.Config) (dictionarymining.FilterConfig, error) {
-	if cfg.DictionaryMining.Path == "" {
-		return dictionarymining.FilterConfig{}, fmt.Errorf("dictionary update: dictionary_mining.path is required")
-	}
-	filter, err := dictionaryminingfile.Load(cfg.DictionaryMining.Path)
-	if err != nil {
-		return dictionarymining.FilterConfig{}, fmt.Errorf("dictionary update: load mining policy: %w", err)
-	}
-	return filter, nil
 }
 
 // promptForCategory lists every category in stable order and accepts

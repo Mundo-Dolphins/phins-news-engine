@@ -1,6 +1,7 @@
-// Package dictionarywiring holds the read-only dictionary operations
-// (validate, inspect, history, regression-check; diff lives in diff.go) so
-// the CLI and the admin panel share one implementation. It must not import
+// Package dictionarywiring holds the dictionary operations (validate,
+// inspect, history, regression-check; diff in diff.go, rollback in
+// rollback.go, candidate mining in mine.go) so the CLI and the admin panel
+// share one implementation. It must not import
 // the cli tree: the admin binary consumes it without cobra globals.
 //
 // Errors carry no command prefix; callers add their own.
