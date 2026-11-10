@@ -14,7 +14,6 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/app/entitydiscovery"
 	"github.com/Mundo-Dolphins/phins-news-engine/cli/cmd/shared"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/entityproposal"
-	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals"
 )
 
 // newReviewCommand provides a deliberately small terminal review loop for
@@ -154,8 +153,8 @@ func printVerification(out io.Writer, p entityproposal.Proposal, withPosition bo
 			fmt.Fprintf(out, "%s: %s\n", l.label, v)
 		}
 	}
-	if line := affiliationLine(p); line != "" {
-		fmt.Fprintln(out, line)
+	if label := entitydiscovery.AffiliationLabel(p); label != "" {
+		fmt.Fprintf(out, "Affiliation: %s\n", label)
 	}
 	if e := p.Metadata["suggested_entity"]; e != "" {
 		fmt.Fprintf(out, "Suggested match: %s (%s), basis %s\n", e, p.Metadata["suggested_team"], p.Metadata["suggested_basis"])
@@ -173,24 +172,4 @@ func printVerification(out io.Writer, p entityproposal.Proposal, withPosition bo
 	if len(domains) > 0 {
 		fmt.Fprintf(out, "Web evidence: %s\n", strings.Join(domains, ", "))
 	}
-}
-
-// affiliationLine labels a player's affiliation when no team line can say
-// it: a verified free agent and an unresolved affiliation must read
-// differently, never as an empty "Team:". Players with a team (or any
-// non-player) get no extra line.
-func affiliationLine(p entityproposal.Proposal) string {
-	if p.EntityType != entityproposal.EntityTypePlayer {
-		return ""
-	}
-	switch eventsignals.AffiliationStatus(p.Metadata[entitydiscovery.MetadataAffiliationStatus]) {
-	case eventsignals.AffiliationFreeAgent:
-		return "Affiliation: FREE AGENT"
-	case eventsignals.AffiliationUnknown:
-		return "Affiliation: UNKNOWN"
-	}
-	if p.Metadata["team"] == "" && p.Metadata["team_id"] == "" {
-		return "Affiliation: UNKNOWN"
-	}
-	return ""
 }

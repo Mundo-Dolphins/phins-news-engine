@@ -554,6 +554,7 @@ func TestCatalogStep2Batch2(t *testing.T) {
 	localOnly := []string{
 		"entities.approve", "entities.reject", "entities.generate", "entities.roster_sync",
 		"entities.discover", "entities.proposals_verify", "entities.fallback_test", "entities.wikidata_evaluate",
+		"entities.review_queue", "entities.catalog_search",
 		"classifier_dictionary.approve", "classifier_dictionary.reject", "classifier_dictionary.analyze",
 		"editorial.classify", "editorial.classify_eval", "editorial.veto_report",
 	}
@@ -580,7 +581,7 @@ func TestCatalogStep2Batch2(t *testing.T) {
 			t.Errorf("production mode offers local-only %s", n)
 		}
 	}
-	if got, want := len(both)+len(localOnly), 26; got != want {
+	if got, want := len(both)+len(localOnly), 28; got != want {
 		t.Fatalf("catalog lists %d new actions, want %d", got, want)
 	}
 }

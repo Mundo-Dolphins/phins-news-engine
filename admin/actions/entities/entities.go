@@ -94,7 +94,7 @@ type wikidataParams struct {
 }
 
 // Actions returns the entities actions: entities.list, entities.show,
-// entities.approve, entities.reject, entities.generate, entities.discover,
+// entities.review_queue, entities.catalog_search, entities.approve, entities.reject, entities.generate, entities.discover,
 // entities.proposals_verify, entities.extract, entities.fallback_test,
 // entities.league_evaluate, entities.roster_sync and
 // entities.wikidata_evaluate.
@@ -109,6 +109,16 @@ func Actions() []action.Action {
 			Name: "entities.show", Group: group, Title: "Show entity proposal",
 			Description: "Shows one entity proposal with its aliases, metadata, web sources and example news.",
 			Kind:        action.KindRead, Modes: bothModes, Params: idParams{}, Run: runShow,
+		},
+		{
+			Name: "entities.review_queue", Group: group, Title: "Entity review queue",
+			Description: "Pending entity proposals in review order (best-scored first) with verification, suggestion and evidence article links.",
+			Kind:        action.KindRead, Modes: localOnly, Params: reviewQueueParams{}, Run: runReviewQueue,
+		},
+		{
+			Name: "entities.catalog_search", Group: group, Title: "Search entity catalog",
+			Description: "Searches the entity catalog by name or term, ignoring case and accents; used to pick the entity to merge a duplicate into.",
+			Kind:        action.KindRead, Modes: localOnly, Params: catalogSearchParams{}, Run: runCatalogSearch,
 		},
 		{
 			Name: "entities.approve", Group: group, Title: "Approve entity proposal",

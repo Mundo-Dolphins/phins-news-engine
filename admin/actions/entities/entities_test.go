@@ -217,6 +217,8 @@ func TestMetadata(t *testing.T) {
 		"entities.league_evaluate":   {action.KindRead, 2, false, false},
 		"entities.roster_sync":       {action.KindWrite, 1, false, false},
 		"entities.wikidata_evaluate": {action.KindRead, 1, true, false},
+		"entities.review_queue":      {action.KindRead, 1, false, false},
+		"entities.catalog_search":    {action.KindRead, 1, false, false},
 	}
 	as := entities.Actions()
 	if len(as) != len(cases) {
