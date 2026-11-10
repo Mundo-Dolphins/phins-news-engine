@@ -109,6 +109,8 @@ func TestMetadata(t *testing.T) {
 		"train.recheck_corpus":   {action.KindRead, 2, false, false, "Recheck corpus against the dictionary"},
 		"train.backfill_rejects": {action.KindWrite, 1, false, true, "Backfill reject labels"},
 		"train.import_labels":    {action.KindWrite, 1, false, true, "Import labels"},
+		"train.review_queue":     {action.KindRead, 1, false, false, "Review queue"},
+		"train.review_decide":    {action.KindWrite, 1, false, false, "Decide review item"},
 	}
 	as := train.Actions()
 	if len(as) != len(cases) {

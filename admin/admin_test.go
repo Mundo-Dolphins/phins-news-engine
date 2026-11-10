@@ -531,6 +531,18 @@ func TestCatalogStep2Batch1(t *testing.T) {
 	}
 }
 
+// TestCatalogReviewActions pins that the review actions are local only.
+func TestCatalogReviewActions(t *testing.T) {
+	for _, n := range []string{"train.review_queue", "train.review_decide"} {
+		if !slices.Contains(admin.RegistryFor(action.ModeLocal), n) {
+			t.Errorf("local mode lacks %s", n)
+		}
+		if slices.Contains(admin.RegistryFor(action.ModeProduction), n) {
+			t.Errorf("production mode offers %s", n)
+		}
+	}
+}
+
 // TestCatalogStep2Batch2 pins which step 2 batch 2 actions each mode offers.
 func TestCatalogStep2Batch2(t *testing.T) {
 	both := []string{
