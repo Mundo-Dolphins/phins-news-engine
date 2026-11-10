@@ -47,7 +47,7 @@ func ApplyApproval(p entityproposal.Proposal, paths CatalogPaths, now time.Time)
 	case entityproposal.KindNewAlias:
 		return applyNewAlias(p, paths, now)
 	default:
-		return fmt.Errorf("entitydiscovery: proposal kind %q cannot be applied directly (resolve via --merge-into/--as-new first)", p.Kind)
+		return refused("entitydiscovery: proposal kind %q cannot be applied directly (resolve via --merge-into/--as-new first)", p.Kind)
 	}
 }
 
@@ -60,8 +60,50 @@ func categoryForType(t entityproposal.EntityType) (string, error) {
 	case entityproposal.EntityTypeExecutive:
 		return "front_office", nil
 	default:
-		return "", fmt.Errorf("entitydiscovery: entity type %q has no dictionary category", t)
+		return "", refused("entitydiscovery: entity type %q has no dictionary category", t)
 	}
+}
+
+// ErrApprovalRefused is matched (via errors.Is) by every ApplyApproval
+// error that refuses the proposal itself — it conflicts with the
+// dictionary or the entity catalog, lacks an affiliation or a target, or
+// would make the dictionary invalid — as opposed to failing to read or
+// write a file. The proposal can stay pending; the message says why.
+var ErrApprovalRefused = errors.New("approval refused")
+
+// refusedError keeps the refusal's own message while matching both
+// ErrApprovalRefused and whatever it wraps.
+type refusedError struct{ err error }
+
+func (e *refusedError) Error() string   { return e.err.Error() }
+func (e *refusedError) Unwrap() []error { return []error{ErrApprovalRefused, e.err} }
+
+// refused builds an approval refusal; format and args are fmt.Errorf's.
+func refused(format string, args ...any) error {
+	return &refusedError{err: fmt.Errorf(format, args...)}
+}
+
+// writeDictionary validates and writes candidate over current with a
+// backup first. A failure of the backup or the write is returned as is;
+// any other failure (the candidate does not validate) is a refusal.
+func writeDictionary(current, candidate dictionary.Dictionary, path string, now time.Time) error {
+	ioFailed := false
+	_, err := dictionaryupdate.WriteCandidate(current, candidate, 1, []string{"entities discover"}, "", now,
+		func(previous dictionary.Dictionary) error {
+			err := backupDictionaryFile(path, previous, now)
+			ioFailed = err != nil
+			return err
+		},
+		func(d dictionary.Dictionary) error {
+			err := dictionaryfile.Save(path, d)
+			ioFailed = err != nil
+			return err
+		},
+	)
+	if err != nil && !ioFailed {
+		return &refusedError{err: err}
+	}
+	return err
 }
 
 func backupDictionaryFile(path string, previous dictionary.Dictionary, now time.Time) error {
@@ -78,10 +120,10 @@ func applyNewPersonEntity(p entityproposal.Proposal, paths CatalogPaths, now tim
 	teamID, team := p.Metadata["team_id"], p.Metadata["team"]
 	status, err := eventsignals.ParseAffiliationStatus(p.Metadata[MetadataAffiliationStatus])
 	if err != nil {
-		return fmt.Errorf("entitydiscovery: %q: %w", p.CanonicalName, err)
+		return refused("entitydiscovery: %q: %w", p.CanonicalName, err)
 	}
 	if err := eventsignals.ValidateAffiliation(eventsignals.EntityKind(p.EntityType), status, teamID, team); err != nil {
-		return fmt.Errorf("entitydiscovery: %q: %w", p.CanonicalName, err)
+		return refused("entitydiscovery: %q: %w", p.CanonicalName, err)
 	}
 	if status == eventsignals.AffiliationUnspecified && (teamID != "" || team != "") {
 		// Legacy proposal: team data without an explicit status.
@@ -105,7 +147,7 @@ func applyNewPersonEntity(p entityproposal.Proposal, paths CatalogPaths, now tim
 			// A team the verifier could not resolve to a catalog id must
 			// never default to the team dictionary.
 			if primary == "" || teamIDForName(manual, team) != primary {
-				return fmt.Errorf("entitydiscovery: %q has team %q but no team_id — set a team_id or reject this proposal", p.CanonicalName, team)
+				return refused("entitydiscovery: %q has team %q but no team_id — set a team_id or reject this proposal", p.CanonicalName, team)
 			}
 		case teamID != primary:
 			return applyNewLeaguePerson(p, status, manual, generated, paths.ManualCatalogPath)
@@ -113,7 +155,7 @@ func applyNewPersonEntity(p entityproposal.Proposal, paths CatalogPaths, now tim
 	default:
 		// Unknown or undeclared affiliation is never evidence of Isotopes
 		// membership: leave the proposal pending for an operator.
-		return fmt.Errorf("entitydiscovery: %q has no established affiliation — resolve its team (or free agency) before approving, or reject this proposal", p.CanonicalName)
+		return refused("entitydiscovery: %q has no established affiliation — resolve its team (or free agency) before approving, or reject this proposal", p.CanonicalName)
 	}
 	current, err := dictionaryfile.Load(dictPath)
 	if err != nil {
@@ -124,7 +166,7 @@ func applyNewPersonEntity(p entityproposal.Proposal, paths CatalogPaths, now tim
 	for _, cat := range current.Categories {
 		for _, e := range cat.Entries {
 			if dictionaryupdate.CanonicalKey(e.CanonicalName) == key {
-				return fmt.Errorf("entitydiscovery: %q already exists in category %q — reject this proposal or resolve manually", p.CanonicalName, cat.Name)
+				return refused("entitydiscovery: %q already exists in category %q — reject this proposal or resolve manually", p.CanonicalName, cat.Name)
 			}
 		}
 	}
@@ -157,11 +199,7 @@ func applyNewPersonEntity(p entityproposal.Proposal, paths CatalogPaths, now tim
 		candidate.Categories[idx].Entries = append(entries, entry)
 	}
 
-	_, err = dictionaryupdate.WriteCandidate(current, candidate, 1, []string{"entities discover"}, "", now,
-		func(previous dictionary.Dictionary) error { return backupDictionaryFile(dictPath, previous, now) },
-		func(d dictionary.Dictionary) error { return dictionaryfile.Save(dictPath, d) },
-	)
-	return err
+	return writeDictionary(current, candidate, dictPath, now)
 }
 
 func primaryTeamID(entries []eventsignals.EntityRule) string {
@@ -235,19 +273,19 @@ func applyNewLeaguePerson(p entityproposal.Proposal, status eventsignals.Affilia
 			}
 		}
 		if !teamFound {
-			return fmt.Errorf("entitydiscovery: team_id %q is not a team in %s", teamID, manualPath)
+			return refused("entitydiscovery: team_id %q is not a team in %s", teamID, manualPath)
 		}
 	}
 	id := eventsignals.Slug(p.CanonicalName)
 	key := dictionaryupdate.CanonicalKey(p.CanonicalName)
 	for _, e := range entries {
 		if e.ID == id || dictionaryupdate.CanonicalKey(e.CanonicalName) == key {
-			return fmt.Errorf("entitydiscovery: %q (id %q) already exists in %s — reject this proposal or resolve manually", p.CanonicalName, id, manualPath)
+			return refused("entitydiscovery: %q (id %q) already exists in %s — reject this proposal or resolve manually", p.CanonicalName, id, manualPath)
 		}
 	}
 	for _, e := range generated {
 		if e.ID == id || dictionaryupdate.CanonicalKey(e.CanonicalName) == key {
-			return fmt.Errorf("entitydiscovery: %q (id %q) already exists in the generated entity catalog — reject this proposal or resolve manually", p.CanonicalName, id)
+			return refused("entitydiscovery: %q (id %q) already exists in the generated entity catalog — reject this proposal or resolve manually", p.CanonicalName, id)
 		}
 	}
 	terms := append([]string{p.CanonicalName}, p.Aliases...)
@@ -266,7 +304,7 @@ func applyNewTeam(p entityproposal.Proposal, manualPath string) error {
 	id := eventsignals.Slug(p.CanonicalName)
 	for _, e := range entries {
 		if e.ID == id {
-			return fmt.Errorf("entitydiscovery: team %q (id %q) already exists in %s", p.CanonicalName, id, manualPath)
+			return refused("entitydiscovery: team %q (id %q) already exists in %s", p.CanonicalName, id, manualPath)
 		}
 	}
 	terms := append([]string{p.CanonicalName}, p.Aliases...)
@@ -276,7 +314,7 @@ func applyNewTeam(p entityproposal.Proposal, manualPath string) error {
 
 func applyNewAlias(p entityproposal.Proposal, paths CatalogPaths, now time.Time) error {
 	if p.TargetEntityID == "" {
-		return fmt.Errorf("entitydiscovery: alias proposal %s has no target_entity_id", p.ID)
+		return refused("entitydiscovery: alias proposal %s has no target_entity_id", p.ID)
 	}
 
 	current, err := dictionaryfile.Load(paths.DictionaryPath)
@@ -296,13 +334,7 @@ func applyNewAlias(p entityproposal.Proposal, paths CatalogPaths, now time.Time)
 			entries[ei].Aliases = mergeAliases(entries[ei].Aliases, p.Aliases)
 			candidate.Categories[ci].Entries = entries
 
-			_, err := dictionaryupdate.WriteCandidate(current, candidate, 1, []string{"entities discover"}, "", now,
-				func(previous dictionary.Dictionary) error {
-					return backupDictionaryFile(paths.DictionaryPath, previous, now)
-				},
-				func(d dictionary.Dictionary) error { return dictionaryfile.Save(paths.DictionaryPath, d) },
-			)
-			return err
+			return writeDictionary(current, candidate, paths.DictionaryPath, now)
 		}
 	}
 
@@ -317,7 +349,7 @@ func applyNewAlias(p entityproposal.Proposal, paths CatalogPaths, now time.Time)
 		}
 	}
 
-	return fmt.Errorf("entitydiscovery: target entity %q not found in %s or %s", p.TargetEntityID, paths.DictionaryPath, paths.ManualCatalogPath)
+	return refused("entitydiscovery: target entity %q not found in %s or %s", p.TargetEntityID, paths.DictionaryPath, paths.ManualCatalogPath)
 }
 
 func mergeAliases(existing, additions []string) []string {

@@ -148,6 +148,15 @@ describe("ReviewEntities", () => {
     expect(screen.getByText(/approved Ann Example \(p1\)/)).toBeTruthy();
   });
 
+  it("shows a notice when a decision runs as a job", async () => {
+    await open([proposal()]);
+    run.mockResolvedValueOnce({
+      job: { id: "j7", action: "entities.approve", actor: "ana", status: "queued", created_at: "2026-11-10T10:00:00Z" },
+    });
+    fireEvent.keyDown(window, { key: "a" });
+    expect(await screen.findByText("Ann Example: entities.approve started as job j7.")).toBeTruthy();
+  });
+
   it("rejects with R", async () => {
     await open([proposal()]);
     run.mockResolvedValueOnce(text("rejected Ann Example (p1)"));

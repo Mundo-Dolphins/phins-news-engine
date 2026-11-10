@@ -78,6 +78,16 @@ describe("MergePicker", () => {
     expect(onPick).toHaveBeenCalledWith("player-anne-sample");
   });
 
+  it("does not pick a stale result while a new search is pending", async () => {
+    run.mockResolvedValue(TWO);
+    const { input, onPick } = setup();
+    await screen.findByRole("option", { name: /Ann Example/ });
+    fireEvent.input(input, { target: { value: "Bo" } });
+    expect(screen.queryByRole("option", { name: /Ann Example/ })).toBeNull();
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onPick).not.toHaveBeenCalled();
+  });
+
   it("picks a clicked result", async () => {
     run.mockResolvedValue(TWO);
     const { onPick } = setup();

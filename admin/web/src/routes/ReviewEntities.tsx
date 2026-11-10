@@ -302,7 +302,7 @@ function ReviewEntitiesScreen() {
     try {
       const out = await runAction(name, { id: t.id, ...params }, false);
       hide(t);
-      if ("job" in out) return;
+      if ("job" in out) return { kind: "info", text: `${t.name}: ${name} started as job ${out.job.id}.` };
       return { kind: "info", text: out.result.text || out.result.summary || `${t.name}: done` };
     } catch (e) {
       if (e instanceof ApiError && (e.code === "not_found" || alreadyDecided(e))) {

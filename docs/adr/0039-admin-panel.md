@@ -139,9 +139,11 @@ run them, without the panel ever endangering the running bot.
   as an alias (`merge_into`) — merging from the review is new, the CLI
   sends you to `entities approve --merge-into`. While the search is open no
   key reaches the review's shortcuts; arrow keys move within the results,
-  `Enter` picks and `Escape` closes. A refused approval keeps the proposal
-  and shows the server's message; an unknown or already decided proposal is
-  dropped with a notice. The approval writes `configs/` under the existing
+  `Enter` picks and `Escape` closes. An approval the dictionary or catalog
+  refuses (`entitydiscovery.ErrApprovalRefused`: already present, no
+  affiliation, unknown merge target, invalid result) is a `conflict` with
+  the CLI's reason; the screen keeps the proposal and shows it. An unknown
+  or already decided proposal is dropped with a notice. The approval writes `configs/` under the existing
   `ConfigFilesMu`.
 - **Production writes only operational state.** Reads everywhere, plus
   `claims.retry`, `claims.release`, `outbox.expire`, `outbox.repair` and the

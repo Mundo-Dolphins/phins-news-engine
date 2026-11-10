@@ -342,6 +342,43 @@ func TestApprovePossibleDuplicateNeedsResolutionIsConflict(t *testing.T) {
 	}
 }
 
+func TestApproveRefusedByCatalogIsConflictWithReason(t *testing.T) {
+	cases := map[string]struct {
+		p      entityproposal.Proposal
+		params string
+		reason string
+	}{
+		"already in the manual catalog": {
+			p:      entityproposal.Proposal{CanonicalName: "Springfield Isotopes", EntityType: entityproposal.EntityTypeTeam},
+			reason: `team "Springfield Isotopes" (id "springfield-isotopes") already exists`,
+		},
+		"no affiliation": {
+			p:      entityproposal.Proposal{CanonicalName: "Zeno Ashbury", Metadata: map[string]string{"position": "LB"}},
+			reason: `"Zeno Ashbury" has no established affiliation`,
+		},
+		"merge into an unknown entity": {
+			p:      entityproposal.Proposal{CanonicalName: "Zeno Ashbury", Kind: entityproposal.KindPossibleDuplicate, Aliases: []string{"Zeno"}},
+			params: `,"merge_into":"nobody-known"`,
+			reason: `target entity "nobody-known" not found`,
+		},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			id := f.seed(c.p)
+			before := hash(t, f.manual, f.dict)
+			_, err := f.run("entities.approve", `{"id":"`+id+`"`+c.params+`}`)
+			wantCode(t, err, action.CodeConflict)
+			if !strings.Contains(err.Error(), c.reason) {
+				t.Fatalf("err = %v, want the reason %q", err, c.reason)
+			}
+			if hash(t, f.manual, f.dict) != before || f.status(id) != entityproposal.StatusPending {
+				t.Fatal("files or status changed")
+			}
+		})
+	}
+}
+
 func TestApproveBothResolutionsIsInvalidParams(t *testing.T) {
 	f := newFixture(t)
 	id := f.seed(entityproposal.Proposal{CanonicalName: "Zeno Ashbury", Kind: entityproposal.KindPossibleDuplicate})

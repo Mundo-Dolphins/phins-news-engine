@@ -115,7 +115,8 @@ function PickerDialog({ initialQuery, onPick, onClose }: Omit<MergePickerProps, 
       setActive((i) => Math.max(0, Math.min(results.length - 1, i + step)));
     } else if (e.key === "Enter") {
       e.preventDefault();
-      const r = results[active];
+      // Only a finished search's results are on screen: never pick a stale one.
+      const r = status.kind === "done" ? results[active] : undefined;
       if (r) onPick(r.id);
     }
   };

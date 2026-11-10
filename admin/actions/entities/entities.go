@@ -290,7 +290,7 @@ func runShow(ctx context.Context, env action.Env, params any) (action.Result, er
 		Summary: fmt.Sprintf("%s (%s, %s): %s", pr.CanonicalName, pr.EntityType, pr.Kind, pr.Status)}, nil
 }
 
-// proposalError maps the review and repository errors of one proposal.
+// proposalError maps the review, approval and repository errors of one proposal.
 func proposalError(err error) error {
 	switch {
 	case errors.Is(err, entityproposal.ErrNotFound):
@@ -299,6 +299,10 @@ func proposalError(err error) error {
 		return action.Conflict(err)
 	case errors.Is(err, entitydiscovery.ErrConflictingResolution):
 		return conflictingResolution()
+	case errors.Is(err, entitydiscovery.ErrApprovalRefused):
+		// The catalog files refuse this proposal: it stays pending and the
+		// caller gets the reason, as the CLI prints it.
+		return action.Conflict(err)
 	}
 	return err
 }
