@@ -6,9 +6,15 @@ import { getHealth, getSession, logout, type Health } from "../api";
 export function Layout({ children }: { children: ComponentChildren }) {
   const [health, setHealth] = useState<Health | null>(null);
   const [user, setUser] = useState("");
+  const [mode, setMode] = useState("");
   useEffect(() => {
     getHealth().then(setHealth).catch(() => {});
-    getSession().then((s) => setUser(s.username)).catch(() => {});
+    getSession()
+      .then((s) => {
+        setUser(s.username);
+        setMode(s.mode);
+      })
+      .catch(() => {});
   }, []);
   return (
     <>
@@ -19,6 +25,7 @@ export function Layout({ children }: { children: ComponentChildren }) {
           <a href="/actions">Actions</a>
           <a href="/jobs">Jobs</a>
           <a href="/audit">Audit</a>
+          {mode === "local" && <a href="/review">Review</a>}
         </nav>
         <span class="spacer" />
         {health && <span class={"badge mode-" + health.mode}>{health.mode}</span>}

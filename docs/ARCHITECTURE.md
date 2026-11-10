@@ -112,10 +112,11 @@ A host adds its own actions with `admin.Add` before `Run`.
 
 | Piece | Package |
 |---|---|
-| Typed actions, one definition for REST, MCP and the form | `admin/action`, `admin/actions/{claims,train,outbox,stats,sqlite,label,sourcepolicy,entities,classifierdictionary,editorial,audit,validation,dictionary,events,evaluation}`; shared logic in `app/pipelinestats`, `app/dbinspect`, `app/humanlabels`, `app/datasetaudit`, `app/editorialmetrics`, `app/lookback`, `app/decisionaudit`, `infra/entitywiring`, `infra/evalwiring`, `infra/dictionarywiring`, `infra/eventrules`, `infra/configcheck` |
+| Typed actions, one definition for REST, MCP and the form | `admin/action`, `admin/actions/{claims,train,outbox,stats,sqlite,label,sourcepolicy,entities,classifierdictionary,editorial,audit,validation,dictionary,events,evaluation}`; shared logic in `app/pipelinestats`, `app/trainreview`, `app/dbinspect`, `app/humanlabels`, `app/datasetaudit`, `app/editorialmetrics`, `app/lookback`, `app/decisionaudit`, `infra/entitywiring`, `infra/evalwiring`, `infra/dictionarywiring`, `infra/eventrules`, `infra/configcheck` |
 | Jobs, logs, audit and sessions in `admin.db` | `admin/store`, `admin/jobs` |
 | Login, session cookie, LAN allow-list, bearer token | `admin/auth` |
 | REST API, SSE job events, embedded SPA | `admin/httpapi`, `admin/web` |
+| Review screens (`/review`, local only): shared queue, item and decision layout with shortcuts; `train review` first | `admin/web` (`ReviewScreen`), actions `train.review_queue` and `train.review_decide`, logic in `app/trainreview` |
 | MCP tools | `admin/mcpserver` |
 
 The mode follows the profile: `production` offers reads plus claims retry and

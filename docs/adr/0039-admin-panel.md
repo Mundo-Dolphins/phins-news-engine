@@ -79,6 +79,28 @@ run them, without the panel ever endangering the running bot.
   invariant returns the report with a `FAILED:` summary. The host adds
   `outbox.reconcile`. The logic lives in `infra/evalwiring`, shared with the
   CLI.
+- **Phase 2, part 1: review screens.** The interactive reviews become web
+  screens under `/review`, offered in local mode only (the nav entry shows
+  only there). A shared `ReviewScreen` component holds the queue on the
+  left, the selected item in the centre and a decision bar with keyboard
+  shortcuts (`J`/`K` or arrows to move, `O` opens the original, `S` skips,
+  plus each review's decision letters); shortcuts are ignored while a field
+  has focus or with Ctrl, Meta or Alt held. The first review is
+  `train review` (`/review/train`) over two local-only actions:
+  `train.review_queue` (read) returns the queue joined with each article
+  and its prior human labels, and `train.review_decide` (write) applies
+  `publish` or `discard` with exactly the CLI's effect (human label,
+  proposal approved or rejected, queue entry deleted). An item labeled
+  elsewhere or whose article was purged is dropped with a notice
+  (`dropped_already_labeled`, `dropped_purged`), and an entry already gone
+  from the queue is shown as a notice too, never an error page. Labels from
+  the panel have source `admin:train-review` and `labeled_by` the bare panel
+  username, or `mcp` for MCP decisions. Each decision is saved at once;
+  skip is session-only; the queue reloads when the tab becomes visible.
+  Only `http:`/`https:` URLs become links (new tab, `noopener noreferrer`),
+  and links use their own colour tokens with at least 4.5:1 contrast in
+  both themes. The per-item logic lives in `app/trainreview`, shared with
+  the CLI.
 - **Production writes only operational state.** Reads everywhere, plus
   `claims.retry`, `claims.release`, `outbox.expire`, `outbox.repair` and the
   `label.*` writes. Training, promote and rollback are local-only and reach the Pi through the normal deploy; no CPU-heavy job runs
