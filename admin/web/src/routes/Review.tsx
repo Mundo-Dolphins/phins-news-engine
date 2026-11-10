@@ -17,6 +17,13 @@ export function Review() {
             Relabel or confirm the audited rows of the training dataset in a reviewed copy (shortcuts P, R, C, S).
           </span>
         </a>
+        <a class="card review-card" href="/review/entities">
+          <span class="review-card-title">Entity review</span>
+          <span class="muted">
+            Approve, reject or merge the pending entity proposals into the dictionary and entity catalog (shortcuts A,
+            R, S; N and M for a possible duplicate).
+          </span>
+        </a>
       </div>
     </LocalOnly>
   );

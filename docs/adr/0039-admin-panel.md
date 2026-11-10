@@ -121,6 +121,28 @@ run them, without the panel ever endangering the running bot.
   a notice. Panel writes are serialised; the CLI is not, so reviewing the
   same copy from both at once can lose decisions (the screen says so). The
   logic lives in `app/datasetreview`, shared with the CLI.
+- **Phase 2, part 3: entity review.** `entities review` becomes
+  `/review/entities` on the same screen, over two local-only reads:
+  `entities.review_queue` returns the pending proposals best score first
+  (`entityproposal.Score`, as the CLI) with the verification lines, the
+  CLI's affiliation warning (`FREE AGENT` / `UNKNOWN`, from
+  `entitydiscovery.AffiliationLabel`), the suggested match or candidates,
+  the aliases, the metadata without `verify_attempted_at`, every evidence
+  article with its original URL from the operational database (none when
+  purged: the title stays, unlinked) and the verification web sources;
+  `entities.catalog_search` looks a name up in the merged entity catalog
+  (manual and generated), ignoring case, accents and punctuation. Decisions
+  use the existing `entities.approve` and `entities.reject`: `A` approve,
+  `R` reject, `S` skip. A possible duplicate offers no `A`: `N` approves it
+  as a new entity (`as_new`) and `M` opens a modal search over the catalog,
+  pre-filled with the suggested match or the name, whose pick approves it
+  as an alias (`merge_into`) — merging from the review is new, the CLI
+  sends you to `entities approve --merge-into`. While the search is open no
+  key reaches the review's shortcuts; arrow keys move within the results,
+  `Enter` picks and `Escape` closes. A refused approval keeps the proposal
+  and shows the server's message; an unknown or already decided proposal is
+  dropped with a notice. The approval writes `configs/` under the existing
+  `ConfigFilesMu`.
 - **Production writes only operational state.** Reads everywhere, plus
   `claims.retry`, `claims.release`, `outbox.expire`, `outbox.repair` and the
   `label.*` writes. Training, promote and rollback are local-only and reach the Pi through the normal deploy; no CPU-heavy job runs

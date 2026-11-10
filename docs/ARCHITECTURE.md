@@ -116,7 +116,7 @@ A host adds its own actions with `admin.Add` before `Run`.
 | Jobs, logs, audit and sessions in `admin.db` | `admin/store`, `admin/jobs` |
 | Login, session cookie, LAN allow-list, bearer token | `admin/auth` |
 | REST API, SSE job events, embedded SPA | `admin/httpapi`, `admin/web` |
-| Review screens (`/review`, local only): shared queue, item and decision layout with shortcuts; `train review` and `train review-dataset` | `admin/web` (`ReviewScreen`), actions `train.review_queue` and `train.review_decide` (logic in `app/trainreview`), `train.review_dataset_queue` and `train.review_dataset_decide` (logic in `app/datasetreview`) |
+| Review screens (`/review`, local only): shared queue, item and decision layout with shortcuts; `train review`, `train review-dataset` and `entities review` (with merging a possible duplicate from a catalog search) | `admin/web` (`ReviewScreen`, `MergePicker`), actions `train.review_queue` and `train.review_decide` (logic in `app/trainreview`), `train.review_dataset_queue` and `train.review_dataset_decide` (logic in `app/datasetreview`), `entities.review_queue`, `entities.catalog_search`, `entities.approve` and `entities.reject` (logic in `app/entitydiscovery`) |
 | MCP tools | `admin/mcpserver` |
 
 The mode follows the profile: `production` offers reads plus claims retry and

@@ -12,6 +12,8 @@ export interface ReviewDecision<T> {
   /** Single-letter shortcut, matched case-insensitively. */
   key: string;
   label: string;
+  /** When given, the decision (button and key) is offered only for items it returns true for. */
+  offered?(t: T): boolean;
   /** Applies the decision; a returned notice is shown, a thrown error is shown as an error notice. */
   onDecide(t: T): Promise<Notice | void>;
 }
@@ -57,11 +59,13 @@ const REFRESH_DEBOUNCE_MS = 500;
  * renderer marks its link to the original with that attribute.
  *
  * J, K, S and O are reserved and checked before `decisions[].key`, so a
- * decision must use another letter. Auto-repeated key presses (a held key)
- * only move the selection; they never decide, skip or open.
+ * decision must use another letter. A decision with `offered` shows its
+ * button and answers its key only for the items it accepts. Auto-repeated
+ * key presses (a held key) only move the selection; they never decide, skip
+ * or open.
  */
 export function ReviewScreen<T>(props: ReviewScreenProps<T>) {
-  const { items, itemKey, decisions } = props;
+  const { items, itemKey } = props;
   const [selected, setSelected] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // busyRef guards against a second key press landing before the re-render.
@@ -76,6 +80,7 @@ export function ReviewScreen<T>(props: ReviewScreenProps<T>) {
   lastIndex.current = Math.max(index, 0);
   const current = index >= 0 ? items[index] : undefined;
   const currentKey = current === undefined ? null : itemKey(current);
+  const decisions = current === undefined ? [] : props.decisions.filter((d) => !d.offered || d.offered(current));
 
   useEffect(() => {
     queue.current?.querySelector(".review-entry.selected")?.scrollIntoView?.({ block: "nearest" });
