@@ -242,3 +242,35 @@ func TestReadAuditCandidatesErrors(t *testing.T) {
 		t.Errorf("empty id error = %v", err)
 	}
 }
+
+func TestApplyRejectsUnknownDecision(t *testing.T) {
+	s := open(t, fixture(t))
+	if _, err := s.Apply("a1", datasetreview.Decision("bogus"), "rev", testNow); !errors.Is(err, datasetreview.ErrInvalidDecision) {
+		t.Fatalf("err = %v, want ErrInvalidDecision", err)
+	}
+	if s.Examples[0].Revision != 1 || s.Examples[0].Label != "reject" {
+		t.Fatalf("example mutated: %+v", s.Examples[0])
+	}
+}
+
+func TestApplyPendingRefusesLogged(t *testing.T) {
+	p := fixture(t)
+	s := open(t, p)
+	entry, err := s.ApplyPending("a1", datasetreview.Publish, "rev", testNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Save(testNow, []datasetreview.LogEntry{entry}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ApplyPending("a1", datasetreview.Reject, "rev", testNow); !errors.Is(err, datasetreview.ErrAlreadyReviewed) {
+		t.Fatalf("err = %v, want ErrAlreadyReviewed", err)
+	}
+	if _, err := open(t, p).ApplyPending("a1", datasetreview.Reject, "rev", testNow); !errors.Is(err, datasetreview.ErrAlreadyReviewed) {
+		t.Fatalf("reopened err = %v, want ErrAlreadyReviewed", err)
+	}
+	// Apply stays unguarded: the CLI re-shows logged rows across sessions.
+	if _, err := s.Apply("a1", datasetreview.Reject, "rev", testNow); err != nil {
+		t.Fatalf("Apply on logged row: %v", err)
+	}
+}

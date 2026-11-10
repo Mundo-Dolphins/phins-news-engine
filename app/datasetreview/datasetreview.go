@@ -51,6 +51,10 @@ var (
 	ErrAbsentFromDataset = errors.New("audit article is absent from the dataset")
 	// ErrNotInAudit means a decision targets an article that is not an audit row.
 	ErrNotInAudit = errors.New("article is not in the audit")
+	// ErrAlreadyReviewed means the article already has a logged decision.
+	ErrAlreadyReviewed = errors.New("already reviewed")
+	// ErrInvalidDecision means a decision is not publish, reject or confirm.
+	ErrInvalidDecision = errors.New("decision must be publish, reject or confirm")
 )
 
 // kindError carries a full message and the sentinel it matches via errors.Is.
@@ -302,9 +306,22 @@ func (s *Session) Pending() []datasetaudit.Candidate {
 	return out
 }
 
+// ApplyPending is Apply for a row that must not have a logged decision yet,
+// so a repeated submit cannot log the same article twice. The CLI re-shows
+// logged rows across sessions and uses Apply.
+func (s *Session) ApplyPending(articleID string, d Decision, reviewer string, now time.Time) (LogEntry, error) {
+	if s.Logged[articleID] {
+		return LogEntry{}, fmt.Errorf("%w: %s", ErrAlreadyReviewed, articleID)
+	}
+	return s.Apply(articleID, d, reviewer, now)
+}
+
 // Apply records a decision on an audit row in memory and returns its log
 // entry. Nothing is written until Save.
 func (s *Session) Apply(articleID string, d Decision, reviewer string, now time.Time) (LogEntry, error) {
+	if d != Publish && d != Reject && d != Confirm {
+		return LogEntry{}, fmt.Errorf("%w, got %q", ErrInvalidDecision, string(d))
+	}
 	var candidate *datasetaudit.Candidate
 	for i := range s.Candidates {
 		if s.Candidates[i].ArticleID == articleID {
