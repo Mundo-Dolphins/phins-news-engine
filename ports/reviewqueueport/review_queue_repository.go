@@ -20,6 +20,10 @@ import (
 type ReviewQueueRepository interface {
 	Upsert(ctx context.Context, e reviewpriority.QueueEntry) error
 	Delete(ctx context.Context, articleID string) error
+	// DeleteIfProposal deletes the article's row only while it still
+	// carries proposalID, so a row re-upserted with a newer proposal is
+	// left alone. Deleting a missing or superseded row is not an error.
+	DeleteIfProposal(ctx context.Context, articleID, proposalID string) error
 	// ListOrderedByScore returns up to limit queue rows, highest score
 	// first (ties broken by oldest created_at first).
 	ListOrderedByScore(ctx context.Context, limit int) ([]reviewpriority.QueueEntry, error)

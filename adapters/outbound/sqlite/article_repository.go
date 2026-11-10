@@ -94,13 +94,13 @@ func (r *ArticleRepository) Save(ctx context.Context, a article.Article) error {
 	return nil
 }
 
-// FindByID returns the article with the given ID, or a wrapped
-// sql.ErrNoRows if none exists.
+// FindByID returns the article with the given ID, or an error wrapping
+// both article.ErrNotFound and sql.ErrNoRows if none exists.
 func (r *ArticleRepository) FindByID(ctx context.Context, id string) (article.Article, error) {
 	row := executor(ctx, r.db).QueryRowContext(ctx, `SELECT `+articleColumns+` FROM articles WHERE id = ?`, id)
 	a, err := scanArticleRow(row)
 	if err != nil {
-		return article.Article{}, fmt.Errorf("sqlite: find article %s: %w", id, err)
+		return article.Article{}, fmt.Errorf("sqlite: find article %s: %w", id, wrapNotFound(article.ErrNotFound, err))
 	}
 	return a, nil
 }

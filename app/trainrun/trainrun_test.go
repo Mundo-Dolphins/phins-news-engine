@@ -202,6 +202,7 @@ type fakeQueueRepo struct{ entries []reviewpriority.QueueEntry }
 
 func (f *fakeQueueRepo) Upsert(context.Context, reviewpriority.QueueEntry) error { return nil }
 func (f *fakeQueueRepo) Delete(context.Context, string) error                    { return nil }
+func (f *fakeQueueRepo) DeleteIfProposal(context.Context, string, string) error  { return nil }
 func (f *fakeQueueRepo) ListOrderedByScore(_ context.Context, limit int) ([]reviewpriority.QueueEntry, error) {
 	if limit > 0 && limit < len(f.entries) {
 		return f.entries[:limit], nil

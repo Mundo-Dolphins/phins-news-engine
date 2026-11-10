@@ -103,6 +103,11 @@ func (f *fakeQueueRepo) Delete(_ context.Context, articleID string) error {
 	return nil
 }
 
+func (f *fakeQueueRepo) DeleteIfProposal(_ context.Context, articleID, _ string) error {
+	f.deleted[articleID] = true
+	return nil
+}
+
 func (f *fakeQueueRepo) ListOrderedByScore(context.Context, int) ([]reviewpriority.QueueEntry, error) {
 	return nil, nil
 }

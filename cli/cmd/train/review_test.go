@@ -110,6 +110,11 @@ func (f *fakeQueue) Delete(_ context.Context, articleID string) error {
 	return nil
 }
 
+func (f *fakeQueue) DeleteIfProposal(_ context.Context, articleID, _ string) error {
+	f.deleted = append(f.deleted, articleID)
+	return nil
+}
+
 func (f *fakeQueue) ListOrderedByScore(context.Context, int) ([]reviewpriority.QueueEntry, error) {
 	return nil, nil
 }
@@ -322,5 +327,42 @@ func TestNewReviewCommand_HasExpectedFlags(t *testing.T) {
 	}
 	if l, err := cmd.Flags().GetInt("limit"); err != nil || l != 50 {
 		t.Errorf("limit default = %d, err %v, want 50", l, err)
+	}
+}
+
+// TestReviewLoopOutput pins the exact bytes of a session with publish,
+// discard, skip, an already-labeled entry and a purged entry.
+func TestReviewLoopOutput(t *testing.T) {
+	entries := []reviewpriority.QueueEntry{
+		{ArticleID: "a1", ProposalID: "p1", Score: 0.9, Reason: "disagreement", NBZone: editorial.ZoneAccept, NBValue: 1.5, LLMLabel: "discard", LLMConfidence: 0.75, SuggestedLabel: "discard"},
+		{ArticleID: "a2", ProposalID: "p2", Score: 0.8, Reason: "uncertain", NBZone: editorial.ZoneAmbiguous, LLMLabel: "publish", SuggestedLabel: "publish"},
+		{ArticleID: "a3", ProposalID: "p3", Score: 0.7, Reason: "novel", NBZone: editorial.ZoneAmbiguous, LLMLabel: "uncertain", SuggestedLabel: "uncertain"},
+		{ArticleID: "gone", ProposalID: "p4", Score: 0.6},
+		{ArticleID: "a4", ProposalID: "p5", Score: 0.5, Reason: "dup"},
+	}
+	articles := fakeArticles{
+		"a1": {ID: "a1", Title: "T1", Summary: "S1"},
+		"a2": {ID: "a2", Title: "T2", Summary: "S2"},
+		"a3": {ID: "a3", Title: "T3", Summary: "S3"},
+		"a4": {ID: "a4", Title: "T4", Summary: "S4"},
+	}
+	labels := &fakeLabels{errByArticle: map[string]error{"a4": fmt.Errorf("x: %w", training.ErrAlreadyLabeled)}}
+	proposals := &fakeProposals{updated: map[string]editoriallabelproposal.Status{}}
+	queue := &fakeQueue{}
+	var out bytes.Buffer
+
+	published, discarded, skipped, err := runReviewLoop(
+		context.Background(), &out, bufio.NewReader(strings.NewReader("p\nd\ns\np\n")),
+		entries, articles, labels, proposals, queue, "r", time.Now().UTC(),
+	)
+	if err != nil {
+		t.Fatalf("runReviewLoop() error = %v", err)
+	}
+	if published != 1 || discarded != 1 || skipped != 2 {
+		t.Fatalf("counters = %d,%d,%d, want 1,1,2", published, discarded, skipped)
+	}
+	const want = "\n--- a1 (score 0.90) ---\ntitle:   T1\nsummary: S1\nNB:      zone=accept value=1.5\nLLM:     label=discard confidence=0.75\nreason:  disagreement\nsuggested label: discard\n[p]ublish / [d]iscard / [s]kip / [q]uit: \n--- a2 (score 0.80) ---\ntitle:   T2\nsummary: S2\nNB:      zone=ambiguous value=0.0\nLLM:     label=publish confidence=0.00\nreason:  uncertain\nsuggested label: publish\n[p]ublish / [d]iscard / [s]kip / [q]uit: \n--- a3 (score 0.70) ---\ntitle:   T3\nsummary: S3\nNB:      zone=ambiguous value=0.0\nLLM:     label=uncertain confidence=0.00\nreason:  novel\nsuggested label: uncertain\n[p]ublish / [d]iscard / [s]kip / [q]uit: \n--- gone: article no longer exists (purged); dropping from queue ---\n\n--- a4 (score 0.50) ---\ntitle:   T4\nsummary: S4\nNB:      zone= value=0.0\nLLM:     label= confidence=0.00\nreason:  dup\nsuggested label: \n[p]ublish / [d]iscard / [s]kip / [q]uit: \n--- a4: already labeled elsewhere; dropping from queue ---\n"
+	if out.String() != want {
+		t.Errorf("output mismatch; got:\n%q", out.String())
 	}
 }

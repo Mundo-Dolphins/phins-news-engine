@@ -60,6 +60,15 @@ func (r *ReviewQueueRepository) Delete(ctx context.Context, articleID string) er
 	return nil
 }
 
+// DeleteIfProposal deletes the article's row only if it still carries
+// proposalID; a row re-queued with a newer proposal survives.
+func (r *ReviewQueueRepository) DeleteIfProposal(ctx context.Context, articleID, proposalID string) error {
+	if _, err := r.db.ExecContext(ctx, `DELETE FROM review_queue WHERE article_id = ? AND proposal_id = ?`, articleID, proposalID); err != nil {
+		return fmt.Errorf("sqlitereviewqueue: delete %s: %w", articleID, err)
+	}
+	return nil
+}
+
 func (r *ReviewQueueRepository) ListOrderedByScore(ctx context.Context, limit int) ([]reviewpriority.QueueEntry, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT article_id, proposal_id, score, reason, nb_zone, nb_value,

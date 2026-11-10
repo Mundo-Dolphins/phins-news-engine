@@ -8,6 +8,8 @@ import { ActionPage } from "./routes/ActionPage";
 import { Jobs } from "./routes/Jobs";
 import { JobDetail } from "./routes/JobDetail";
 import { Audit } from "./routes/Audit";
+import { Review } from "./routes/Review";
+import { ReviewTrain } from "./routes/ReviewTrain";
 import "./style.css";
 
 function NotFound() {
@@ -25,6 +27,8 @@ function App() {
       <Route path="/jobs" component={Jobs} />
       <Route path="/jobs/:id" component={JobDetail} />
       <Route path="/audit" component={Audit} />
+      <Route path="/review" component={Review} />
+      <Route path="/review/train" component={ReviewTrain} />
       <Route default component={NotFound} />
     </Router>
   );

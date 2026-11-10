@@ -80,7 +80,8 @@ type shadowCompareParams struct {
 // Actions returns the training actions: train.analyze, train.build,
 // train.evaluate, train.mine, train.shadow_compare, train.run,
 // train.promote, train.rollback, train.audit_dataset, train.audit_gates,
-// train.recheck_corpus, train.backfill_rejects and train.import_labels.
+// train.recheck_corpus, train.backfill_rejects, train.import_labels,
+// train.review_queue and train.review_decide.
 func Actions() []action.Action {
 	return []action.Action{
 		{
@@ -152,6 +153,16 @@ func Actions() []action.Action {
 			Name: "train.import_labels", Group: group, Title: "Import labels",
 			Description: "Restores label snapshots into editorial_examples from old database backups or a reviewed dataset file; additive, never deletes.",
 			Kind:        action.KindWrite, Modes: localOnly, Exclusive: true, Params: importLabelsParams{}, Run: runImportLabels,
+		},
+		{
+			Name: "train.review_queue", Group: group, Title: "Review queue",
+			Description: "Lists the LLM-proposed labels awaiting human review, highest priority first, with the article and its label history.",
+			Kind:        action.KindRead, Modes: localOnly, Params: reviewQueueParams{}, Run: runReviewQueue,
+		},
+		{
+			Name: "train.review_decide", Group: group, Title: "Decide review item",
+			Description: "Publishes or discards one queued article: writes the human label, resolves the LLM proposal and removes the queue entry.",
+			Kind:        action.KindWrite, Modes: localOnly, Params: reviewDecideParams{}, Run: runReviewDecide,
 		},
 	}
 }

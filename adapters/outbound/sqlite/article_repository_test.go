@@ -632,3 +632,18 @@ func TestArticleRepository_ListByClusterID_ExcludesSelfAndOtherClusters(t *testi
 		t.Fatalf("ListByClusterID() = %+v, want only [sibling]", got)
 	}
 }
+
+// TestArticleRepository_FindByID_NotFoundSatisfiesDomainError asserts a
+// missing article (e.g. purged by retention) satisfies article.ErrNotFound
+// as the port documents, while still satisfying sql.ErrNoRows.
+func TestArticleRepository_FindByID_NotFoundSatisfiesDomainError(t *testing.T) {
+	articles := sqliteadapter.NewArticleRepository(newTestDB(t))
+
+	_, err := articles.FindByID(context.Background(), "missing")
+	if !errors.Is(err, article.ErrNotFound) {
+		t.Errorf("FindByID() error = %v, want wrapped article.ErrNotFound", err)
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("FindByID() error = %v, want wrapped sql.ErrNoRows too", err)
+	}
+}
