@@ -1,0 +1,151 @@
+Reviewing 5 prioritized dataset rows. Original dataset stays unchanged.
+
+[1/5] a1 | rss:test | current=reject (cli:label)
+audit: r1
+title: One
+body: B1
+[p] publish / [r] reject / [k] confirm current label / [s] skip / [q] save and quit: 
+[2/5] a2 | rss:test | current=publish (cli:label)
+audit: r2
+title: Two
+body: B2
+[p] publish / [r] reject / [k] confirm current label / [s] skip / [q] save and quit: 
+[3/5] a3 | rss:test | current=publish (cli:label)
+audit: r3
+title: Three
+body: B3
+[p] publish / [r] reject / [k] confirm current label / [s] skip / [q] save and quit: 
+[4/5] a4 | rss:test | current=reject (cli:label)
+audit: r4
+title: Four
+body: B4
+[p] publish / [r] reject / [k] confirm current label / [s] skip / [q] save and quit: 
+[5/5] a5 | rss:test | current=reject (cli:label)
+audit: r5
+title: Five
+body: B5
+[p] publish / [r] reject / [k] confirm current label / [s] skip / [q] save and quit: reviewed 3 decision(s), skipped 2; dataset: <dir>/reviewed.yml; decision log: <dir>/reviewed.yml.review.csv
+
+--- reviewed.yml
+examples:
+    - article_id: a1
+      title: One
+      body: B1
+      source_id: rss:test
+      source_type: ""
+      domain: ""
+      content_type: ""
+      published_at: <ts>
+      fetched_at: <ts>
+      cluster_id: ""
+      is_primary_source: false
+      label: publish
+      label_source: interactive_review
+      tier: ""
+      reason: interactive_dataset_review
+      labeled_at: <ts>
+      revision: 2
+      content_hash: ""
+    - article_id: a2
+      title: Two
+      body: B2
+      source_id: rss:test
+      source_type: ""
+      domain: ""
+      content_type: ""
+      published_at: <ts>
+      fetched_at: <ts>
+      cluster_id: ""
+      is_primary_source: false
+      label: reject
+      label_source: interactive_review
+      tier: ""
+      reason: interactive_dataset_review
+      labeled_at: <ts>
+      revision: 3
+      content_hash: ""
+    - article_id: a3
+      title: Three
+      body: B3
+      source_id: rss:test
+      source_type: ""
+      domain: ""
+      content_type: ""
+      published_at: <ts>
+      fetched_at: <ts>
+      cluster_id: ""
+      is_primary_source: false
+      label: publish
+      label_source: interactive_review
+      tier: ""
+      reason: interactive_dataset_review
+      labeled_at: <ts>
+      revision: 4
+      content_hash: ""
+    - article_id: a4
+      title: Four
+      body: B4
+      source_id: rss:test
+      source_type: ""
+      domain: ""
+      content_type: ""
+      published_at: <ts>
+      fetched_at: <ts>
+      cluster_id: ""
+      is_primary_source: false
+      label: reject
+      label_source: cli:label
+      tier: ""
+      reason: ""
+      labeled_at: <ts>
+      revision: 4
+      content_hash: ""
+    - article_id: a5
+      title: Five
+      body: B5
+      source_id: rss:test
+      source_type: ""
+      domain: ""
+      content_type: ""
+      published_at: <ts>
+      fetched_at: <ts>
+      cluster_id: ""
+      is_primary_source: false
+      label: reject
+      label_source: cli:label
+      tier: ""
+      reason: ""
+      labeled_at: <ts>
+      revision: 5
+      content_hash: ""
+
+--- manifest
+{
+  "schema_version": "training-example-v2",
+  "exported_at": "<ts>",
+  "period_start": "<ts>",
+  "period_end": "<ts>",
+  "total_count": 5,
+  "publish_count": 2,
+  "reject_count": 3,
+  "gold_count": 5,
+  "silver_count": 0,
+  "by_source": {
+    "rss:test": 5
+  },
+  "by_label_source": {
+    "cli:label": 2,
+    "interactive_review": 3
+  },
+  "dataset_sha256": "<ts>",
+  "top_source": "rss:test",
+  "top_source_share": 1,
+  "relabeled_count": 5,
+  "unresolved_conflict_count": 0,
+  "silver_skipped_missing_article_count": 0
+}
+--- log
+article_id,previous_label,reviewed_label,audit_reason,reviewer,reviewed_at
+a1,reject,publish,r1,rev,<ts>
+a2,publish,reject,r2,rev,<ts>
+a3,publish,publish,r3,rev,<ts>
