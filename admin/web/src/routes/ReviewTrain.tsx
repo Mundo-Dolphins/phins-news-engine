@@ -2,6 +2,7 @@ import type { ComponentChildren } from "preact";
 import { useCallback, useEffect, useState } from "preact/hooks";
 import { ApiError, runAction } from "../api";
 import { ReviewScreen, type Notice, type ReviewDecision } from "../components/ReviewScreen";
+import { LocalOnly } from "../components/LocalOnly";
 import { safeHref } from "../links";
 
 interface PriorLabel {
@@ -176,6 +177,14 @@ function TrainEntry({ t }: { t: TrainReviewItem }) {
 
 /** ReviewTrain is the web form of `train review`: publish or discard the LLM teacher's queued proposals. */
 export function ReviewTrain() {
+  return (
+    <LocalOnly>
+      <ReviewTrainScreen />
+    </LocalOnly>
+  );
+}
+
+function ReviewTrainScreen() {
   const [items, setItems] = useState<TrainReviewItem[] | null>(null);
   // Skipped and decided entries stay hidden for this page session, also
   // across refreshes that raced a decision.
@@ -218,7 +227,9 @@ export function ReviewTrain() {
         } catch (e) {
           if (e instanceof ApiError && e.code === "not_found") {
             hide(t);
-            return { kind: "info", text: `${t.article_id} is no longer in the review queue (decided elsewhere); removed.` };
+            // Decided elsewhere, or re-queued with a new proposal: reload to see which.
+            void load();
+            return { kind: "info", text: `${t.article_id} is no longer queued with this proposal — reloading.` };
           }
           throw new Error(errorText(e));
         }

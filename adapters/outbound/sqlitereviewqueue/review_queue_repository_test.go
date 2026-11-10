@@ -97,3 +97,32 @@ func TestReviewQueueRepository_Delete(t *testing.T) {
 		t.Fatalf("len(got) = %d, want 0 after Delete", len(got))
 	}
 }
+
+func TestReviewQueueRepository_DeleteIfProposal(t *testing.T) {
+	db := newTestDB(t)
+	repo := sqlitereviewqueue.NewReviewQueueRepository(db)
+	ctx := context.Background()
+
+	entry := reviewpriority.QueueEntry{ArticleID: "article-1", ProposalID: "proposal-2", Score: 0.5, NBZone: editorial.ZoneAmbiguous, LLMLabel: "uncertain", SuggestedLabel: "uncertain"}
+	if err := repo.Upsert(ctx, entry); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+	// A stale proposal id leaves the (re-queued) entry alone.
+	if err := repo.DeleteIfProposal(ctx, "article-1", "proposal-1"); err != nil {
+		t.Fatalf("DeleteIfProposal(stale) error = %v", err)
+	}
+	got, err := repo.ListOrderedByScore(ctx, 10)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("after stale delete: got %v, err %v; want the entry kept", got, err)
+	}
+	if err := repo.DeleteIfProposal(ctx, "article-1", "proposal-2"); err != nil {
+		t.Fatalf("DeleteIfProposal(current) error = %v", err)
+	}
+	if got, _ = repo.ListOrderedByScore(ctx, 10); len(got) != 0 {
+		t.Fatalf("len(got) = %d, want 0 after matching delete", len(got))
+	}
+	// Idempotent on a missing row.
+	if err := repo.DeleteIfProposal(ctx, "article-1", "proposal-2"); err != nil {
+		t.Fatalf("DeleteIfProposal(missing) error = %v, want nil", err)
+	}
+}

@@ -271,3 +271,21 @@ func TestFind(t *testing.T) {
 		t.Fatalf("Find(nope) ok=%v err=%v, want false, nil", ok, err)
 	}
 }
+
+func TestDecideKeepsEntryRequeuedWithNewProposal(t *testing.T) {
+	e := newEnv(t)
+	stale := e.seed(t, "a1", 0.9)
+	// The teacher re-proposed between Find and Decide: same article, new proposal.
+	fresh := stale
+	fresh.ProposalID = "newer-proposal"
+	if err := e.deps.Queue.Upsert(context.Background(), fresh); err != nil {
+		t.Fatalf("re-upsert: %v", err)
+	}
+	if _, err := trainreview.Decide(context.Background(), e.deps, stale, trainreview.Publish, "alice", "admin:train-review", testNow); err != nil {
+		t.Fatalf("Decide() error = %v", err)
+	}
+	entries, err := e.deps.Queue.ListOrderedByScore(context.Background(), 10)
+	if err != nil || len(entries) != 1 || entries[0].ProposalID != "newer-proposal" {
+		t.Fatalf("queue = %+v, err %v; want the re-queued entry to survive", entries, err)
+	}
+}

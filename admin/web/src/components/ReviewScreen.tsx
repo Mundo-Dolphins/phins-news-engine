@@ -41,6 +41,9 @@ function NoticeLine({ notice }: { notice: Notice }) {
   );
 }
 
+/** Focus and visibilitychange events closer than this count as one return to the page. */
+const REFRESH_DEBOUNCE_MS = 500;
+
 /**
  * ReviewScreen is the shared review layout: the queue on the left, the
  * selected item in the centre and a decision bar under it. It owns the
@@ -130,13 +133,24 @@ export function ReviewScreen<T>(props: ReviewScreenProps<T>) {
   // Layout effect: the shortcuts work as soon as the screen is painted.
   useLayoutEffect(() => {
     const keydown = (e: KeyboardEvent) => keyRef.current(e);
+    // Returning to the page can fire both `focus` and `visibilitychange`:
+    // reload once per burst.
+    let last = 0;
+    const refresh = () => {
+      const now = Date.now();
+      if (now - last < REFRESH_DEBOUNCE_MS) return;
+      last = now;
+      refreshRef.current();
+    };
     const visible = () => {
-      if (document.visibilityState === "visible") refreshRef.current();
+      if (document.visibilityState === "visible") refresh();
     };
     window.addEventListener("keydown", keydown);
+    window.addEventListener("focus", refresh);
     document.addEventListener("visibilitychange", visible);
     return () => {
       window.removeEventListener("keydown", keydown);
+      window.removeEventListener("focus", refresh);
       document.removeEventListener("visibilitychange", visible);
     };
   }, []);

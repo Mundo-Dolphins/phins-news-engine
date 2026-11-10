@@ -58,6 +58,9 @@ func (f fakeQueueRepo) ListOrderedByScore(ctx context.Context, limit int) ([]rev
 }
 func (f fakeQueueRepo) Upsert(ctx context.Context, e reviewpriority.QueueEntry) error { return nil }
 func (f fakeQueueRepo) Delete(ctx context.Context, articleID string) error            { return nil }
+func (f fakeQueueRepo) DeleteIfProposal(ctx context.Context, articleID, proposalID string) error {
+	return nil
+}
 
 var _ reviewqueueport.ReviewQueueRepository = fakeQueueRepo{}
 

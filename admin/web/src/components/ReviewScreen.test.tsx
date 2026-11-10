@@ -155,6 +155,15 @@ describe("ReviewScreen", () => {
     spy.mockRestore();
   });
 
+  it("refreshes once when the window regains focus, even alongside visibilitychange", () => {
+    const { onRefresh } = setup();
+    window.dispatchEvent(new Event("focus"));
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+    // The same tab switch also fires visibilitychange: no second load.
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps the position when the selected item leaves the queue", () => {
     const { rerender, onDecide, onSkip, onRefresh } = setup();
     fireEvent.keyDown(window, { key: "j" });

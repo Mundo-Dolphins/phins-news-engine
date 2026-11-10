@@ -15,8 +15,8 @@ import (
 type ArticleRepository interface {
 	// Save inserts a, or updates it in place if its ID already exists.
 	Save(ctx context.Context, a article.Article) error
-	// FindByID returns the article with the given ID, or a wrapped
-	// sql.ErrNoRows if none exists.
+	// FindByID returns the article with the given ID, or an error
+	// wrapping both article.ErrNotFound and sql.ErrNoRows if none exists.
 	FindByID(ctx context.Context, id string) (article.Article, error)
 	// DeleteByStatusOlderThan removes articles whose status is one of
 	// statuses and whose fetched_at is before cutoff, returning how many

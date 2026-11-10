@@ -80,7 +80,9 @@ type Item struct {
 // (with by/source), resolves the proposal (publish approves, discard
 // rejects) and deletes the queue entry. An article that was purged, or
 // that was already labeled elsewhere, only has its queue entry deleted and
-// is reported through the Outcome. Errors carry no command prefix.
+// is reported through the Outcome. The dequeue is conditional on e's
+// proposal, so an entry re-queued with a newer proposal since e was read
+// survives. Errors carry no command prefix.
 func Decide(ctx context.Context, d Deps, e reviewpriority.QueueEntry, dec Decision, by, source string, now time.Time) (Outcome, error) {
 	var status editoriallabelproposal.Status
 	var verb string
@@ -96,7 +98,7 @@ func Decide(ctx context.Context, d Deps, e reviewpriority.QueueEntry, dec Decisi
 	if _, err := d.Articles.FindByID(ctx, e.ArticleID); err != nil {
 		if errors.Is(err, article.ErrNotFound) {
 			// Purged (e.g. by retention) after the entry was queued.
-			if delErr := d.Queue.Delete(ctx, e.ArticleID); delErr != nil {
+			if delErr := d.Queue.DeleteIfProposal(ctx, e.ArticleID, e.ProposalID); delErr != nil {
 				return "", fmt.Errorf("dequeue orphaned %s: %w", e.ArticleID, delErr)
 			}
 			return DroppedPurged, nil
@@ -108,7 +110,7 @@ func Decide(ctx context.Context, d Deps, e reviewpriority.QueueEntry, dec Decisi
 		ArticleID: e.ArticleID, Label: string(dec), LabeledAt: now, LabeledBy: by, Source: source,
 	}); err != nil {
 		if errors.Is(err, training.ErrAlreadyLabeled) {
-			if delErr := d.Queue.Delete(ctx, e.ArticleID); delErr != nil {
+			if delErr := d.Queue.DeleteIfProposal(ctx, e.ArticleID, e.ProposalID); delErr != nil {
 				return "", fmt.Errorf("dequeue already-labeled %s: %w", e.ArticleID, delErr)
 			}
 			return DroppedAlreadyLabeled, nil
@@ -118,7 +120,7 @@ func Decide(ctx context.Context, d Deps, e reviewpriority.QueueEntry, dec Decisi
 	if err := d.Proposals.UpdateStatus(ctx, e.ProposalID, status, now); err != nil {
 		return "", fmt.Errorf("%s proposal %s: %w", verb, e.ProposalID, err)
 	}
-	if err := d.Queue.Delete(ctx, e.ArticleID); err != nil {
+	if err := d.Queue.DeleteIfProposal(ctx, e.ArticleID, e.ProposalID); err != nil {
 		return "", fmt.Errorf("dequeue %s: %w", e.ArticleID, err)
 	}
 	return Decided, nil

@@ -1,8 +1,8 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/preact";
-import { ApiError, runAction } from "../api";
+import { ApiError, getSession, runAction } from "../api";
 import { ReviewTrain } from "./ReviewTrain";
 
-vi.mock("../api", async (orig) => ({ ...(await orig<typeof import("../api")>()), runAction: vi.fn() }));
+vi.mock("../api", async (orig) => ({ ...(await orig<typeof import("../api")>()), runAction: vi.fn(), getSession: vi.fn() }));
 const run = vi.mocked(runAction);
 
 function item(over: Record<string, unknown> = {}) {
@@ -37,7 +37,10 @@ function queue(items: unknown[]) {
 }
 
 describe("ReviewTrain", () => {
-  beforeEach(() => run.mockReset());
+  beforeEach(() => {
+    run.mockReset();
+    vi.mocked(getSession).mockResolvedValue({ username: "ana", mode: "local" });
+  });
 
   it("loads the queue and links the original for https URLs", async () => {
     run.mockResolvedValueOnce(queue([item()]));
@@ -133,12 +136,17 @@ describe("ReviewTrain", () => {
   it("treats an entry gone from the queue as an info notice, not an error page", async () => {
     run.mockResolvedValueOnce(queue([item()]));
     run.mockRejectedValueOnce(new ApiError(404, "not_found", "a1 is not in the review queue"));
+    run.mockResolvedValueOnce(queue([]));
     render(<ReviewTrain />);
     await screen.findByRole("heading", { name: "First article" });
     fireEvent.keyDown(window, { key: "p" });
-    expect(await screen.findByText(/no longer in the review queue/)).toBeTruthy();
+    expect(await screen.findByText(/no longer queued with this proposal/)).toBeTruthy();
+    expect(screen.queryByText(/decided elsewhere/)).toBeNull();
     expect(screen.queryByText("First article")).toBeNull();
     expect(screen.getByText(/Nothing to review/)).toBeTruthy();
+    // The queue was reloaded after the not_found.
+    await waitFor(() => expect(run).toHaveBeenCalledTimes(3));
+    expect(run).toHaveBeenLastCalledWith("train.review_queue", { limit: 50 }, false);
   });
 
   it("hides the item on S without a request", async () => {
@@ -177,5 +185,12 @@ describe("ReviewTrain", () => {
     );
     render(<ReviewTrain />);
     expect(await screen.findByText(/cli:train-review/)).toBeTruthy();
+  });
+
+  it("shows a local-mode notice instead of the screen in production mode", async () => {
+    vi.mocked(getSession).mockResolvedValue({ username: "ana", mode: "production" });
+    render(<ReviewTrain />);
+    expect(await screen.findByText("Review screens are only available in local mode.")).toBeTruthy();
+    expect(run).not.toHaveBeenCalled();
   });
 });
