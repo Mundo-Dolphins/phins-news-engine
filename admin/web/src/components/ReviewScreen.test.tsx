@@ -181,4 +181,24 @@ describe("ReviewScreen", () => {
     );
     expect(screen.getByRole("heading", { name: "Item Charlie" })).toBeTruthy();
   });
+
+  it("offers a decision only for the items it applies to", async () => {
+    const only = vi.fn(async (_t: It): Promise<Notice | void> => undefined);
+    const always = vi.fn(async (_t: It): Promise<Notice | void> => undefined);
+    setup({
+      decisions: [
+        { key: "a", label: "Approve", offered: (t) => t.id !== "a", onDecide: only },
+        { key: "r", label: "Reject", onDecide: always },
+      ],
+    });
+    expect(screen.queryByRole("button", { name: /Approve/ })).toBeNull();
+    expect(screen.getByRole("button", { name: /Reject/ }).className).toContain("primary");
+    fireEvent.keyDown(window, { key: "a" });
+    await Promise.resolve();
+    expect(only).not.toHaveBeenCalled();
+    fireEvent.keyDown(window, { key: "j" });
+    expect(screen.getByRole("button", { name: /Approve/ }).className).toContain("primary");
+    fireEvent.keyDown(window, { key: "a" });
+    await waitFor(() => expect(only).toHaveBeenCalledWith(items[1]));
+  });
 });

@@ -1,8 +1,10 @@
 package entitydiscovery_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -507,5 +509,40 @@ func TestApplyApproval_FreeAgentCoachRefused(t *testing.T) {
 	p := leaguePerson("Some Coach", entityproposal.EntityTypeCoach, map[string]string{"affiliation_status": "free_agent"})
 	if err := entitydiscovery.ApplyApproval(p, paths, time.Now().UTC()); err == nil {
 		t.Fatal("want error: only players can be free agents")
+	}
+}
+
+func TestApplyApproval_RefusalsMatchErrApprovalRefused(t *testing.T) {
+	team := map[string]string{"affiliation_status": "team", "team_id": "springfield-isotopes"}
+	cases := map[string]entityproposal.Proposal{
+		"already in the dictionary": {ID: "p1", CanonicalName: "Pierce Quenby", Kind: entityproposal.KindNewEntity,
+			EntityType: entityproposal.EntityTypePlayer, Metadata: team},
+		"no affiliation":         leaguePerson("Some Guy", entityproposal.EntityTypePlayer, map[string]string{"position": "WR"}),
+		"team already in manual": {ID: "p1", CanonicalName: "Springfield Isotopes", Kind: entityproposal.KindNewEntity, EntityType: entityproposal.EntityTypeTeam},
+		"unknown alias target":   {ID: "p1", Kind: entityproposal.KindNewAlias, TargetEntityID: "does-not-exist", Aliases: []string{"X"}},
+		"unresolved duplicate":   {ID: "p1", Kind: entityproposal.KindPossibleDuplicate, CanonicalName: "X", EntityType: entityproposal.EntityTypePlayer},
+		"invalid dictionary":     {ID: "p1", CanonicalName: "", Kind: entityproposal.KindNewEntity, EntityType: entityproposal.EntityTypePlayer, Metadata: team},
+	}
+	for name, p := range cases {
+		t.Run(name, func(t *testing.T) {
+			paths := writeTestCatalogFiles(t)
+			err := entitydiscovery.ApplyApproval(p, paths, time.Now().UTC())
+			if !errors.Is(err, entitydiscovery.ErrApprovalRefused) {
+				t.Fatalf("err = %v, want ErrApprovalRefused", err)
+			}
+			if strings.Contains(err.Error(), "approval refused") {
+				t.Fatalf("err = %q: the sentinel must not change the message", err)
+			}
+		})
+	}
+}
+
+func TestApplyApproval_FileErrorIsNotARefusal(t *testing.T) {
+	paths := writeTestCatalogFiles(t)
+	paths.ManualCatalogPath = filepath.Join(t.TempDir(), "missing.yml")
+	p := entityproposal.Proposal{ID: "p1", CanonicalName: "New Team", Kind: entityproposal.KindNewEntity, EntityType: entityproposal.EntityTypeTeam}
+	err := entitydiscovery.ApplyApproval(p, paths, time.Now().UTC())
+	if err == nil || errors.Is(err, entitydiscovery.ErrApprovalRefused) {
+		t.Fatalf("err = %v, want a plain load error", err)
 	}
 }

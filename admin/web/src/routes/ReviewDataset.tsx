@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { ApiError, runAction } from "../api";
 import { ReviewScreen, type Notice, type ReviewDecision } from "../components/ReviewScreen";
 import { LocalOnly } from "../components/LocalOnly";
+import { errorText, when } from "../components/reviewParts";
 import { safeHref } from "../links";
 
 /** DatasetReviewItem is one pending audit row of `train.review_dataset_queue`. */
@@ -39,17 +40,6 @@ interface DatasetQueue {
 type Decision = "publish" | "reject" | "confirm";
 
 const keyOf = (t: DatasetReviewItem) => t.article_id;
-
-function errorText(e: unknown): string {
-  if (e instanceof ApiError) return `${e.message} (${e.code})`;
-  return e instanceof Error ? e.message : String(e);
-}
-
-function when(iso: string): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  return isNaN(d.getTime()) ? iso : d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
-}
 
 function Original({ url, domain }: { url: string; domain: string }) {
   const href = safeHref(url);

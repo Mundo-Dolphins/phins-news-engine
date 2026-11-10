@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "preact/hooks";
 import { ApiError, runAction } from "../api";
 import { ReviewScreen, type Notice, type ReviewDecision } from "../components/ReviewScreen";
 import { LocalOnly } from "../components/LocalOnly";
+import { errorText, when } from "../components/reviewParts";
 import { safeHref } from "../links";
 
 interface PriorLabel {
@@ -41,17 +42,6 @@ export interface TrainReviewItem {
 const QUEUE_LIMIT = 50;
 
 const keyOf = (t: TrainReviewItem) => t.article_id + "\u0000" + t.proposal_id;
-
-function errorText(e: unknown): string {
-  if (e instanceof ApiError) return `${e.message} (${e.code})`;
-  return e instanceof Error ? e.message : String(e);
-}
-
-function when(iso: string): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  return isNaN(d.getTime()) ? iso : d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
-}
 
 const num = (v: number, digits = 2) => (typeof v === "number" ? v.toFixed(digits) : "");
 

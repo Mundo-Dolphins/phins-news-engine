@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/cobra"
 
 	sqliteentityproposal "github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqliteentityproposal"
+	"github.com/Mundo-Dolphins/phins-news-engine/app/entitydiscovery"
 )
 
 func newShowCommand() *cobra.Command {
@@ -42,7 +43,7 @@ func newShowCommand() *cobra.Command {
 			if pos := p.Metadata["position"]; pos != "" {
 				fmt.Fprintf(out, "\nPosition:\n%s\n", pos)
 			}
-			if affiliationLine(p) != "" || p.Metadata["role"] != "" || p.Metadata["team"] != "" || p.Metadata["league"] != "" || len(p.WebSources) > 0 ||
+			if entitydiscovery.AffiliationLabel(p) != "" || p.Metadata["role"] != "" || p.Metadata["team"] != "" || p.Metadata["league"] != "" || len(p.WebSources) > 0 ||
 				p.Metadata["suggested_entity"] != "" || p.Metadata["suggested_candidates"] != "" {
 				fmt.Fprintln(out)
 				printVerification(out, p, false)
