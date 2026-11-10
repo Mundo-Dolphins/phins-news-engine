@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqliteeventruleproposal"
 	"github.com/Mundo-Dolphins/phins-news-engine/app/eventrulecycle"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventruleproposal"
 )
@@ -317,5 +318,79 @@ func TestApplyNothing(t *testing.T) {
 	}
 	if len(h.gateIn) != 0 || len(h.written) != 0 {
 		t.Errorf("gate %d, writes %d", len(h.gateIn), len(h.written))
+	}
+}
+
+func TestEditSaveStaleOriginalIsAlreadyDecidedAndStoresNothing(t *testing.T) {
+	h := newHarness(t)
+	c := h.discovered(t)
+	ctx := context.Background()
+	stale := h.proposal(t, "lands on the shelf")
+	if _, err := eventrulecycle.Reject(ctx, h.deps, stale, testNow); err != nil {
+		t.Fatal(err)
+	}
+	a, err := eventrulecycle.Edit(ctx, h.deps, c, stale, "lands on the shelf with", eventruleproposal.DefaultCheckOptions(), testNow, true)
+	if !errors.Is(err, eventrulecycle.ErrAlreadyDecided) || a.Proposal.ID != "" {
+		t.Fatalf("assessment %+v, err %v", a, err)
+	}
+	if _, stored := h.byPhrase(t)["lands on the shelf with"]; stored {
+		t.Error("edited rule stored for an original decided elsewhere")
+	}
+}
+
+func TestApplySkipsProposalsNoLongerApproved(t *testing.T) {
+	h := newHarness(t)
+	h.discovered(t)
+	ctx := context.Background()
+	shelf, err := eventrulecycle.Approve(ctx, h.deps, h.proposal(t, "lands on the shelf"), testNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deal, err := eventrulecycle.Approve(ctx, h.deps, h.proposal(t, "inks a deal"), testNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Rejected between listing and Apply: the caller's copy is stale.
+	if _, err := eventrulecycle.Reject(ctx, h.deps, deal, testNow); err != nil {
+		t.Fatal(err)
+	}
+	r, err := eventrulecycle.Apply(ctx, h.deps, []eventruleproposal.Proposal{shelf, deal}, testNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Applied) != 1 || r.Applied[0].ID != shelf.ID || phrasesOf(r.Candidate) != "ships off|lands on the shelf" {
+		t.Fatalf("result %+v", r)
+	}
+	if got := statusOf(t, h, "inks a deal"); got != eventruleproposal.StatusRejected {
+		t.Errorf("rejection overwritten: %s", got)
+	}
+
+	// Only stale copies left: nothing to apply, no gate run.
+	gates := len(h.gateIn)
+	r, err = eventrulecycle.Apply(ctx, h.deps, []eventruleproposal.Proposal{deal}, testNow)
+	if err != nil || !r.Nothing || len(h.gateIn) != gates {
+		t.Fatalf("result %+v, err %v, gate calls %d", r, err, len(h.gateIn)-gates)
+	}
+}
+
+// legacyRepo returns stored phrases un-normalised, as rows written before
+// phrases were normalised on the way in.
+type legacyRepo struct {
+	*sqliteeventruleproposal.Repository
+}
+
+func (r legacyRepo) Get(ctx context.Context, id string) (eventruleproposal.Proposal, error) {
+	p, err := r.Repository.Get(ctx, id)
+	p.Phrase = "  " + strings.ToUpper(p.Phrase) + " "
+	return p, err
+}
+
+func TestDecideNormalisesLegacyPhrase(t *testing.T) {
+	h := newHarness(t)
+	h.discovered(t)
+	h.deps.Proposals = legacyRepo{h.repo}
+	approved, err := eventrulecycle.Approve(context.Background(), h.deps, h.proposal(t, "inks a deal"), testNow)
+	if err != nil || approved.Phrase != "inks a deal" || approved.Status != eventruleproposal.StatusApproved {
+		t.Fatalf("approved %+v, %v", approved, err)
 	}
 }

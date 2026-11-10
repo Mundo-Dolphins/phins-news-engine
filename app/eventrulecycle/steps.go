@@ -162,13 +162,14 @@ func Reject(ctx context.Context, d Deps, p eventruleproposal.Proposal, now time.
 }
 
 // decide re-reads proposal id, so a stale copy never overwrites a decision
-// taken elsewhere, applies transition and saves the result; verb names the
-// decision in errors.
+// taken elsewhere, normalises its phrase (legacy rows may not be), applies
+// transition and saves the result; verb names the decision in errors.
 func decide(ctx context.Context, d Deps, id, verb string, transition func(eventruleproposal.Proposal, time.Time) (eventruleproposal.Proposal, error), now time.Time) (eventruleproposal.Proposal, error) {
 	cur, err := d.Proposals.Get(ctx, id)
 	if err != nil {
 		return eventruleproposal.Proposal{}, fmt.Errorf("eventrulecycle: reload %s: %w", id, err)
 	}
+	cur.Phrase = normalizePhrase(cur.Phrase)
 	decided, err := transition(cur, now.UTC())
 	if err != nil {
 		return eventruleproposal.Proposal{}, fmt.Errorf("eventrulecycle: %s %s: %w: %w", verb, id, ErrAlreadyDecided, err)
@@ -216,6 +217,15 @@ func Edit(ctx context.Context, d Deps, c Context, p eventruleproposal.Proposal, 
 	if !save {
 		return a, nil
 	}
+	// Check the original before storing anything, so an original decided
+	// elsewhere never leaves an approved edit behind.
+	cur, err := d.Proposals.Get(ctx, p.ID)
+	if err != nil {
+		return Assessment{}, fmt.Errorf("eventrulecycle: reload %s: %w", p.ID, err)
+	}
+	if cur.Status != eventruleproposal.StatusPending {
+		return Assessment{}, fmt.Errorf("eventrulecycle: edit %s: %w: it is %s", p.ID, ErrAlreadyDecided, cur.Status)
+	}
 	stored, err := d.Proposals.Upsert(ctx, edited)
 	if err != nil {
 		return Assessment{}, fmt.Errorf("eventrulecycle: store edited phrase %q: %w", edited.Phrase, err)
@@ -251,14 +261,27 @@ type ApplyResult struct {
 
 // Apply gates the rules already in the generated file plus toApply (sorted
 // and deduplicated) against the clustering benchmark. When the gate passes it
-// writes the generated file and marks toApply applied at now.
+// writes the generated file and marks toApply applied at now. Each proposal
+// is re-read first and skipped unless still approved, so a decision taken
+// since toApply was listed is neither overwritten nor written to the file;
+// when none is left the result is Nothing.
 func Apply(ctx context.Context, d Deps, toApply []eventruleproposal.Proposal, now time.Time) (ApplyResult, error) {
 	var r ApplyResult
-	if len(toApply) == 0 {
+	current := make([]eventruleproposal.Proposal, 0, len(toApply))
+	for _, p := range toApply {
+		cur, err := d.Proposals.Get(ctx, p.ID)
+		if err != nil {
+			return r, fmt.Errorf("eventrulecycle: reload %s: %w", p.ID, err)
+		}
+		if cur.Status == eventruleproposal.StatusApproved {
+			current = append(current, cur)
+		}
+	}
+	if len(current) == 0 {
 		r.Nothing = true
 		return r, nil
 	}
-	toApply = append([]eventruleproposal.Proposal(nil), toApply...)
+	toApply = current
 	sortProposals(toApply)
 	if d.Gate == nil || d.ReadApplied == nil || d.WriteApplied == nil {
 		return r, errors.New("eventrulecycle: Gate, ReadApplied and WriteApplied are required to apply approved rules")
