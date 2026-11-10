@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"slices"
+	"strings"
 	"testing"
 
 	sqliteadapter "github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqlite"
@@ -208,5 +211,118 @@ func TestCatalogSearchLimit(t *testing.T) {
 	for _, bad := range []string{`{"query":"s","limit":0}`, `{"query":"s","limit":101}`} {
 		_, err := f.run("entities.catalog_search", bad)
 		wantCode(t, err, action.CodeInvalidParams)
+	}
+}
+
+func searchIDs(t *testing.T, f fixture, query string) []string {
+	t.Helper()
+	res, err := f.run("entities.catalog_search", fmt.Sprintf(`{"query":%q}`, query))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(res.Object)
+	var out struct {
+		Results []struct {
+			ID string `json:"id"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatal(err)
+	}
+	ids := []string{}
+	for _, r := range out.Results {
+		ids = append(ids, r.ID)
+	}
+	return ids
+}
+
+func TestCatalogSearchMissingGeneratedFileIsFine(t *testing.T) {
+	f := newFixture(t)
+	if err := os.Remove(f.generated); err != nil {
+		t.Fatal(err)
+	}
+	if ids := searchIDs(t, f, "sample"); len(ids) != 1 || ids[0] != "jordan-sample" {
+		t.Fatalf("ids = %v, want the manual entity", ids)
+	}
+}
+
+func TestCatalogSearchRanksExactThenPrefixThenSubstring(t *testing.T) {
+	f := newFixture(t)
+	write(t, f.manual, `entities:
+  - id: has-ray-inside
+    canonical_name: Moray Example
+    kind: player
+    terms: [Moray Example]
+  - id: ray-prefix
+    canonical_name: Rayburn Example
+    kind: player
+    terms: [Rayburn Example]
+  - id: ray-exact
+    canonical_name: Ray
+    kind: player
+    terms: [Ray]
+  - id: ray-prefix-two
+    canonical_name: Rayner Example
+    kind: player
+    terms: [Rayner Example]
+`)
+	want := []string{"ray-exact", "ray-prefix", "ray-prefix-two", "has-ray-inside"}
+	if ids := searchIDs(t, f, "ray"); !slices.Equal(ids, want) {
+		t.Fatalf("ids = %v, want %v", ids, want)
+	}
+	res, err := f.run("entities.catalog_search", `{"query":"ray","limit":1}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(res.Object)
+	if !strings.Contains(string(raw), "ray-exact") {
+		t.Fatalf("limit 1 = %s, want the exact match", raw)
+	}
+}
+
+// An id the merge search returns, from the manual or from the generated
+// catalog, is accepted by entities.approve as merge_into.
+func TestCatalogSearchIDsAreAcceptedAsMergeInto(t *testing.T) {
+	f := newFixture(t)
+	write(t, f.dict, `
+meta:
+  version: "1.0.0"
+  name: isotopes
+  language: en
+decision:
+  positive_threshold_high: 0.8
+  positive_threshold_medium: 0.5
+  negative_threshold_high: 0
+  title_weight_multiplier: 1.5
+  max_count_per_term: 5
+categories:
+  active_roster_core:
+    weight: 1
+    entries:
+      - canonical_name: Casey Placeholder
+        type: person
+        roster_status: active
+        position: WR
+        aliases: [Casey P]
+`)
+	if _, err := f.run("entities.generate", `{}`); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ query, id string }{
+		{"jordan sample", "jordan-sample"},         // manual catalog
+		{"casey placeholder", "casey-placeholder"}, // generated catalog
+	} {
+		ids := searchIDs(t, f, tc.query)
+		if len(ids) == 0 || ids[0] != tc.id {
+			t.Fatalf("search %q = %v, want %s first", tc.query, ids, tc.id)
+		}
+		pid := f.seed(entityproposal.Proposal{CanonicalName: "Alias For " + tc.id, Kind: entityproposal.KindPossibleDuplicate,
+			Aliases: []string{"Alias For " + tc.id}})
+		if _, err := f.run("entities.approve", fmt.Sprintf(`{"id":%q,"merge_into":%q}`, pid, ids[0])); err != nil {
+			t.Fatalf("approve merge_into %s: %v", ids[0], err)
+		}
+		if f.status(pid) != entityproposal.StatusApproved {
+			t.Fatalf("proposal for %s not approved", tc.id)
+		}
 	}
 }

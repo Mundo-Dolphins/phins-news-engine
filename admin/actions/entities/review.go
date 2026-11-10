@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"sort"
 	"strings"
 
@@ -12,6 +14,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/app/entitydiscovery"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/article"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/entityproposal"
+	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/entitycatalog"
 )
 
@@ -97,7 +100,7 @@ func runReviewQueue(ctx context.Context, env action.Env, params any) (action.Res
 	if len(proposals) > p.Limit {
 		proposals = proposals[:p.Limit]
 	}
-	articles := sqliteadapter.NewArticleRepository(env.DB)
+	articles := &memoArticles{finder: sqliteadapter.NewArticleRepository(env.DB), seen: map[string]articleLookup{}}
 	items := make([]queueItemJSON, 0, len(proposals))
 	for _, pr := range proposals {
 		item, err := queueItem(ctx, articles, pr)
@@ -112,6 +115,27 @@ func runReviewQueue(ctx context.Context, env action.Env, params any) (action.Res
 
 type articleFinder interface {
 	FindByID(ctx context.Context, id string) (article.Article, error)
+}
+
+type articleLookup struct {
+	art article.Article
+	err error
+}
+
+// memoArticles answers FindByID once per article id, as one article is often
+// the evidence of several proposals.
+type memoArticles struct {
+	finder articleFinder
+	seen   map[string]articleLookup
+}
+
+func (m *memoArticles) FindByID(ctx context.Context, id string) (article.Article, error) {
+	if l, ok := m.seen[id]; ok {
+		return l.art, l.err
+	}
+	a, err := m.finder.FindByID(ctx, id)
+	m.seen[id] = articleLookup{a, err}
+	return a, err
 }
 
 func queueItem(ctx context.Context, articles articleFinder, pr entityproposal.Proposal) (queueItemJSON, error) {
@@ -166,19 +190,27 @@ func runCatalogSearch(_ context.Context, env action.Env, params any) (action.Res
 	if p.Limit < 1 || p.Limit > 100 {
 		return action.Result{}, limitError(p.Limit, 100)
 	}
-	cat := env.Config.Clustering.EntityCatalog
-	rules, err := entitycatalog.Load(cat.ManualPath, cat.GeneratedPath)
+	rules, err := loadCatalog(env.Config.Clustering.EntityCatalog.ManualPath, env.Config.Clustering.EntityCatalog.GeneratedPath)
 	if err != nil {
 		return action.Result{}, err
 	}
-	results := []catalogResultJSON{}
+	type ranked struct {
+		rule eventsignals.EntityRule
+		tier int
+	}
+	var matches []ranked
 	for _, r := range rules {
-		if len(results) == p.Limit {
-			break
+		if tier := matchTier(r.CanonicalName, r.Terms, query); tier > 0 {
+			matches = append(matches, ranked{r, tier})
 		}
-		if !ruleMatches(r.CanonicalName, r.Terms, query) {
-			continue
-		}
+	}
+	sort.SliceStable(matches, func(i, j int) bool { return matches[i].tier < matches[j].tier })
+	if len(matches) > p.Limit {
+		matches = matches[:p.Limit]
+	}
+	results := make([]catalogResultJSON, 0, len(matches))
+	for _, m := range matches {
+		r := m.rule
 		results = append(results, catalogResultJSON{
 			ID: r.ID, Name: r.CanonicalName, Type: string(r.Kind), Team: r.TeamID, Terms: append([]string{}, r.Terms...),
 		})
@@ -187,14 +219,35 @@ func runCatalogSearch(_ context.Context, env action.Env, params any) (action.Res
 		Summary: fmt.Sprintf("%d catalog entit(ies) match", len(results))}, nil
 }
 
-func ruleMatches(name string, terms []string, query string) bool {
-	if strings.Contains(entityproposal.Normalize(name), query) {
-		return true
+// loadCatalog reads the manual catalog merged with the generated one; the
+// generated file is optional (it does not exist until entities.generate has
+// run), in which case the manual catalog alone is used.
+func loadCatalog(manualPath, generatedPath string) ([]eventsignals.EntityRule, error) {
+	if _, err := os.Stat(generatedPath); errors.Is(err, fs.ErrNotExist) {
+		return entitycatalog.LoadOne(manualPath)
 	}
-	for _, t := range terms {
-		if strings.Contains(entityproposal.Normalize(t), query) {
-			return true
+	return entitycatalog.Load(manualPath, generatedPath)
+}
+
+// matchTier ranks how well query matches an entity: 1 when the name or a term
+// equals it, 2 when one starts with it, 3 when one contains it, 0 for no
+// match. All comparisons use the normalised text.
+func matchTier(name string, terms []string, query string) int {
+	best := 0
+	for _, text := range append([]string{name}, terms...) {
+		n := entityproposal.Normalize(text)
+		tier := 0
+		switch {
+		case n == query:
+			return 1
+		case strings.HasPrefix(n, query):
+			tier = 2
+		case strings.Contains(n, query):
+			tier = 3
+		}
+		if tier != 0 && (best == 0 || tier < best) {
+			best = tier
 		}
 	}
-	return false
+	return best
 }
