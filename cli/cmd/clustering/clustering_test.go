@@ -256,3 +256,26 @@ func TestClusteringEvaluateCmd_GeneratedRulesFlag(t *testing.T) {
 		t.Errorf("Execute() with a malformed --generated-rules error = %v, want the unknown action reported", err)
 	}
 }
+
+func TestClusteringEvaluateCmd_GoldenOutput(t *testing.T) {
+	configPath, datasetPath := writeClusteringFixtures(t)
+
+	out, err := testsupport.Execute(t, "clustering", "evaluate", "--config", configPath, "--dataset", datasetPath)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	want := "articles: 2 total, 2 scored, 0 ambiguous-excluded\n" +
+		"pairwise: precision=1.000 recall=1.000 f1=1.000 (tp=1 fp=0 fn=0 tn=0)\n" +
+		"purity: 1.000\n" +
+		"over_grouped_clusters: 0\n" +
+		"fragmented_clusters: 0\n" +
+		"representative_accuracy: 1.000 (1/1 correct)\n" +
+		"ambiguous: expected=0 correctly_flagged=0 unexpected=0\n" +
+		"member_role_accuracy: 1.000 (2/2 correct)\n" +
+		"assignments (gold group x predicted cluster):\n" +
+		"  a1: gold=g1 predicted=cluster:a1 action=create role=first_report\n" +
+		"  a2: gold=g1 predicted=cluster:a1 action=join role=confirmation\n"
+	if out != want {
+		t.Errorf("output =\n%q\nwant\n%q", out, want)
+	}
+}

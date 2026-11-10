@@ -83,3 +83,46 @@ func TestBacktestLeague_LoadsTheConfiguredGeneratedRules(t *testing.T) {
 		t.Fatalf("err = %v; a malformed generated rules file must fail the backtest like the service startup", err)
 	}
 }
+
+func TestBacktestLeague_GoldenOutput(t *testing.T) {
+	cfgPath := testsupport.WriteFixture(t)
+	root := repofs.Path(t, "configs", "example")
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := "clustering:\n  enabled: true\n  event_threshold: 0.55\n  rules_path: " + filepath.Join(root, "event_clustering_rules.yml") +
+		"\n  entity_catalog:\n    manual_path: " + filepath.Join(root, "entity_catalog_manual.yml") +
+		"\n    generated_path: " + filepath.Join(root, "entity_catalog_generated.yml") + "\n  candidate_limit: 50\n"
+	patched := strings.Replace(string(raw), "clustering:\n  enabled: false\n", block, 1)
+	if err := os.WriteFile(cfgPath, []byte(patched), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	roster := filepath.Join(t.TempDir(), "roster.csv")
+	if err := os.WriteFile(roster, []byte("full_name,first_name,last_name,football_name,team,position,status,gsis_id,week\nAvery Placeholder,Avery,Placeholder,Avery,SHE,LB,ACT,g1,5\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(filepath.Dir(cfgPath), "operational.db")
+
+	out, err := testsupport.Execute(t, "backtest", "league", "--config", cfgPath, "--db", dbPath, "--days", "14",
+		"--roster", roster, "--league-rules", filepath.Join(root, "league_alias_rules.yml"))
+	if err != nil {
+		t.Fatalf("Execute() error = %v\n%s", err, out)
+	}
+	// The per-article extraction timing varies run to run; mask it.
+	var lines []string
+	for _, l := range strings.Split(out, "\n") {
+		if strings.HasPrefix(l, "extract time per article:") {
+			l = "extract time per article: <masked>"
+		}
+		lines = append(lines, l)
+	}
+	want := "articles: 0\n" +
+		"invariant: OK (nothing outside Entities, EntityMentions and UnknownEntities changed)\n" +
+		"league mentions: 0 in 0 articles\n" +
+		"unknown entities: 0 without league rules, 0 with\n" +
+		"extract time per article: <masked>\n"
+	if got := strings.Join(lines, "\n"); got != want {
+		t.Errorf("output =\n%q\nwant\n%q", got, want)
+	}
+}

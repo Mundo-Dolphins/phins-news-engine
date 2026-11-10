@@ -8,6 +8,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/app/clustereval"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/clusteringrules"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/evalwiring"
 )
 
 func NewCommand() *cobra.Command {
@@ -29,48 +30,10 @@ func newEvaluateCommand() *cobra.Command {
 				return err
 			}
 
-			rulesFile, err := clusteringrules.LoadWithEntityCatalog(
-				cfg.Clustering.RulesPath, cfg.Clustering.EntityCatalog.ManualPath, cfg.Clustering.EntityCatalog.GeneratedPath,
-			)
-			if err != nil {
-				return err
-			}
-
-			generatedPath := cfg.Clustering.GeneratedRulesPath
-			if generatedRulesPath != "" {
-				generatedPath = generatedRulesPath
-			}
-			rulesFile, genWarnings, err := clusteringrules.LoadWithGenerated(rulesFile, generatedPath)
-			if err != nil {
-				return err
-			}
-			for _, w := range genWarnings {
+			report, warnings, err := evalwiring.Clustering(cfg, datasetPath, generatedRulesPath)
+			for _, w := range warnings {
 				cmd.PrintErrln("warning: " + w)
 			}
-
-			dataset, err := clustereval.LoadDataset(datasetPath)
-			if err != nil {
-				return err
-			}
-
-			// now is derived from the dataset itself (its latest
-			// published_at) rather than the wall clock, so a given dataset
-			// always scores identically regardless of when this command
-			// runs — the "freshness"/"original content" representative-
-			// ranking signals (clustering.RepresentativeConfig) both read
-			// now, and this evaluator's whole point is reproducible,
-			// deterministic offline scoring (see clustereval.Evaluate's doc
-			// comment on the pure-function/no-wall-clock design it mirrors
-			// from clustering.DecideJoin/RankRepresentative themselves).
-			now := clustereval.LatestPublishedAt(dataset)
-
-			report, err := clustereval.Evaluate(
-				dataset,
-				rulesFile.ToEventSignalsRules(),
-				rulesFile.ToClusteringConfig(),
-				rulesFile.ToRepresentativeConfig(),
-				now,
-			)
 			if err != nil {
 				return err
 			}
@@ -79,7 +42,7 @@ func newEvaluateCommand() *cobra.Command {
 			return nil
 		},
 	}
-	evaluateCmd.Flags().StringVar(&datasetPath, "dataset", "testdata/clustering_groups.yml", "path to the labeled clustering evaluation dataset")
+	evaluateCmd.Flags().StringVar(&datasetPath, "dataset", evalwiring.DefaultClusteringDataset, "path to the labeled clustering evaluation dataset")
 	evaluateCmd.Flags().StringVar(&generatedRulesPath, "generated-rules", "", "path to a generated event rules file; overrides clustering.generated_rules_path")
 	return evaluateCmd
 }

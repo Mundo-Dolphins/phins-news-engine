@@ -25,6 +25,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/dictionary"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/editorial"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/entities"
+	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/evaluation"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/events"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/label"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/outbox"
@@ -72,6 +73,7 @@ func init() {
 	registry.Add(validation.Actions()...)
 	registry.Add(dictionary.Actions()...)
 	registry.Add(events.Actions()...)
+	registry.Add(evaluation.Actions()...)
 }
 
 // Add registers host actions, like cli.Add does for commands. Call it before

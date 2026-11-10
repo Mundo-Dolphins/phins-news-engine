@@ -5,9 +5,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/Mundo-Dolphins/phins-news-engine/app/dedupeval"
-	"github.com/Mundo-Dolphins/phins-news-engine/domain/deduplication"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/evalwiring"
 )
 
 func NewCommand() *cobra.Command {
@@ -27,23 +26,11 @@ func newEvaluateCommand() *cobra.Command {
 				return err
 			}
 
-			dataset, err := dedupeval.LoadDataset(datasetPath)
+			report, evaluated, err := evalwiring.Dedup(cfg, datasetPath)
 			if err != nil {
 				return err
 			}
 
-			nd := cfg.Deduplication.NearDuplicate
-			thresholdCfg := deduplication.ThresholdConfig{
-				DefaultThreshold:      nd.DefaultThreshold,
-				ThresholdBySourceType: nd.ThresholdBySourceType,
-				ShortTextMaxTokens:    nd.ShortTextMaxTokens,
-				ShortTextThreshold:    nd.ShortTextThreshold,
-				EventThreshold:        cfg.Clustering.EventThreshold,
-				RulesVersion:          nd.RulesVersion,
-			}
-			report := dedupeval.Evaluate(dataset, cfg.Normalization.Text.Policy(), thresholdCfg, nd.Method)
-
-			evaluated := len(dataset.Pairs) - report.Excluded
 			cmd.Printf("pairs: %d evaluated, %d excluded (ambiguous)\n", evaluated, report.Excluded)
 			cmd.Printf("overall: precision=%.3f recall=%.3f f1=%.3f\n", report.Overall.Precision(), report.Overall.Recall(), report.Overall.F1())
 			for st, m := range report.BySourceType {
@@ -61,6 +48,6 @@ func newEvaluateCommand() *cobra.Command {
 			return nil
 		},
 	}
-	evaluateCmd.Flags().StringVar(&datasetPath, "dataset", "testdata/dedup_pairs.yml", "path to the labeled dedup evaluation dataset")
+	evaluateCmd.Flags().StringVar(&datasetPath, "dataset", evalwiring.DefaultDedupDataset, "path to the labeled dedup evaluation dataset")
 	return evaluateCmd
 }

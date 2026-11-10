@@ -3,6 +3,8 @@ package dedup_test
 import (
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 
@@ -197,5 +199,31 @@ func TestDedupEvaluateCmd_MissingDatasetFileReturnsError(t *testing.T) {
 	_, err := testsupport.Execute(t, "dedup", "evaluate", "--config", configPath, "--dataset", filepath.Join(t.TempDir(), "missing.yml"))
 	if err == nil {
 		t.Fatal("Execute() error = nil, want an error for a missing dataset file")
+	}
+}
+
+func TestDedupEvaluateCmd_GoldenLineSet(t *testing.T) {
+	configPath, datasetPath := writeDedupFixture(t)
+
+	out, err := testsupport.Execute(t, "dedup", "evaluate", "--config", configPath, "--dataset", datasetPath)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	// Per-source, per-content-type and confusion lines come from map
+	// iteration, so the output is compared as a set of lines.
+	want := []string{
+		"pairs: 2 evaluated, 0 excluded (ambiguous)",
+		"overall: precision=1.000 recall=1.000 f1=1.000",
+		"source_type=rss: precision=1.000 recall=1.000 f1=1.000",
+		"content_type=article: precision=1.000 recall=1.000 f1=1.000",
+		"confusion matrix (predicted x gold):",
+		"  near_duplicate x same_content: 1",
+		"  none x different: 1",
+	}
+	got := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	sort.Strings(got)
+	sort.Strings(want)
+	if !slices.Equal(got, want) {
+		t.Errorf("output lines = %q, want %q", got, want)
 	}
 }

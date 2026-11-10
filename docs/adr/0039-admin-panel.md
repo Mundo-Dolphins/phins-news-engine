@@ -68,6 +68,17 @@ run them, without the panel ever endangering the running bot.
   uses both for `ocr.check` and `dictionary.fetch`). The logic lives in
   `infra/dictionarywiring`, `infra/eventrules`, `infra/configcheck` and
   `app/decisionaudit`, shared with the CLI.
+- **Step 2, batch 4.** Four evaluation actions in three groups:
+  `clustering.evaluate` and `dedup.evaluate` (production and local, both
+  read-only and long-running) and the local-only `backtest.candidate` (writes
+  its CSV) and `backtest.league` (read-only). In production the datasets and
+  `generated_rules` accept only the configured value. The backtests have no
+  `db` param: they read the panel's configured database, `backtest.league`
+  through its own read-only connection and never `env.DB`, and pass the
+  admin's settings file where the CLI passes `--config`. A violated league
+  invariant returns the report with a `FAILED:` summary. The host adds
+  `outbox.reconcile`. The logic lives in `infra/evalwiring`, shared with the
+  CLI.
 - **Production writes only operational state.** Reads everywhere, plus
   `claims.retry`, `claims.release`, `outbox.expire`, `outbox.repair` and the
   `label.*` writes. Training, promote and rollback are local-only and reach the Pi through the normal deploy; no CPU-heavy job runs
