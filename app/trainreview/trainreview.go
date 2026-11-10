@@ -66,12 +66,14 @@ type Deps struct {
 
 // Item is one queue entry joined with its article and label history.
 // Purged is true when the article no longer exists, in which case Article
-// is the zero value.
+// is the zero value. LLMReason is the queued proposal's own explanation,
+// empty when that proposal is no longer the article's latest.
 type Item struct {
 	Entry       reviewpriority.QueueEntry
 	Article     article.Article
 	PriorLabels []training.Example
 	Purged      bool
+	LLMReason   string
 }
 
 // Decide applies dec to the queue entry e: it writes the human label
@@ -123,8 +125,8 @@ func Decide(ctx context.Context, d Deps, e reviewpriority.QueueEntry, dec Decisi
 }
 
 // Queue returns up to limit queue entries, highest score first, each
-// joined with its article and label history. A purged article yields an
-// Item with Purged set and an empty Article.
+// joined with its article, label history and the queued proposal's reason.
+// A purged article yields an Item with Purged set and an empty Article.
 func Queue(ctx context.Context, d Deps, labels LabelHistory, limit int) ([]Item, error) {
 	entries, err := d.Queue.ListOrderedByScore(ctx, limit)
 	if err != nil {
@@ -148,6 +150,13 @@ func Queue(ctx context.Context, d Deps, labels LabelHistory, limit int) ([]Item,
 				return nil, fmt.Errorf("list labels %s: %w", e.ArticleID, err)
 			}
 			it.PriorLabels = prior
+		}
+		p, ok, err := d.Proposals.GetLatestByArticle(ctx, e.ArticleID)
+		if err != nil {
+			return nil, fmt.Errorf("find proposal %s: %w", e.ArticleID, err)
+		}
+		if ok && p.ID == e.ProposalID {
+			it.LLMReason = p.Reason
 		}
 		items = append(items, it)
 	}

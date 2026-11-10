@@ -15,6 +15,7 @@ function item(over: Record<string, unknown> = {}) {
     nb_value: 0.51,
     llm_label: "publish",
     llm_confidence: 0.7,
+    llm_reason: "The teacher thinks it is on topic.",
     suggested_label: "publish",
     purged: false,
     title: "First article",
@@ -48,6 +49,17 @@ describe("ReviewTrain", () => {
     expect(run).toHaveBeenCalledWith("train.review_queue", { limit: 50 }, false);
     expect(screen.getAllByText("A full summary.").length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Example News/).length).toBeGreaterThan(0);
+    expect(screen.getByText("The teacher thinks it is on topic.")).toBeTruthy();
+  });
+
+  it("offers a retry when the first load fails", async () => {
+    run.mockRejectedValueOnce(new ApiError(500, "internal", "boom"));
+    run.mockResolvedValueOnce(queue([item()]));
+    render(<ReviewTrain />);
+    expect(await screen.findByText(/Could not load the review queue: boom/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("heading", { name: "First article" })).toBeTruthy();
+    expect(run).toHaveBeenCalledTimes(2);
   });
 
   it("renders a javascript: URL as text, not a link", async () => {

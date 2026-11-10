@@ -79,7 +79,7 @@ func (e env) enqueue(t *testing.T, id string, score float64) reviewpriority.Queu
 	t.Helper()
 	ctx := context.Background()
 	pid, err := e.proposals.Save(ctx, editoriallabelproposal.Proposal{
-		ArticleID: id, Label: "publish", Confidence: 0.8, Reason: "r", Model: "m",
+		ArticleID: id, Label: "publish", Confidence: 0.8, Reason: "teacher reason " + id, Model: "m",
 		PromptVersion: "v1", PolicyVersion: "v1", Status: editoriallabelproposal.StatusPending, CreatedAt: testNow,
 	})
 	if err != nil {
@@ -212,6 +212,9 @@ func TestQueueJoinsArticleAndLabels(t *testing.T) {
 	if len(items) != 2 || items[0].Entry.ArticleID != "high" || items[1].Entry.ArticleID != "low" {
 		t.Fatalf("items = %+v, want [high, low]", items)
 	}
+	if items[0].LLMReason != "teacher reason high" {
+		t.Errorf("items[0].LLMReason = %q, want the proposal's reason", items[0].LLMReason)
+	}
 	if items[0].Article.Title != "Title high" || items[0].Purged {
 		t.Errorf("items[0] = %+v", items[0])
 	}
@@ -220,6 +223,28 @@ func TestQueueJoinsArticleAndLabels(t *testing.T) {
 	}
 	if len(items[1].PriorLabels) != 0 {
 		t.Errorf("low PriorLabels = %+v, want none", items[1].PriorLabels)
+	}
+}
+
+func TestQueueLLMReasonOnlyFromQueuedProposal(t *testing.T) {
+	e := newEnv(t)
+	entry := e.seed(t, "a1", 0.5)
+	// A newer proposal than the queued one must not lend its reason.
+	if err := e.proposals.UpdateStatus(context.Background(), entry.ProposalID, editoriallabelproposal.StatusRejected, testNow); err != nil {
+		t.Fatalf("resolve proposal: %v", err)
+	}
+	if _, err := e.proposals.Save(context.Background(), editoriallabelproposal.Proposal{
+		ArticleID: "a1", Label: "discard", Reason: "newer", Model: "m", PromptVersion: "v2", PolicyVersion: "v1",
+		Status: editoriallabelproposal.StatusPending, CreatedAt: testNow.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("save newer proposal: %v", err)
+	}
+	items, err := trainreview.Queue(context.Background(), e.deps, e.labels, 10)
+	if err != nil {
+		t.Fatalf("Queue() error = %v", err)
+	}
+	if len(items) != 1 || items[0].LLMReason != "" {
+		t.Fatalf("items = %+v, want one item with no LLM reason", items)
 	}
 }
 

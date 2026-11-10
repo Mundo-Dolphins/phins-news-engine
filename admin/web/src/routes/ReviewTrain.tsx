@@ -21,6 +21,8 @@ export interface TrainReviewItem {
   nb_value: number;
   llm_label: string;
   llm_confidence: number;
+  /** The LLM teacher's explanation of its proposal. */
+  llm_reason: string;
   suggested_label: string;
   purged: boolean;
   title: string;
@@ -69,9 +71,9 @@ function Original({ url }: { url: string }) {
   );
 }
 
-function Fact({ label, children }: { label: string; children: ComponentChildren }) {
+function Fact({ label, wide, children }: { label: string; wide?: boolean; children: ComponentChildren }) {
   return (
-    <div class="fact">
+    <div class={wide ? "fact wide" : "fact"}>
       <dt>{label}</dt>
       <dd>{children}</dd>
     </div>
@@ -114,14 +116,15 @@ function TrainItem({ t }: { t: TrainReviewItem }) {
         <Fact label="Suggested label">
           <strong>{t.suggested_label || "—"}</strong>
         </Fact>
-        <Fact label="LLM">
-          {t.llm_label || "—"} <span class="muted">confidence {num(t.llm_confidence)}</span>
-        </Fact>
         <Fact label="Naive Bayes">
           {t.nb_zone || "—"} <span class="muted">value {num(t.nb_value)}</span>
         </Fact>
         <Fact label="Priority">
           {num(t.score)} {t.reason && <span class="muted">({t.reason})</span>}
+        </Fact>
+        <Fact label="LLM teacher" wide>
+          {t.llm_label || "—"} <span class="muted">confidence {num(t.llm_confidence)}</span>
+          {t.llm_reason ? <p class="fact-note">{t.llm_reason}</p> : <p class="fact-note muted">No reason stored.</p>}
         </Fact>
       </dl>
       <h3>Prior human labels</h3>
@@ -232,7 +235,10 @@ export function ReviewTrain() {
       {items === null ? (
         notice ? (
           <p class="error" role="alert">
-            {notice.text}
+            {notice.text}{" "}
+            <button type="button" class="btn" onClick={() => load()}>
+              Retry
+            </button>
           </p>
         ) : (
           <p class="muted">Loading…</p>

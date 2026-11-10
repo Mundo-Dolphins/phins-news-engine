@@ -60,7 +60,7 @@ func (f fixture) seedReview(id, body string, score float64) string {
 		f.t.Fatalf("seed article: %v", err)
 	}
 	pid, err := sqliteeditoriallabelproposal.NewEditorialLabelProposalRepository(f.db).Save(ctx, editoriallabelproposal.Proposal{
-		ArticleID: id, Label: "publish", Confidence: 0.8, Reason: "r", Model: "m",
+		ArticleID: id, Label: "publish", Confidence: 0.8, Reason: "teacher reason " + id, Model: "m",
 		PromptVersion: "v1", PolicyVersion: "v1", Status: editoriallabelproposal.StatusPending, CreatedAt: now,
 	})
 	if err != nil {
@@ -139,7 +139,7 @@ func TestReviewQueueItems(t *testing.T) {
 	it := got.Items[0]
 	for k, want := range map[string]any{
 		"article_id": "a1", "proposal_id": pid, "score": 0.9, "reason": "uncertain", "nb_value": 0.4,
-		"llm_label": "publish", "llm_confidence": 0.8, "suggested_label": "publish", "purged": false,
+		"llm_label": "publish", "llm_confidence": 0.8, "llm_reason": "teacher reason a1", "suggested_label": "publish", "purged": false,
 		"title": "Title a1", "summary": "Summary a1", "url": "https://example.com/a1", "source_name": "Feed A",
 		"source_type": "rss", "domain": "example.com", "published_at": "2026-11-05T12:00:00Z", "cluster_id": "c-a1",
 	} {

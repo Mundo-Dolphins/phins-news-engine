@@ -79,7 +79,7 @@ func runReviewQueue(ctx context.Context, env action.Env, params any) (action.Res
 			"article_id": it.Entry.ArticleID, "proposal_id": it.Entry.ProposalID,
 			"score": it.Entry.Score, "reason": it.Entry.Reason,
 			"nb_zone": string(it.Entry.NBZone), "nb_value": it.Entry.NBValue,
-			"llm_label": it.Entry.LLMLabel, "llm_confidence": it.Entry.LLMConfidence,
+			"llm_label": it.Entry.LLMLabel, "llm_confidence": it.Entry.LLMConfidence, "llm_reason": it.LLMReason,
 			"suggested_label": it.Entry.SuggestedLabel, "purged": it.Purged,
 			"title": a.Title, "summary": a.Summary, "body": truncateRunes(a.Body, reviewBodyLimit),
 			"url": a.OriginalURL, "source_name": a.Source.Name, "source_type": string(a.Source.Type),

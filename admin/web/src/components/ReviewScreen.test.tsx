@@ -92,6 +92,16 @@ describe("ReviewScreen", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: /Publish/ }).hasAttribute("disabled")).toBe(false));
   });
 
+  it("ignores auto-repeated decision and skip keys but still moves on repeat", async () => {
+    const { onDecide, onSkip } = setup();
+    fireEvent.keyDown(window, { key: "p", repeat: true });
+    fireEvent.keyDown(window, { key: "s", repeat: true });
+    expect(onDecide).not.toHaveBeenCalled();
+    expect(onSkip).not.toHaveBeenCalled();
+    fireEvent.keyDown(window, { key: "j", repeat: true });
+    expect(screen.getByRole("heading", { name: "Item Bravo" })).toBeTruthy();
+  });
+
   it("calls onSkip on S", () => {
     const { onSkip } = setup();
     fireEvent.keyDown(window, { key: "s" });

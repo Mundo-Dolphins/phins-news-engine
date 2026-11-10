@@ -99,6 +99,8 @@ kbd { font-family: ui-monospace, monospace; font-size: .75em; padding: 0 5px; bo
 .fact { border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; }
 .fact dt { font-size: .8em; color: var(--muted); }
 .fact dd { margin: 0; word-break: break-word; }
+.fact.wide { grid-column: 1 / -1; }
+.fact-note { margin: 4px 0 0; line-height: 1.55; white-space: pre-wrap; }
 .review-ids { font-size: .85em; margin: 18px 0 0; word-break: break-all; }
 .review-purged { margin: 0; padding: 10px 12px; border-radius: 6px; background: var(--warn-bg); color: var(--warn-fg); }
 .review-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 20px; border-top: 1px solid var(--border); position: sticky; bottom: 0; background: var(--card); border-radius: 0 0 8px 8px; }
@@ -110,4 +112,6 @@ kbd { font-family: ui-monospace, monospace; font-size: .75em; padding: 0 5px; bo
 @media (max-width: 720px) {
   .review-grid { grid-template-columns: 1fr; }
   .review-queue { position: static; max-height: 30vh; }
+  .review-bar { position: static; }
+  .review-keys { display: none; }
 }

@@ -52,6 +52,10 @@ function NoticeLine({ notice }: { notice: Notice }) {
  *
  * O clicks the first `a[data-review-open]` inside the rendered item, so a
  * renderer marks its link to the original with that attribute.
+ *
+ * J, K, S and O are reserved and checked before `decisions[].key`, so a
+ * decision must use another letter. Auto-repeated key presses (a held key)
+ * only move the selection; they never decide, skip or open.
  */
 export function ReviewScreen<T>(props: ReviewScreenProps<T>) {
   const { items, itemKey, decisions } = props;
@@ -107,6 +111,8 @@ export function ReviewScreen<T>(props: ReviewScreenProps<T>) {
     const key = e.key.toLowerCase();
     if (key === "j" || key === "arrowdown") select(index + 1);
     else if (key === "k" || key === "arrowup") select(index - 1);
+    // A held key auto-repeats: only movement may repeat, never a decision.
+    else if (e.repeat) return;
     else if (key === "s") skip();
     else if (key === "o") panel.current?.querySelector<HTMLAnchorElement>("a[data-review-open]")?.click();
     else {
