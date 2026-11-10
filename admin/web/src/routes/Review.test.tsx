@@ -9,6 +9,7 @@ describe("Review index", () => {
     vi.mocked(getSession).mockResolvedValue({ username: "ana", mode: "local" });
     render(<Review />);
     expect(await screen.findByRole("link", { name: /Train review/ })).toBeTruthy();
+    expect(screen.getByRole("link", { name: /Dataset review/ }).getAttribute("href")).toBe("/review/dataset");
   });
 
   it("says the screens are local-only in production mode", async () => {

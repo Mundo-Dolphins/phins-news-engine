@@ -11,6 +11,12 @@ export function Review() {
           <span class="review-card-title">Train review</span>
           <span class="muted">Publish or discard the LLM teacher's proposals as human labels (shortcuts P, D, S).</span>
         </a>
+        <a class="card review-card" href="/review/dataset">
+          <span class="review-card-title">Dataset review</span>
+          <span class="muted">
+            Relabel or confirm the audited rows of the training dataset in a reviewed copy (shortcuts P, R, C, S).
+          </span>
+        </a>
       </div>
     </LocalOnly>
   );

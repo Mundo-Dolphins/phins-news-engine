@@ -81,7 +81,8 @@ type shadowCompareParams struct {
 // train.evaluate, train.mine, train.shadow_compare, train.run,
 // train.promote, train.rollback, train.audit_dataset, train.audit_gates,
 // train.recheck_corpus, train.backfill_rejects, train.import_labels,
-// train.review_queue and train.review_decide.
+// train.review_queue, train.review_decide, train.review_dataset_queue and
+// train.review_dataset_decide.
 func Actions() []action.Action {
 	return []action.Action{
 		{
@@ -163,6 +164,16 @@ func Actions() []action.Action {
 			Name: "train.review_decide", Group: group, Title: "Decide review item",
 			Description: "Publishes or discards one queued article: writes the human label, resolves the LLM proposal and removes the queue entry.",
 			Kind:        action.KindWrite, Modes: localOnly, Params: reviewDecideParams{}, Run: runReviewDecide,
+		},
+		{
+			Name: "train.review_dataset_queue", Group: group, Title: "Dataset review queue",
+			Description: "Lists the dataset audit rows still awaiting a human decision, with the article link when the article is still stored.",
+			Kind:        action.KindRead, Modes: localOnly, Params: reviewDatasetQueueParams{}, Run: runReviewDatasetQueue,
+		},
+		{
+			Name: "train.review_dataset_decide", Group: group, Title: "Decide dataset row",
+			Description: "Records publish, reject or confirm for one dataset audit row in the reviewed copy and its decision log; the source dataset is never modified.",
+			Kind:        action.KindWrite, Modes: localOnly, Params: reviewDatasetDecideParams{}, Run: runReviewDatasetDecide,
 		},
 	}
 }

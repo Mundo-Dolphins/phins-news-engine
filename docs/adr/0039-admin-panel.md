@@ -101,6 +101,26 @@ run them, without the panel ever endangering the running bot.
   and links use their own colour tokens with at least 4.5:1 contrast in
   both themes. The per-item logic lives in `app/trainreview`, shared with
   the CLI.
+- **Phase 2, part 2: dataset review.** `train review-dataset` becomes
+  `/review/dataset` on the same screen, over two local-only actions:
+  `train.review_dataset_queue` (read) returns the audit CSV rows not yet in
+  the decision log, each with its dataset fields and the original URL from
+  the operational database when the article is still stored (otherwise the
+  card shows only the domain), and `train.review_dataset_decide` (write)
+  applies `publish` or `reject` (relabel) or `confirm` (keep the label),
+  shortcuts `P`, `R`, `C` (the CLI's `k` is taken by "previous"). Files and
+  defaults are the CLI's: dataset `data/editorial_dataset.yml` (never
+  modified), audit `data/editorial_dataset-review.csv`, reviewed copy
+  `data/editorial_dataset-reviewed.yml` and log `<out>.review.csv`; the
+  screen shows the three paths as editable fields. Each decision rewrites
+  the copy and its manifest and appends one log line with the CLI's field
+  changes; the reviewer is the bare panel username, or `mcp`. Reopening the
+  screen shows only pending rows. A copy that no longer matches the dataset
+  is a `conflict` with the CLI's message, `out` equal to the dataset is
+  invalid, and a row already in the log is a `conflict` the screen shows as
+  a notice. Panel writes are serialised; the CLI is not, so reviewing the
+  same copy from both at once can lose decisions (the screen says so). The
+  logic lives in `app/datasetreview`, shared with the CLI.
 - **Production writes only operational state.** Reads everywhere, plus
   `claims.retry`, `claims.release`, `outbox.expire`, `outbox.repair` and the
   `label.*` writes. Training, promote and rollback are local-only and reach the Pi through the normal deploy; no CPU-heavy job runs

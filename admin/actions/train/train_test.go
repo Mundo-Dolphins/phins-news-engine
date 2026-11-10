@@ -96,21 +96,23 @@ func TestMetadata(t *testing.T) {
 		title       string
 	}
 	cases := map[string]want{
-		"train.analyze":          {action.KindRead, 2, false, false, "Analyze training signals"},
-		"train.run":              {action.KindDestructive, 1, true, true, "Run training pipeline"},
-		"train.promote":          {action.KindDestructive, 1, false, true, "Promote candidate model"},
-		"train.rollback":         {action.KindDestructive, 1, false, true, "Roll back model"},
-		"train.build":            {action.KindWrite, 1, false, false, "Build training dataset"},
-		"train.evaluate":         {action.KindWrite, 1, true, true, "Evaluate candidate models"},
-		"train.mine":             {action.KindWrite, 1, true, true, "Mine hard examples"},
-		"train.shadow_compare":   {action.KindWrite, 1, true, false, "Shadow-compare candidate model"},
-		"train.audit_dataset":    {action.KindWrite, 1, false, false, "Audit dataset"},
-		"train.audit_gates":      {action.KindWrite, 1, false, false, "Audit dataset against the gates"},
-		"train.recheck_corpus":   {action.KindRead, 2, false, false, "Recheck corpus against the dictionary"},
-		"train.backfill_rejects": {action.KindWrite, 1, false, true, "Backfill reject labels"},
-		"train.import_labels":    {action.KindWrite, 1, false, true, "Import labels"},
-		"train.review_queue":     {action.KindRead, 1, false, false, "Review queue"},
-		"train.review_decide":    {action.KindWrite, 1, false, false, "Decide review item"},
+		"train.analyze":               {action.KindRead, 2, false, false, "Analyze training signals"},
+		"train.run":                   {action.KindDestructive, 1, true, true, "Run training pipeline"},
+		"train.promote":               {action.KindDestructive, 1, false, true, "Promote candidate model"},
+		"train.rollback":              {action.KindDestructive, 1, false, true, "Roll back model"},
+		"train.build":                 {action.KindWrite, 1, false, false, "Build training dataset"},
+		"train.evaluate":              {action.KindWrite, 1, true, true, "Evaluate candidate models"},
+		"train.mine":                  {action.KindWrite, 1, true, true, "Mine hard examples"},
+		"train.shadow_compare":        {action.KindWrite, 1, true, false, "Shadow-compare candidate model"},
+		"train.audit_dataset":         {action.KindWrite, 1, false, false, "Audit dataset"},
+		"train.audit_gates":           {action.KindWrite, 1, false, false, "Audit dataset against the gates"},
+		"train.recheck_corpus":        {action.KindRead, 2, false, false, "Recheck corpus against the dictionary"},
+		"train.backfill_rejects":      {action.KindWrite, 1, false, true, "Backfill reject labels"},
+		"train.import_labels":         {action.KindWrite, 1, false, true, "Import labels"},
+		"train.review_queue":          {action.KindRead, 1, false, false, "Review queue"},
+		"train.review_decide":         {action.KindWrite, 1, false, false, "Decide review item"},
+		"train.review_dataset_queue":  {action.KindRead, 1, false, false, "Dataset review queue"},
+		"train.review_dataset_decide": {action.KindWrite, 1, false, false, "Decide dataset row"},
 	}
 	as := train.Actions()
 	if len(as) != len(cases) {
