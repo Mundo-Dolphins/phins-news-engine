@@ -11,8 +11,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -258,14 +260,36 @@ func MergeTrainingExamples(groups ...[]TrainingExample) ([]TrainingExample, erro
 	return merged, nil
 }
 
+// writeFileAtomic writes data (mode 0600) to a temp file in path's directory
+// and renames it over path, so a crash or a concurrent reader never sees a
+// truncated file.
+func writeFileAtomic(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+"-*.tmp") // CreateTemp creates the file with mode 0600.
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	_, writeErr := tmp.Write(data)
+	closeErr := tmp.Close()
+	if err := errors.Join(writeErr, closeErr); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	return nil
+}
+
 // SaveDataset marshals examples into the same YAML shape LoadDataset
-// reads and writes it to path.
+// reads and writes it to path atomically (temp file plus rename).
 func SaveDataset(path string, examples []TrainingExample) error {
 	data, err := yaml.Marshal(datasetFile{Examples: examples})
 	if err != nil {
 		return fmt.Errorf("editorialtrain: marshal dataset: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	if err := writeFileAtomic(path, data); err != nil {
 		return fmt.Errorf("editorialtrain: write dataset %s: %w", path, err)
 	}
 	return nil
@@ -369,7 +393,7 @@ func WriteManifest(datasetPath string, examples []TrainingExample, hash string, 
 	if err != nil {
 		return fmt.Errorf("editorialtrain: marshal dataset manifest: %w", err)
 	}
-	if err := os.WriteFile(datasetPath+".manifest.json", data, 0o600); err != nil {
+	if err := writeFileAtomic(datasetPath+".manifest.json", data); err != nil {
 		return fmt.Errorf("editorialtrain: write dataset manifest for %s: %w", datasetPath, err)
 	}
 	return nil

@@ -162,7 +162,7 @@ function ReviewDatasetScreen() {
   // Field values; they take effect on Apply.
   const [form, setForm] = useState<DatasetPaths>({ dataset: "", audit: "", out: "" });
   // Paths of the last Apply; null means the action's defaults.
-  const applied = useRef<DatasetPaths | null>(null);
+  const applied = useRef<Partial<DatasetPaths> | null>(null);
   // Skipped and decided rows stay hidden for this page session, also across
   // refreshes that raced a decision. Reset when other files are applied.
   const [hidden, setHidden] = useState<Set<string>>(() => new Set());
@@ -178,9 +178,10 @@ function ReviewDatasetScreen() {
       if ("job" in out) throw new Error("unexpected job for train.review_dataset_queue");
       const q = out.result.object as DatasetQueue;
       // Decisions go to the files the queue came from.
-      applied.current = { dataset: q.paths.dataset, audit: q.paths.audit, out: q.paths.out };
+      const paths = { dataset: q.paths.dataset, audit: q.paths.audit, out: q.paths.out };
+      applied.current = paths;
       setQueue(q);
-      if (fillForm) setForm({ ...applied.current });
+      if (fillForm) setForm(paths);
       setNotice(undefined);
     } catch (e) {
       setNotice({ kind: "error", text: "Could not load the dataset review: " + errorText(e) });
@@ -193,7 +194,8 @@ function ReviewDatasetScreen() {
 
   const apply = (e: Event) => {
     e.preventDefault();
-    applied.current = { ...form };
+    // An emptied field is left out so the action's default applies.
+    applied.current = Object.fromEntries(Object.entries(form).filter(([, v]) => v.trim() !== ""));
     setQueue(null);
     setHidden(new Set());
     setDecided(new Set());

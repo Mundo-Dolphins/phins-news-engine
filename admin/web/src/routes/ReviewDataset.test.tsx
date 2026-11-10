@@ -166,6 +166,22 @@ describe("ReviewDataset", () => {
     );
   });
 
+  it("does not send a cleared path field as an empty string", async () => {
+    run.mockResolvedValueOnce(queue([item()]));
+    run.mockResolvedValueOnce(queue([item()]));
+    render(<ReviewDataset />);
+    await screen.findByRole("heading", { name: "First article" });
+    fireEvent.input(screen.getByLabelText("Audit"), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await waitFor(() =>
+      expect(run).toHaveBeenLastCalledWith(
+        "train.review_dataset_queue",
+        { dataset: PATHS.dataset, out: PATHS.out },
+        false,
+      ),
+    );
+  });
+
   it("keeps unapplied path edits and the loaded paths on a tab refresh", async () => {
     run.mockResolvedValue(queue([item()]));
     render(<ReviewDataset />);

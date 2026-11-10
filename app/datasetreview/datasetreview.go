@@ -49,6 +49,11 @@ var (
 	ErrResumeMismatch = errors.New("review output does not match source snapshot")
 	// ErrAbsentFromDataset means an audit row is not in the dataset.
 	ErrAbsentFromDataset = errors.New("audit article is absent from the dataset")
+	// ErrInvalidAudit means the audit CSV is malformed: unreadable header or
+	// rows, missing columns or an empty article_id.
+	ErrInvalidAudit = errors.New("invalid audit CSV")
+	// ErrInvalidLog means the decision log cannot be parsed.
+	ErrInvalidLog = errors.New("invalid decision log")
 	// ErrNotInAudit means a decision targets an article that is not an audit row.
 	ErrNotInAudit = errors.New("article is not in the audit")
 	// ErrAlreadyReviewed means the article already has a logged decision.
@@ -96,7 +101,7 @@ func ReadAuditCandidates(r io.Reader) ([]datasetaudit.Candidate, error) {
 	cr.TrimLeadingSpace = true
 	header, err := cr.Read()
 	if err != nil {
-		return nil, fmt.Errorf("read audit CSV header: %w", err)
+		return nil, &kindError{fmt.Sprintf("read audit CSV header: %v", err), ErrInvalidAudit}
 	}
 	columns := make(map[string]int, len(header))
 	for i, name := range header {
@@ -105,7 +110,7 @@ func ReadAuditCandidates(r io.Reader) ([]datasetaudit.Candidate, error) {
 	idCol, hasID := columns["article_id"]
 	reasonCol, hasReason := columns["audit_reason"]
 	if !hasID || !hasReason {
-		return nil, fmt.Errorf("audit CSV must contain article_id and audit_reason columns")
+		return nil, &kindError{"audit CSV must contain article_id and audit_reason columns", ErrInvalidAudit}
 	}
 	var out []datasetaudit.Candidate
 	seen := map[string]bool{}
@@ -115,11 +120,11 @@ func ReadAuditCandidates(r io.Reader) ([]datasetaudit.Candidate, error) {
 			break
 		}
 		if readErr != nil {
-			return nil, fmt.Errorf("read audit CSV line %d: %w", line, readErr)
+			return nil, &kindError{fmt.Sprintf("read audit CSV line %d: %v", line, readErr), ErrInvalidAudit}
 		}
 		id := strings.TrimSpace(record[idCol])
 		if id == "" {
-			return nil, fmt.Errorf("audit CSV line %d has an empty article_id", line)
+			return nil, &kindError{fmt.Sprintf("audit CSV line %d has an empty article_id", line), ErrInvalidAudit}
 		}
 		if seen[id] {
 			continue
@@ -163,7 +168,7 @@ func ReadLog(path string) ([]LogEntry, error) {
 	defer f.Close()
 	records, err := csv.NewReader(f).ReadAll()
 	if err != nil {
-		return nil, fmt.Errorf("read decision log %s: %w", path, err)
+		return nil, &kindError{fmt.Sprintf("read decision log %s: %v", path, err), ErrInvalidLog}
 	}
 	var entries []LogEntry
 	for i, rec := range records {
@@ -171,11 +176,11 @@ func ReadLog(path string) ([]LogEntry, error) {
 			continue
 		}
 		if len(rec) != len(logHeader) {
-			return nil, fmt.Errorf("decision log %s line %d has %d fields, want %d", path, i+1, len(rec), len(logHeader))
+			return nil, &kindError{fmt.Sprintf("decision log %s line %d has %d fields, want %d", path, i+1, len(rec), len(logHeader)), ErrInvalidLog}
 		}
 		at, parseErr := time.Parse(time.RFC3339Nano, rec[5])
 		if parseErr != nil {
-			return nil, fmt.Errorf("decision log %s line %d: %w", path, i+1, parseErr)
+			return nil, &kindError{fmt.Sprintf("decision log %s line %d: %v", path, i+1, parseErr), ErrInvalidLog}
 		}
 		entries = append(entries, LogEntry{ArticleID: rec[0], Previous: rec[1], Label: rec[2], Audit: rec[3], Reviewer: rec[4], Reviewed: at})
 	}
@@ -352,6 +357,8 @@ func (s *Session) Apply(articleID string, d Decision, reviewer string, now time.
 // Save writes the working copy and its manifest, appends entries to the
 // decision log and marks them logged.
 func (s *Session) Save(now time.Time, entries []LogEntry) error {
+	// The copy goes before the log on purpose: a failure after the copy
+	// leaves the row pending, so the decision is repeated rather than lost.
 	if err := editorialtrain.SaveDataset(s.Paths.Out, s.Examples); err != nil {
 		return err
 	}

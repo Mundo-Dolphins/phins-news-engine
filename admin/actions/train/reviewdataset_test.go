@@ -14,9 +14,9 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/app/editorialtrain"
 )
 
-// datasetFiles writes a temp dataset (a1 reject, a2 publish, a3 from an
-// excluded source) and an audit CSV listing a1 and a2, returning the
-// params JSON fragment naming the three paths.
+// datasetFiles writes a temp dataset (a1 reject, a2 publish, a3 from the
+// excluded source rss:official) and an audit CSV listing a1 and a2,
+// returning the dataset, audit and out paths.
 func datasetFiles(t *testing.T) (dataset, audit, out string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -169,9 +169,7 @@ func TestDatasetDecideWritesCopyAndLog(t *testing.T) {
 			t.Fatalf("log = %+v, %v; want reviewer %s", entries, err, want)
 		}
 		if _, err := os.Stat(out + ".manifest.json"); err != nil {
-			if m, _ := filepath.Glob(out + "*"); len(m) < 3 {
-				t.Errorf("manifest missing, files = %v", m)
-			}
+			t.Errorf("manifest: %v", err)
 		}
 	}
 }
@@ -240,7 +238,68 @@ func TestDatasetDecideBadDecision(t *testing.T) {
 	f := newFixture(t)
 	_, _, _, params := f.datasetFixture()
 	_, err := f.run("train.review_dataset_decide", `{`+params+`,"article_id":"a1","decision":"skip"}`)
-	if err == nil {
-		t.Fatal("want error")
+	wantCode(t, err, action.CodeInvalidParams)
+}
+
+func TestDatasetExcludedAuditRowIsConflict(t *testing.T) {
+	f := newFixture(t)
+	d, a, o, params := f.datasetFixture()
+	if err := os.WriteFile(a, []byte("article_id,audit_reason\na1,r1\na3,r3\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_ = d
+	_, err := f.run("train.review_dataset_queue", "{"+params+"}")
+	wantCode(t, err, action.CodeConflict)
+	if !strings.Contains(err.Error(), "audit article a3 is absent from the dataset") {
+		t.Errorf("err = %v", err)
+	}
+	_, err = f.run("train.review_dataset_decide", `{`+params+`,"article_id":"a1","decision":"publish"}`)
+	wantCode(t, err, action.CodeConflict)
+	if _, statErr := os.Stat(o); statErr == nil {
+		t.Error("copy written")
+	}
+}
+
+func TestDatasetMissingFileIsNotFound(t *testing.T) {
+	f := newFixture(t)
+	_, a, _, params := f.datasetFixture()
+	if err := os.Remove(a); err != nil {
+		t.Fatal(err)
+	}
+	_, err := f.run("train.review_dataset_queue", "{"+params+"}")
+	wantCode(t, err, action.CodeNotFound)
+	if !strings.Contains(err.Error(), a) {
+		t.Errorf("err = %v, want it to name %s", err, a)
+	}
+}
+
+func TestDatasetBadAuditIsInvalidParams(t *testing.T) {
+	f := newFixture(t)
+	_, a, _, params := f.datasetFixture()
+	if err := os.WriteFile(a, []byte("id,why\na1,r1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := f.run("train.review_dataset_queue", "{"+params+"}")
+	wantCode(t, err, action.CodeInvalidParams)
+	if !strings.Contains(err.Error(), "article_id and audit_reason") {
+		t.Errorf("err = %v", err)
+	}
+	if err := os.WriteFile(a, []byte("article_id,audit_reason\n ,r1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.run("train.review_dataset_queue", "{"+params+"}")
+	wantCode(t, err, action.CodeInvalidParams)
+}
+
+func TestDatasetCorruptLogIsInvalidParams(t *testing.T) {
+	f := newFixture(t)
+	_, _, out, params := f.datasetFixture()
+	if err := os.WriteFile(out+".review.csv", []byte("article_id,previous_label\na1,x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := f.run("train.review_dataset_queue", "{"+params+"}")
+	wantCode(t, err, action.CodeInvalidParams)
+	if !strings.Contains(err.Error(), "decision log") {
+		t.Errorf("err = %v", err)
 	}
 }

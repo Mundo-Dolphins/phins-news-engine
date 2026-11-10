@@ -274,3 +274,31 @@ func TestApplyPendingRefusesLogged(t *testing.T) {
 		t.Fatalf("Apply on logged row: %v", err)
 	}
 }
+
+func TestSaveIsAtomicAndLeavesNoTempFiles(t *testing.T) {
+	p := fixture(t)
+	s := open(t, p)
+	entry, _ := s.Apply("a1", datasetreview.Publish, "rev", testNow)
+	if err := s.Save(testNow, []datasetreview.LogEntry{entry}); err != nil {
+		t.Fatal(err)
+	}
+	copyInfo, _ := os.Stat(p.Out)
+	manifestInfo, _ := os.Stat(p.Out + ".manifest.json")
+	entry2, _ := s.Apply("a2", datasetreview.Reject, "rev", testNow)
+	if err := s.Save(testNow, []datasetreview.LogEntry{entry2}); err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := os.Stat(p.Out); os.SameFile(copyInfo, after) {
+		t.Error("copy was rewritten in place; want a temp file renamed over it")
+	}
+	if after, _ := os.Stat(p.Out + ".manifest.json"); os.SameFile(manifestInfo, after) {
+		t.Error("manifest was rewritten in place; want a temp file renamed over it")
+	}
+	if after, _ := os.Stat(p.Out); after.Mode().Perm() != 0o600 {
+		t.Errorf("copy mode = %v, want 0600", after.Mode().Perm())
+	}
+	names, _ := filepath.Glob(filepath.Join(filepath.Dir(p.Out), "*"))
+	if len(names) != 5 { // dataset, audit, copy, manifest, log
+		t.Errorf("dir files = %v, want exactly the five session files", names)
+	}
+}

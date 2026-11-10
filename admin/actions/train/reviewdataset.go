@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 
 	sqliteadapter "github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqlite"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/action"
@@ -44,8 +45,11 @@ func openDatasetReview(env action.Env, p datasetreview.Paths) (*datasetreview.Se
 	switch {
 	case err == nil:
 		return s, nil
-	case errors.Is(err, datasetreview.ErrSamePath):
+	case errors.Is(err, datasetreview.ErrSamePath), errors.Is(err, datasetreview.ErrInvalidAudit), errors.Is(err, datasetreview.ErrInvalidLog):
 		return nil, &action.Error{Code: action.CodeInvalidParams, Message: err.Error()}
+	case errors.Is(err, fs.ErrNotExist):
+		// The os error already names the missing path.
+		return nil, action.NotFound(err)
 	case errors.Is(err, datasetreview.ErrResumeMismatch), errors.Is(err, datasetreview.ErrAbsentFromDataset), errors.Is(err, datasetreview.ErrEmptyAudit):
 		return nil, action.Conflict(err)
 	}
