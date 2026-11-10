@@ -105,6 +105,13 @@ kbd { font-family: ui-monospace, monospace; font-size: .75em; padding: 0 5px; bo
 .review-purged { margin: 0; padding: 10px 12px; border-radius: 6px; background: var(--warn-bg); color: var(--warn-fg); }
 .review-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 20px; border-top: 1px solid var(--border); position: sticky; bottom: 0; background: var(--card); border-radius: 0 0 8px 8px; }
 .review-keys { font-size: .85em; }
+.review-reason { margin: 0 0 12px; padding: 8px 12px; border-radius: 6px; background: var(--warn-bg); color: var(--warn-fg); font-weight: 600; line-height: 1.5; }
+.review-domain { color: var(--fg); margin-right: 6px; }
+.dataset-paths { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; gap: 8px 12px; align-items: end; margin: 0 0 8px; }
+.dataset-paths input { width: 100%; font-family: ui-monospace, monospace; font-size: .9em; }
+.dataset-status { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin: 0 0 12px; }
+.dataset-count strong { font-size: 1.1rem; }
+.dataset-warning { padding: 2px 8px; border-radius: 4px; background: var(--warn-bg); color: var(--warn-fg); font-size: .9em; }
 .review-index { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
 .review-card { gap: 4px; color: var(--fg); text-decoration: none; }
 .review-card:hover { border-color: var(--accent); }
@@ -114,4 +121,5 @@ kbd { font-family: ui-monospace, monospace; font-size: .75em; padding: 0 5px; bo
   .review-queue { position: static; max-height: 30vh; }
   .review-bar { position: static; }
   .review-keys { display: none; }
+  .dataset-paths { grid-template-columns: 1fr; }
 }

@@ -10,6 +10,7 @@ import { JobDetail } from "./routes/JobDetail";
 import { Audit } from "./routes/Audit";
 import { Review } from "./routes/Review";
 import { ReviewTrain } from "./routes/ReviewTrain";
+import { ReviewDataset } from "./routes/ReviewDataset";
 import "./style.css";
 
 function NotFound() {
@@ -29,6 +30,7 @@ function App() {
       <Route path="/audit" component={Audit} />
       <Route path="/review" component={Review} />
       <Route path="/review/train" component={ReviewTrain} />
+      <Route path="/review/dataset" component={ReviewDataset} />
       <Route default component={NotFound} />
     </Router>
   );
