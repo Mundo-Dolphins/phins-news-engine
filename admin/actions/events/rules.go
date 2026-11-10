@@ -31,6 +31,10 @@ var newDiscoveryLLM = func(cfg config.OfflineTrainingLLMConfig) appout.EventRule
 // `events review`; a variable so tests can point it at a fixture.
 var gateDatasetPath = eventrules.DefaultDatasetPath
 
+// afterRejectFailingListed, when set, runs between listing and rejecting in
+// events.rules_reject_failing; tests use it to decide a proposal in between.
+var afterRejectFailingListed func()
+
 type ruleDecideParams struct {
 	ID       string `json:"id" help:"event rule phrase proposal id" required:"true"`
 	Decision string `json:"decision" help:"accept, reject or edit" enum:"accept,reject,edit" required:"true"`
@@ -296,6 +300,13 @@ func runRulesDecide(ctx context.Context, env action.Env, params any) (action.Res
 			Summary: fmt.Sprintf("Event rule %q approved.", decided.Phrase)}, nil
 	}
 	a, err := eventrulecycle.Edit(ctx, d, c, cur, p.Phrase, opts, env.Now(), !p.Preview)
+	if p.Preview && errors.Is(err, eventrulecycle.ErrEditFailsChecks) {
+		// A preview reports a failing phrase as a result the editor shows.
+		obj := assessmentObject(a)
+		obj["preview"], obj["id"] = true, ""
+		return action.Result{Render: "object", Object: obj,
+			Summary: fmt.Sprintf("Preview of %q does not pass: %s", a.Proposal.Phrase, strings.Join(reasonsOf(a), "; "))}, nil
+	}
 	if err != nil {
 		return action.Result{}, ruleError(err)
 	}
@@ -319,8 +330,20 @@ func runRulesRejectFailing(ctx context.Context, env action.Env, _ any) (action.R
 		return action.Result{}, err
 	}
 	rejected := []map[string]any{}
+	if afterRejectFailingListed != nil {
+		afterRejectFailingListed()
+	}
 	for _, a := range pending {
 		if !failing(a) {
+			continue
+		}
+		// Reject also accepts approved rows, so re-read: only a proposal
+		// still pending is rejected, never one approved since the listing.
+		cur, err := d.Proposals.Get(ctx, a.Proposal.ID)
+		if err != nil {
+			return action.Result{}, ruleError(err)
+		}
+		if cur.Status != eventruleproposal.StatusPending {
 			continue
 		}
 		if _, err := eventrulecycle.Reject(ctx, d, a.Proposal, env.Now()); err != nil {
@@ -359,6 +382,7 @@ func runRulesApply(ctx context.Context, env action.Env, _ any) (action.Result, e
 	if r.Candidate != nil {
 		obj["before"], obj["after"] = metricsOf(r.Gate.Before), metricsOf(r.Gate.After)
 		obj["dataset"] = eventrulecycle.GateExercise(r.Gate.Affected)
+		obj["affected"] = r.Gate.Affected
 	}
 	switch {
 	case r.Nothing:

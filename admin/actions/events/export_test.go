@@ -20,3 +20,10 @@ func SetGateDataset(path string) func() {
 	gateDatasetPath = path
 	return func() { gateDatasetPath = old }
 }
+
+// SetAfterRejectFailingListed installs a hook that runs between listing and
+// rejecting in events.rules_reject_failing and returns the restore function.
+func SetAfterRejectFailingListed(f func()) func() {
+	afterRejectFailingListed = f
+	return func() { afterRejectFailingListed = nil }
+}

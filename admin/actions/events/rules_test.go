@@ -11,6 +11,7 @@ import (
 	"time"
 
 	sqliteadapter "github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqlite"
+	"github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqliteeventruleproposal"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/action"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/events"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/article"
@@ -368,6 +369,9 @@ func TestRulesApplyPassWritesAndMarks(t *testing.T) {
 		t.Errorf("summary = %q", res.Summary)
 	}
 	m := asMap(t, res.Object)
+	if _, ok := m["affected"].(float64); !ok {
+		t.Errorf("affected missing: %v", m)
+	}
 	if len(list(t, m, "applied")) != 1 || m["before"] == nil || m["after"] == nil || m["blocked"] == true {
 		t.Errorf("object = %v", m)
 	}
@@ -430,5 +434,92 @@ func TestRulesQueueEmpty(t *testing.T) {
 	m := asMap(t, res.Object)
 	if len(list(t, m, "items")) != 0 || len(list(t, m, "no_evidence")) != 0 || len(list(t, m, "approved")) != 0 || m["sampled"] != float64(0) {
 		t.Errorf("object = %v", m)
+	}
+}
+
+func TestRulesDecideEditPreviewFailingIsResult(t *testing.T) {
+	f := newFixture(t)
+	f.seedGeneric("art-1", "Springfield Isotopes inks a deal with Tavion Dale")
+	orig := f.seed(rulePhrase("inks a deal", "art-1"))
+	res, err := f.run("events.rules_decide", `{"id":"`+orig+`","decision":"edit","phrase":"deal","preview":true}`)
+	if err != nil {
+		t.Fatalf("err = %v, want a result", err)
+	}
+	m := asMap(t, res.Object)
+	if m["passes"] != false || len(list(t, m, "reasons")) == 0 || m["impact"] == nil || m["preview"] != true {
+		t.Errorf("object = %v", m)
+	}
+	if !strings.HasPrefix(res.Summary, `Preview of "deal" does not pass: `) {
+		t.Errorf("summary = %q", res.Summary)
+	}
+	_, err = f.run("events.rules_decide", `{"id":"`+orig+`","decision":"edit","phrase":"deal"}`)
+	wantCode(t, err, action.CodeConflict)
+	if f.status(orig) != eventruleproposal.StatusPending {
+		t.Error("original changed")
+	}
+}
+
+func TestRulesRejectFailingSkipsApprovedSinceListing(t *testing.T) {
+	f := newFixture(t)
+	f.seedGeneric("art-1", "Springfield Isotopes inks a deal with Tavion Dale")
+	racing := f.seed(rulePhrase("xx yy", "art-1"))
+	other := f.seed(rulePhrase("ab cd", "art-1"))
+	defer events.SetAfterRejectFailingListed(func() {
+		repo := sqliteeventruleproposal.NewRepository(f.db)
+		p, err := repo.Get(context.Background(), racing)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		p.Status = eventruleproposal.StatusApproved
+		if err := repo.Save(context.Background(), p); err != nil {
+			t.Error(err)
+		}
+	})()
+	res, err := f.run("events.rules_reject_failing", `{}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejected := list(t, asMap(t, res.Object), "rejected")
+	if len(rejected) != 1 || obj(rejected[0])["id"] != other {
+		t.Fatalf("rejected = %v", rejected)
+	}
+	if f.status(racing) != eventruleproposal.StatusApproved || f.status(other) != eventruleproposal.StatusRejected {
+		t.Errorf("racing = %s, other = %s", f.status(racing), f.status(other))
+	}
+}
+
+func TestRulesDecideRejectApprovedLeavesApprovedList(t *testing.T) {
+	f := newFixture(t)
+	appr := rulePhrase("inks a deal", "art-1")
+	appr.Status = eventruleproposal.StatusApproved
+	id := f.seed(appr)
+	res, err := f.run("events.rules_queue", `{}`)
+	if err != nil || len(list(t, asMap(t, res.Object), "approved")) != 1 {
+		t.Fatalf("before: %+v, %v", res, err)
+	}
+	if _, err := f.run("events.rules_decide", `{"id":"`+id+`","decision":"reject"}`); err != nil {
+		t.Fatal(err)
+	}
+	if f.status(id) != eventruleproposal.StatusRejected {
+		t.Errorf("status = %s", f.status(id))
+	}
+	res, err = f.run("events.rules_queue", `{}`)
+	if err != nil || len(list(t, asMap(t, res.Object), "approved")) != 0 {
+		t.Fatalf("after: %+v, %v", res, err)
+	}
+}
+
+func TestRulesDecideEditOntoDecidedPhraseIsConflict(t *testing.T) {
+	f := newFixture(t)
+	f.seedGeneric("art-1", "Springfield Isotopes inks a deal with Tavion Dale")
+	orig := f.seed(rulePhrase("inks a deal", "art-1"))
+	taken := rulePhrase("inks a deal with", "art-1")
+	taken.Status = eventruleproposal.StatusApproved
+	takenID := f.seed(taken)
+	_, err := f.run("events.rules_decide", `{"id":"`+orig+`","decision":"edit","phrase":"inks a deal with"}`)
+	wantCode(t, err, action.CodeConflict)
+	if f.status(orig) != eventruleproposal.StatusPending || f.status(takenID) != eventruleproposal.StatusApproved {
+		t.Errorf("orig = %s, taken = %s", f.status(orig), f.status(takenID))
 	}
 }
