@@ -100,7 +100,7 @@ func (r *ArticleRepository) FindByID(ctx context.Context, id string) (article.Ar
 	row := executor(ctx, r.db).QueryRowContext(ctx, `SELECT `+articleColumns+` FROM articles WHERE id = ?`, id)
 	a, err := scanArticleRow(row)
 	if err != nil {
-		return article.Article{}, fmt.Errorf("sqlite: find article %s: %w", id, err)
+		return article.Article{}, fmt.Errorf("sqlite: find article %s: %w", id, wrapNotFound(article.ErrNotFound, err))
 	}
 	return a, nil
 }

@@ -14,11 +14,10 @@ import (
 	sqliteadapter "github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqlite"
 	sqliteeditoriallabelproposal "github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqliteeditoriallabelproposal"
 	sqlitereviewqueue "github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqlitereviewqueue"
+	"github.com/Mundo-Dolphins/phins-news-engine/app/trainreview"
 	"github.com/Mundo-Dolphins/phins-news-engine/cli/cmd/shared"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/article"
-	"github.com/Mundo-Dolphins/phins-news-engine/domain/editoriallabelproposal"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/reviewpriority"
-	"github.com/Mundo-Dolphins/phins-news-engine/domain/training"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
 	infrasqlite "github.com/Mundo-Dolphins/phins-news-engine/infra/sqlite"
 	"github.com/Mundo-Dolphins/phins-news-engine/migrations"
@@ -51,6 +50,7 @@ func runReviewLoop(
 	by string,
 	now time.Time,
 ) (published, discarded, skipped int, err error) {
+	deps := trainreview.Deps{Articles: articles, Labels: labels, Proposals: proposals, Queue: queue}
 	for _, e := range entries {
 		a, err := articles.FindByID(ctx, e.ArticleID)
 		if err != nil {
@@ -85,48 +85,28 @@ func runReviewLoop(
 		}
 
 		switch strings.ToLower(strings.TrimSpace(line)) {
-		case "p":
-			if err := labels.Label(ctx, training.Example{
-				ArticleID: e.ArticleID, Label: "publish", LabeledAt: now, LabeledBy: by, Source: "cli:train-review",
-			}); err != nil {
-				if errors.Is(err, training.ErrAlreadyLabeled) {
-					fmt.Fprintf(out, "\n--- %s: already labeled elsewhere; dropping from queue ---\n", e.ArticleID)
-					if delErr := queue.Delete(ctx, e.ArticleID); delErr != nil {
-						return published, discarded, skipped, fmt.Errorf("train review: dequeue already-labeled %s: %w", e.ArticleID, delErr)
-					}
-					skipped++
-					break
+		case "p", "d":
+			dec := trainreview.Publish
+			if strings.ToLower(strings.TrimSpace(line)) == "d" {
+				dec = trainreview.Discard
+			}
+			outcome, err := trainreview.Decide(ctx, deps, e, dec, by, "cli:train-review", now)
+			if err != nil {
+				return published, discarded, skipped, fmt.Errorf("train review: %w", err)
+			}
+			switch outcome {
+			case trainreview.DroppedAlreadyLabeled:
+				fmt.Fprintf(out, "\n--- %s: already labeled elsewhere; dropping from queue ---\n", e.ArticleID)
+				skipped++
+			case trainreview.DroppedPurged:
+				fmt.Fprintf(out, "\n--- %s: article no longer exists (purged); dropping from queue ---\n", e.ArticleID)
+			case trainreview.Decided:
+				if dec == trainreview.Publish {
+					published++
+				} else {
+					discarded++
 				}
-				return published, discarded, skipped, fmt.Errorf("train review: label %s: %w", e.ArticleID, err)
 			}
-			if err := proposals.UpdateStatus(ctx, e.ProposalID, editoriallabelproposal.StatusApproved, now); err != nil {
-				return published, discarded, skipped, fmt.Errorf("train review: approve proposal %s: %w", e.ProposalID, err)
-			}
-			if err := queue.Delete(ctx, e.ArticleID); err != nil {
-				return published, discarded, skipped, fmt.Errorf("train review: dequeue %s: %w", e.ArticleID, err)
-			}
-			published++
-		case "d":
-			if err := labels.Label(ctx, training.Example{
-				ArticleID: e.ArticleID, Label: "discard", LabeledAt: now, LabeledBy: by, Source: "cli:train-review",
-			}); err != nil {
-				if errors.Is(err, training.ErrAlreadyLabeled) {
-					fmt.Fprintf(out, "\n--- %s: already labeled elsewhere; dropping from queue ---\n", e.ArticleID)
-					if delErr := queue.Delete(ctx, e.ArticleID); delErr != nil {
-						return published, discarded, skipped, fmt.Errorf("train review: dequeue already-labeled %s: %w", e.ArticleID, delErr)
-					}
-					skipped++
-					break
-				}
-				return published, discarded, skipped, fmt.Errorf("train review: label %s: %w", e.ArticleID, err)
-			}
-			if err := proposals.UpdateStatus(ctx, e.ProposalID, editoriallabelproposal.StatusRejected, now); err != nil {
-				return published, discarded, skipped, fmt.Errorf("train review: reject proposal %s: %w", e.ProposalID, err)
-			}
-			if err := queue.Delete(ctx, e.ArticleID); err != nil {
-				return published, discarded, skipped, fmt.Errorf("train review: dequeue %s: %w", e.ArticleID, err)
-			}
-			discarded++
 		case "q":
 			return published, discarded, skipped, nil
 		default:
