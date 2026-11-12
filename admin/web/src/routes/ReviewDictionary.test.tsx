@@ -355,20 +355,81 @@ describe("ReviewDictionary", () => {
     expect(await within(sessionZone()).findByText(/No open session/)).toBeTruthy();
   });
 
-  it("shows a changed-dictionary conflict with its message and offers to discard that session", async () => {
-    const msg = `dictionary changed since session ${SID} started — resolve manually before resuming`;
+  it("shows a stale session with the host's reason and discards it by its id", async () => {
+    // The id comes from the result, not from the message text.
+    const staleId = "stale-session-7";
+    const reason = "the dictionary on disk is not the one this session started from";
     await open(
-      () => {
-        throw new ApiError(409, "conflict", msg);
-      },
-      { "dictionary.update_discard": () => obj({ session_id: SID }) },
+      () =>
+        obj({
+          session: { id: staleId, status: "open", started_at: "2026-11-12T10:00:00Z", snapshot_refs: null, dictionary_version: "v6" },
+          proposals: [],
+          undecided: 0,
+          stale: true,
+          stale_reason: reason,
+        }),
+      { "dictionary.update_discard": () => obj({ session_id: staleId }) },
     );
-    expect(await within(sessionZone()).findByText(new RegExp(msg))).toBeTruthy();
+    expect(await within(sessionZone()).findByText(reason)).toBeTruthy();
+    // A stale session is neither reviewed nor applied.
+    expect(screen.queryByRole("region", { name: "Selected item" })).toBeNull();
+    expect(within(applyZone()).queryByRole("button", { name: "Apply to the dictionary" })).toBeNull();
     fireEvent.click(within(sessionZone()).getByRole("button", { name: "Discard session" }));
     const dialog = await screen.findByRole("dialog");
     fireEvent.input(within(dialog).getByRole("textbox"), { target: { value: "dictionary.update_discard" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "Confirm" }));
-    await waitFor(() => expect(run).toHaveBeenCalledWith("dictionary.update_discard", { session_id: SID }, true));
+    await waitFor(() => expect(run).toHaveBeenCalledWith("dictionary.update_discard", { session_id: staleId }, true));
+  });
+
+  it("shows a load error with Retry and no discard", async () => {
+    await open(() => {
+      throw new ApiError(409, "conflict", "dictionary changed since session x started — resolve manually before resuming");
+    });
+    expect(await within(sessionZone()).findByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(within(sessionZone()).queryByRole("button", { name: "Discard session" })).toBeNull();
+  });
+
+  it("shows why the regression check could not run", async () => {
+    await open(() => sessionResult([proposal(0, { decision: { action: "accept", decided_at: "x" } })]), {
+      "dictionary.update_preview": () =>
+        obj({ undecided: 0, changes: 1, diff: "", regression: null, regression_error: "regression cases do not fit this dictionary" }),
+    });
+    expect(await within(applyZone()).findByText(/regression cases do not fit this dictionary/)).toBeTruthy();
+  });
+
+  it("says not to review the session in the command line and here at the same time", async () => {
+    await open(noSession);
+    expect(screen.getByText(/do not review it in both at the same time/)).toBeTruthy();
+  });
+
+  it("blocks A and R while a skip is in flight", async () => {
+    let release: (() => void) | undefined;
+    await open(() => sessionResult([proposal(0), proposal(1)]), {
+      "dictionary.update_decide": (p) =>
+        p.action === "skip"
+          ? new Promise<RunOutcome>((resolve) => {
+              release = () => resolve(obj({ index: p.index, action: p.action, undecided: 1 }));
+            })
+          : obj({ index: p.index, action: p.action, undecided: 1 }),
+    });
+    await within(card()).findByText("number 12 → 21");
+    fireEvent.keyDown(window, { key: "s" });
+    await waitFor(() => expect(calls("dictionary.update_decide")).toHaveLength(1));
+    fireEvent.keyDown(window, { key: "a" });
+    fireEvent.keyDown(window, { key: "r" });
+    expect(calls("dictionary.update_decide")).toHaveLength(1);
+    release!();
+    await waitFor(() => expect(calls("dictionary.update_session").length).toBeGreaterThan(1));
+  });
+
+  it("disables Preview changes while the editor is open", async () => {
+    await open(() => sessionResult([proposal(0)]));
+    await within(card()).findByText("number 12 → 21");
+    const previewBtn = within(applyZone()).getByRole("button", { name: "Preview changes" }) as HTMLButtonElement;
+    expect(previewBtn.disabled).toBe(false);
+    fireEvent.keyDown(window, { key: "e" });
+    await screen.findByRole("textbox", { name: "Category" });
+    expect(previewBtn.disabled).toBe(true);
   });
 
   it("fetches and starts a session as a job, then loads it", async () => {

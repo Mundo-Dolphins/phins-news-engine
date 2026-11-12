@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/preact";
+import { act, render, screen } from "@testing-library/preact";
 import { getSession, listActions, type CatalogItem } from "../api";
 import { Review } from "./Review";
 
@@ -25,10 +25,14 @@ describe("Review index", () => {
 
   it("hides the dictionary update review when the host does not register it", async () => {
     vi.mocked(getSession).mockResolvedValue({ username: "ana", mode: "local" });
+    // The catalog answers only when the test says so, after the index rendered.
+    let answer: ((items: CatalogItem[]) => void) | undefined;
+    vi.mocked(listActions).mockReturnValue(new Promise((resolve) => (answer = resolve)));
     render(<Review />);
     await screen.findByRole("link", { name: /Train review/ });
-    await waitFor(() => expect(listActions).toHaveBeenCalled());
-    await new Promise((r) => setTimeout(r, 10));
+    expect(answer).toBeDefined();
+    await act(async () => answer!([item("events.rules_queue")]));
+    expect(screen.getByRole("link", { name: /Event rule review/ })).toBeTruthy();
     expect(screen.queryByRole("link", { name: /Dictionary update review/ })).toBeNull();
   });
 

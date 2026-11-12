@@ -82,6 +82,9 @@ interface SessionView {
   session: SessionInfo | null;
   proposals: Proposal[];
   undecided: number;
+  /** stale is set when the session can no longer be continued (its dictionary changed); stale_reason says why. */
+  stale: boolean;
+  stale_reason: string;
 }
 
 interface Regression {
@@ -95,6 +98,8 @@ interface Preview {
   changes: number;
   diff: string;
   regression: Regression | null;
+  /** regression_error says why the regression check could not run, when regression is null. */
+  regression_error?: string;
 }
 
 interface Applied {
@@ -105,6 +110,7 @@ interface Applied {
   unchanged: boolean;
   diff: string;
   regression: Regression | null;
+  regression_error?: string;
 }
 
 type JobState = { kind: "idle" } | { kind: "running"; id: string } | { kind: "done"; summary: string } | { kind: "error"; text: string };
@@ -118,9 +124,6 @@ const kindLabel = (kind: string) => kind.replace(/_/g, " ");
 const titleOf = (p: Proposal) => p.observed?.display_name || p.current_entry?.canonical_name || p.canonical_key;
 
 const DECIDED: Record<Decision["action"], string> = { accept: "accepted", reject: "rejected", skip: "skipped", edit: "edited" };
-
-/** staleSessionId reads the session id out of the "dictionary changed since session <id> started" conflict. */
-const staleSessionId = (message: string) => /session (\S+) started/.exec(message)?.[1];
 
 /** sameKindFrom lists the proposal and every later one of its kind: what decide_type covers. */
 const sameKindFrom = (all: Proposal[], t: Proposal) => all.filter((p) => p.index >= t.index && p.kind === t.kind);
@@ -326,8 +329,17 @@ function DestructiveConfirm({ name, onConfirm, onCancel }: { name: string; onCon
   );
 }
 
-function RegressionView({ r }: { r: Regression | null }) {
-  if (!r) return <p class="muted">No regression check result.</p>;
+function RegressionView({ r, error }: { r: Regression | null; error?: string }) {
+  if (!r) {
+    if (error) {
+      return (
+        <p class="notice notice-error" role="status">
+          The regression check could not run: {error}
+        </p>
+      );
+    }
+    return <p class="muted">No regression check result.</p>;
+  }
   const flips = r.flips ?? [];
   return (
     <div class="dict-regression">
@@ -432,7 +444,7 @@ interface Editing {
 
 function ReviewDictionaryScreen() {
   const [view, setView] = useState<SessionView | null>(null);
-  const [loadError, setLoadError] = useState<{ text: string; staleId?: string } | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [sessionNotice, setSessionNotice] = useState<Notice | undefined>();
   const [reviewNotice, setReviewNotice] = useState<Notice | undefined>();
   const [applyNotice, setApplyNotice] = useState<Notice | undefined>();
@@ -446,7 +458,9 @@ function ReviewDictionaryScreen() {
   const [goTo, setGoTo] = useState<{ key: string } | undefined>();
   const streams = useRef<Set<() => void>>(new Set());
   const shownSession = useRef<string | null>(null);
+  // skipping guards a second S before the re-render; skipBusy blocks A and R meanwhile.
   const skipping = useRef(false);
+  const [skipBusy, setSkipBusy] = useState(false);
   // The latest preview request wins.
   const previewSeq = useRef(0);
 
@@ -472,13 +486,19 @@ function ReviewDictionaryScreen() {
   const load = useCallback(async (): Promise<SessionView | null> => {
     try {
       const { object } = resultObject<Partial<SessionView>>(SESSION, await runAction(SESSION, {}, false));
-      const next: SessionView = { session: object?.session ?? null, proposals: object?.proposals ?? [], undecided: object?.undecided ?? 0 };
+      const next: SessionView = {
+        session: object?.session ?? null,
+        proposals: object?.proposals ?? [],
+        undecided: object?.undecided ?? 0,
+        stale: object?.stale ?? false,
+        stale_reason: object?.stale_reason ?? "",
+      };
       setView(next);
       setLoadError(null);
       previewSeq.current++;
       setPreview(null);
       setPreviewing(false);
-      const id = next.session?.id ?? null;
+      const id = next.stale ? null : (next.session?.id ?? null);
       if (id && id !== shownSession.current) {
         // A newly shown session opens at its first undecided proposal.
         const first = next.proposals.find((p) => !p.decision);
@@ -491,7 +511,7 @@ function ReviewDictionaryScreen() {
       const text = errorText(e);
       setView(null);
       shownSession.current = null;
-      setLoadError({ text, staleId: staleSessionId(e instanceof Error ? e.message : "") });
+      setLoadError(text);
       return null;
     }
   }, [loadPreview]);
@@ -500,10 +520,12 @@ function ReviewDictionaryScreen() {
     load();
   }, [load]);
 
-  const session = view?.session ?? null;
+  // A stale session is shown only to be discarded: it is neither reviewed nor applied.
+  const stale = view?.stale ? view.session : null;
+  const session = view?.stale ? null : (view?.session ?? null);
   const proposals = view?.proposals ?? [];
   const startRunning = start.kind === "running";
-  const blocked = !session || editing !== null || pending !== null || applying || startRunning;
+  const blocked = !session || editing !== null || pending !== null || applying || startRunning || skipBusy;
 
   /** moveOn selects the next undecided proposal after t (wrapping), if any. */
   const moveOn = (t: Proposal, next: SessionView | null) => {
@@ -531,11 +553,13 @@ function ReviewDictionaryScreen() {
   const onSkip = (t: Proposal) => {
     if (blocked || skipping.current) return;
     skipping.current = true;
+    setSkipBusy(true);
     decide(t, "skip")
       .then((n) => setReviewNotice(n || undefined))
       .catch((e) => setReviewNotice({ kind: "error", text: e instanceof Error ? e.message : String(e) }))
       .finally(() => {
         skipping.current = false;
+        setSkipBusy(false);
       });
   };
 
@@ -642,7 +666,8 @@ function ReviewDictionaryScreen() {
       <p class="muted">
         The web form of the host's dictionary update review: fetch the roster and staff from the configured official
         sources, decide every proposed change, then apply them to the dictionary. Each decision is saved in the session
-        as soon as it is made; the session is the same one the command line resumes.
+        as soon as it is made; the session is the same one the command line resumes, so do not review it in both at the
+        same time.
       </p>
 
       <section class="rules-zone" aria-labelledby="zone-session">
@@ -654,19 +679,29 @@ function ReviewDictionaryScreen() {
         {loadError && (
           <div class="rules-zone-bar">
             <p class="notice notice-error" role="alert">
-              {loadError.text}
+              {loadError}
             </p>
             <button type="button" class="btn" onClick={() => load()}>
               Retry
             </button>
-            {loadError.staleId && (
-              <button type="button" class="btn danger" disabled={startRunning} onClick={() => setPending({ kind: "discard", id: loadError.staleId! })}>
-                Discard session
-              </button>
-            )}
           </div>
         )}
-        {view && !session && (
+        {stale && (
+          <div class="rules-zone-bar">
+            <p class="notice notice-error" role="alert">
+              {view?.stale_reason}
+            </p>
+            <p class="dict-session-line">
+              Session <code>{stale.id}</code> · started {when(stale.started_at)}
+              {stale.dictionary_version && ` · dictionary ${stale.dictionary_version}`} · cannot be continued: discard it and
+              start again.
+            </p>
+            <button type="button" class="btn danger" disabled={startRunning || pending !== null} onClick={() => setPending({ kind: "discard", id: stale.id })}>
+              Discard session
+            </button>
+          </div>
+        )}
+        {view && !session && !stale && (
           <div class="rules-zone-bar">
             <button type="button" class="btn primary" disabled={startRunning} onClick={startSession}>
               {startRunning ? "Fetching…" : "Fetch and start"}
@@ -727,7 +762,9 @@ function ReviewDictionaryScreen() {
             emptyText="This session has no proposals: the dictionary already matches the official sources."
           />
         )}
-        {view && !session && <p class="muted">Nothing to review without an open session.</p>}
+        {view && !session && (
+          <p class="muted">{stale ? "The session cannot be continued: nothing to review." : "Nothing to review without an open session."}</p>
+        )}
       </section>
 
       <section class="rules-zone" aria-labelledby="zone-apply">
@@ -753,11 +790,11 @@ function ReviewDictionaryScreen() {
                     : `${plural(preview.changes, "change")} to the dictionary.`}
                 </p>
                 <Diff diff={preview.diff} />
-                <RegressionView r={preview.regression} />
+                <RegressionView r={preview.regression} error={preview.regression_error} />
               </div>
             )}
             <div class="rules-zone-bar">
-              <button type="button" class="btn" disabled={previewing || applying} onClick={() => loadPreview(session.id)}>
+              <button type="button" class="btn" disabled={previewing || blocked} onClick={() => loadPreview(session.id)}>
                 Preview changes
               </button>
               <button
@@ -772,13 +809,15 @@ function ReviewDictionaryScreen() {
             </div>
           </>
         )}
-        {!session && !applied && view && <p class="muted">No open session to apply.</p>}
+        {!session && !applied && view && (
+          <p class="muted">{stale ? "The session cannot be continued: nothing to apply." : "No open session to apply."}</p>
+        )}
         {applied && (
           <div class="rule-outcome" role="status">
             <p class="rule-outcome-head">{applied.summary}</p>
             {!applied.unchanged && <p>{`Dictionary ${applied.from} → ${applied.to} · ${plural(applied.changes, "change")}`}</p>}
             <Diff diff={applied.diff} />
-            {applied.regression && <RegressionView r={applied.regression} />}
+            {(applied.regression || applied.regression_error) && <RegressionView r={applied.regression} error={applied.regression_error} />}
           </div>
         )}
       </section>
