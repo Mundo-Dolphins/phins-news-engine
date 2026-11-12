@@ -11,6 +11,7 @@ describe("Review index", () => {
     expect(await screen.findByRole("link", { name: /Train review/ })).toBeTruthy();
     expect(screen.getByRole("link", { name: /Dataset review/ }).getAttribute("href")).toBe("/review/dataset");
     expect(screen.getByRole("link", { name: /Entity review/ }).getAttribute("href")).toBe("/review/entities");
+    expect(screen.getByRole("link", { name: /Event rule review/ }).getAttribute("href")).toBe("/review/events");
   });
 
   it("says the screens are local-only in production mode", async () => {

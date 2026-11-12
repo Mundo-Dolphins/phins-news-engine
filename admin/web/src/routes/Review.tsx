@@ -24,6 +24,13 @@ export function Review() {
             R, S; N and M for a possible duplicate).
           </span>
         </a>
+        <a class="card review-card" href="/review/events">
+          <span class="review-card-title">Event rule review</span>
+          <span class="muted">
+            Discover event rule phrases, accept, reject or edit them against the sample, then gate and apply the
+            approved ones (shortcuts A, R, E, S).
+          </span>
+        </a>
       </div>
     </LocalOnly>
   );
