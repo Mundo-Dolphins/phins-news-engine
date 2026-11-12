@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
-import { ApiError, getJob, jobEvents, runAction, type Job, type Result } from "../api";
+import { ApiError, runAction, type Job, type Result } from "../api";
 import { ReviewScreen, type Notice, type ReviewDecision } from "../components/ReviewScreen";
 import { LocalOnly } from "../components/LocalOnly";
 import { ImpactView, PhraseEditor, Verdict, type Assessment } from "../components/PhraseEditor";
-import { errorText, useShortcutIsolation, when } from "../components/reviewParts";
+import { errorText, untilJobEnd, useShortcutIsolation, when } from "../components/reviewParts";
 import { safeHref } from "../links";
 
 /** RuleProposal is one pending proposal of `events.rules_queue`. */
@@ -66,11 +66,6 @@ type JobState =
 
 const keyOf = (t: { id: string }) => t.id;
 const moves = (t: RuleProposal) => t.impact.moved.reduce((n, m) => n + m.count, 0);
-const active = (status: string) => status === "queued" || status === "running";
-
-/** How often a job is polled once its event stream has failed. */
-const POLL_MS = 2000;
-
 /** gone matches the errors for a proposal that is no longer pending. */
 const gone = (e: unknown) =>
   e instanceof ApiError && (e.code === "not_found" || (e.code === "conflict" && /not pending|already decided/.test(e.message)));
@@ -329,46 +324,7 @@ function ReviewEventsScreen() {
     load();
   }, [load]);
 
-  /**
-   * untilEnd resolves with the job once it has finished, following its event
-   * stream; when the stream fails it polls the job instead.
-   */
-  const untilEnd = (job: Job) =>
-    active(job.status)
-      ? new Promise<Job>((resolve, reject) => {
-          // The end may arrive before jobEvents returns its closer.
-          let close: (() => void) | null = null;
-          let ended = false;
-          const finish = () => {
-            ended = true;
-            if (close) streams.current.delete(close);
-          };
-          const poll = async () => {
-            try {
-              for (;;) {
-                const j = await getJob(job.id);
-                if (!active(j.status)) return resolve(j);
-                await new Promise((r) => setTimeout(r, POLL_MS));
-              }
-            } catch (e) {
-              reject(e);
-            }
-          };
-          close = jobEvents(
-            job.id,
-            () => {},
-            (j) => {
-              finish();
-              resolve(j);
-            },
-            () => {
-              finish();
-              poll();
-            },
-          );
-          if (!ended) streams.current.add(close);
-        })
-      : Promise.resolve(job);
+  const untilEnd = (job: Job) => untilJobEnd(job, streams.current);
 
   /** startJob runs a long-running action and reports its end to set. */
   const startJob = async (name: string, set: (s: JobState) => void) => {

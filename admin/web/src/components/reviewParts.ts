@@ -1,4 +1,4 @@
-import { ApiError } from "../api";
+import { ApiError, getJob, jobEvents, type Job } from "../api";
 import type { RefObject } from "preact";
 import { useLayoutEffect, useRef } from "preact/hooks";
 
@@ -41,4 +41,53 @@ export function useShortcutIsolation(
     window.addEventListener("keydown", guard, true);
     return () => window.removeEventListener("keydown", guard, true);
   }, []);
+}
+
+/** activeJob reports whether a job status means the job has not finished yet. */
+export const activeJob = (status: string) => status === "queued" || status === "running";
+
+/** How often a job is polled once its event stream has failed. */
+const POLL_MS = 2000;
+
+/**
+ * untilJobEnd resolves with the job once it has finished, following its
+ * event stream; when the stream fails it polls the job instead. The open
+ * stream's closer is kept in `streams` until the job ends, so a page can
+ * close it when it unmounts.
+ */
+export function untilJobEnd(job: Job, streams: Set<() => void>): Promise<Job> {
+  if (!activeJob(job.status)) return Promise.resolve(job);
+  return new Promise<Job>((resolve, reject) => {
+    // The end may arrive before jobEvents returns its closer.
+    let close: (() => void) | null = null;
+    let ended = false;
+    const finish = () => {
+      ended = true;
+      if (close) streams.delete(close);
+    };
+    const poll = async () => {
+      try {
+        for (;;) {
+          const j = await getJob(job.id);
+          if (!activeJob(j.status)) return resolve(j);
+          await new Promise((r) => setTimeout(r, POLL_MS));
+        }
+      } catch (e) {
+        reject(e);
+      }
+    };
+    close = jobEvents(
+      job.id,
+      () => {},
+      (j) => {
+        finish();
+        resolve(j);
+      },
+      () => {
+        finish();
+        poll();
+      },
+    );
+    if (!ended) streams.add(close);
+  });
 }

@@ -1,4 +1,26 @@
+import { useEffect, useState } from "preact/hooks";
 import { LocalOnly } from "../components/LocalOnly";
+import { hostHasDictionaryUpdate } from "./ReviewDictionary";
+
+/** DictionaryCard links the dictionary update review when the host registers its actions. */
+function DictionaryCard() {
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    hostHasDictionaryUpdate()
+      .then(setShown)
+      .catch(() => setShown(false));
+  }, []);
+  if (!shown) return null;
+  return (
+    <a class="card review-card" href="/review/dictionary">
+      <span class="review-card-title">Dictionary update review</span>
+      <span class="muted">
+        Review the roster and staff changes found at the official sources, then apply them to the dictionary once every
+        proposal has a decision (shortcuts A, R, E, S).
+      </span>
+    </a>
+  );
+}
 
 /** Review lists the available review screens. */
 export function Review() {
@@ -31,6 +53,7 @@ export function Review() {
             approved ones (shortcuts A, R, E, S).
           </span>
         </a>
+        <DictionaryCard />
       </div>
     </LocalOnly>
   );
