@@ -184,6 +184,35 @@ run them, without the panel ever endangering the running bot.
   decisions while the apply job runs. A failure marking the rules applied
   after the file was written says so; running apply again finishes it. The
   logic lives in `app/eventrulecycle`, shared with the CLI.
+- **Phase 2, part 5: host-provided review.** The dictionary update review
+  (official-source roster and staff changes proposed against the
+  dictionary) has no action in the engine: the host registers seven
+  local-only `dictionary.update_*` actions (`update_start`, a long-running
+  exclusive job; `update_session`, `update_decide`, `update_decide_type`,
+  `update_preview`, `update_apply` and `update_discard`, the last two
+  destructive) over the session files of its own command. The engine ships
+  only the screen, `/review/dictionary`, which stays generic: its card in the
+  Review index appears, and the route works, only when `listActions()`
+  contains `dictionary.update_session`; otherwise the route says "Not
+  available on this host". Three zones. **Session** shows the open session
+  (id, status, start, dictionary version, proposals and undecided count),
+  "Fetch and start" (the start job, followed as in part 4) when there is none
+  and "Discard session" after the typed confirmation; a session whose
+  dictionary changed since it started is shown with the host's conflict
+  message and can be discarded from there. **Review** puts every proposal on
+  the shared screen — decided ones stay listed with their decision and can be
+  decided again (the index is posted, the earlier decision replaced) — with
+  the kind, the detail, conflicts and the dictionary entry beside the source
+  observation (links only through `safeHref`). `A` accept, `R` reject, `S`
+  skip (a recorded decision, not just moving on), `E` edit (an inline editor
+  for the category and a note appended to the detail; while it is open no key
+  reaches the shortcuts); after a decision the selection moves to the next
+  undecided proposal (`ReviewScreen`'s `goTo`). "Accept/Reject all of this
+  type" decides the proposal and every later one of its kind, after a
+  confirmation. **Apply** shows the undecided count, the preview (changes,
+  diff, regression check) and "Apply to the dictionary", disabled until every
+  proposal has a decision (skip counts), as in the command line; it runs after
+  the typed confirmation and shows the versions, changes and diff written.
 - **Production writes only operational state.** Reads everywhere, plus
   `claims.retry`, `claims.release`, `outbox.expire`, `outbox.repair` and the
   `label.*` writes. Training, promote and rollback are local-only and reach the Pi through the normal deploy; no CPU-heavy job runs

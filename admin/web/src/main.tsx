@@ -13,6 +13,7 @@ import { ReviewTrain } from "./routes/ReviewTrain";
 import { ReviewDataset } from "./routes/ReviewDataset";
 import { ReviewEntities } from "./routes/ReviewEntities";
 import { ReviewEvents } from "./routes/ReviewEvents";
+import { ReviewDictionary } from "./routes/ReviewDictionary";
 import "./style.css";
 
 function NotFound() {
@@ -35,6 +36,7 @@ function App() {
       <Route path="/review/dataset" component={ReviewDataset} />
       <Route path="/review/entities" component={ReviewEntities} />
       <Route path="/review/events" component={ReviewEvents} />
+      <Route path="/review/dictionary" component={ReviewDictionary} />
       <Route default component={NotFound} />
     </Router>
   );

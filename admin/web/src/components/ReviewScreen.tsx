@@ -30,6 +30,11 @@ export interface ReviewScreenProps<T> {
   emptyText: string;
   /** When true, the decision buttons and keys are disabled (skip and moving still work). */
   decisionsDisabled?: boolean;
+  /**
+   * Each new object selects the item with its key, if listed: a screen whose
+   * decided items stay in `items` uses it to move on after a decision.
+   */
+  goTo?: { key: string };
 }
 
 function inField(target: EventTarget | null): boolean {
@@ -87,6 +92,14 @@ export function ReviewScreen<T>(props: ReviewScreenProps<T>) {
   useEffect(() => {
     queue.current?.querySelector(".review-entry.selected")?.scrollIntoView?.({ block: "nearest" });
   }, [currentKey]);
+
+  // Layout effect: the selection moves before a following key press lands.
+  useLayoutEffect(() => {
+    const i = props.goTo ? items.findIndex((t) => itemKey(t) === props.goTo!.key) : -1;
+    if (i < 0) return;
+    lastIndex.current = i;
+    setSelected(props.goTo!.key);
+  }, [props.goTo]);
 
   const select = (i: number) => {
     if (items.length === 0) return;

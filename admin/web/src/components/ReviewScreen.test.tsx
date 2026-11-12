@@ -201,4 +201,28 @@ describe("ReviewScreen", () => {
     fireEvent.keyDown(window, { key: "a" });
     await waitFor(() => expect(only).toHaveBeenCalledWith(items[1]));
   });
+
+  it("selects the item a new goTo names, also the same key again, and ignores an unknown key", () => {
+    const { rerender } = setup({ goTo: { key: "c" } });
+    const view = (goTo: { key: string }) => (
+      <ReviewScreen<It>
+        items={items}
+        itemKey={(t) => t.id}
+        renderItem={(t) => <h2>Item {t.title}</h2>}
+        renderListEntry={(t) => <span>{t.title}</span>}
+        decisions={[]}
+        onSkip={() => {}}
+        onRefresh={() => {}}
+        emptyText="Nothing to review."
+        goTo={goTo}
+      />
+    );
+    expect(screen.getByRole("heading", { name: "Item Charlie" })).toBeTruthy();
+    fireEvent.keyDown(window, { key: "k" });
+    expect(screen.getByRole("heading", { name: "Item Bravo" })).toBeTruthy();
+    rerender(view({ key: "c" }));
+    expect(screen.getByRole("heading", { name: "Item Charlie" })).toBeTruthy();
+    rerender(view({ key: "zz" }));
+    expect(screen.getByRole("heading", { name: "Item Charlie" })).toBeTruthy();
+  });
 });
