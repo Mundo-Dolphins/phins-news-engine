@@ -543,6 +543,19 @@ func TestCatalogReviewActions(t *testing.T) {
 	}
 }
 
+// TestCatalogEventRuleActions pins that the event rule review actions are
+// local only.
+func TestCatalogEventRuleActions(t *testing.T) {
+	for _, n := range []string{"events.rules_discover", "events.rules_queue", "events.rules_decide", "events.rules_reject_failing", "events.rules_apply"} {
+		if !slices.Contains(admin.RegistryFor(action.ModeLocal), n) {
+			t.Errorf("local mode lacks %s", n)
+		}
+		if slices.Contains(admin.RegistryFor(action.ModeProduction), n) {
+			t.Errorf("production mode offers %s", n)
+		}
+	}
+}
+
 // TestCatalogStep2Batch2 pins which step 2 batch 2 actions each mode offers.
 func TestCatalogStep2Batch2(t *testing.T) {
 	both := []string{

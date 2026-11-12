@@ -141,8 +141,8 @@ func newReviewCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&opts.DatasetPath, "dataset", eventrules.DefaultDatasetPath, "gold clustering dataset scored by the apply gate")
-	cmd.Flags().IntVar(&opts.SampleSize, "sample-size", defaultSampleSize, "generic articles sampled for discovery")
-	cmd.Flags().IntVar(&opts.SinceDays, "since-days", defaultSinceDays, "sample window in days")
+	cmd.Flags().IntVar(&opts.SampleSize, "sample-size", eventrules.DefaultSampleSize, "generic articles sampled for discovery")
+	cmd.Flags().IntVar(&opts.SinceDays, "since-days", eventrules.DefaultSinceDays, "sample window in days")
 	return cmd
 }
 

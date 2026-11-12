@@ -78,56 +78,38 @@ type Result struct {
 // so the pending backlog is never judged against missing evidence.
 func Run(ctx context.Context, d Deps, in Input) (Result, error) {
 	var res Result
-	now := d.Now
-	if now == nil {
-		now = time.Now
-	}
+	now := nowOf(d)
 	if in.Out == nil {
 		in.Out = io.Discard
 	}
 
-	sample, err := d.Sampler(ctx)
+	c, err := Prepare(ctx, d)
 	if err != nil {
-		return res, fmt.Errorf("eventrulecycle: sample: %w", err)
+		return res, err
 	}
-	res.Sampled = len(sample)
-	if len(sample) == 0 {
+	res.Sampled = len(c.Sample)
+	if len(c.Sample) == 0 {
 		fmt.Fprintln(in.Out, "event rules: no generic articles in the sample; nothing discovered or reviewed this cycle.")
 		return res, nil
 	}
-	base, err := d.BaseRules()
-	if err != nil {
-		return res, fmt.Errorf("eventrulecycle: base rules: %w", err)
-	}
-	var control []eventruleproposal.Sample
-	if d.Control != nil {
-		if control, err = d.Control(ctx); err != nil {
-			return res, fmt.Errorf("eventrulecycle: typed control sample: %w", err)
-		}
-	}
 
-	topics, phrases, failed, calls, firstErr := discover(ctx, d.LLM, sample, in.BatchSize)
-	fmt.Fprintf(in.Out, "event rules: %d generic articles sampled, %d LLM calls (%d failed)\n", res.Sampled, calls, failed)
-	if calls > 0 && failed == calls {
+	dr, typesNow, err := discoverAndStore(ctx, d, c, in.BatchSize)
+	fmt.Fprintf(in.Out, "event rules: %d generic articles sampled, %d LLM calls (%d failed)\n", res.Sampled, dr.Calls, dr.Failed)
+	if dr.Unavailable {
 		res.DiscoveryFailed = true
-		fmt.Fprintf(in.Out, "WARNING: event rule discovery is unavailable (%v); no new event rules this cycle.\n", firstErr)
+		fmt.Fprintf(in.Out, "WARNING: event rule discovery is unavailable (%v); no new event rules this cycle.\n", dr.FirstErr)
 		return res, nil
 	}
-	if failed > 0 {
-		fmt.Fprintf(in.Out, "WARNING: %d of %d discovery calls failed (%v); results of the other calls are kept.\n", failed, calls, firstErr)
+	if dr.Failed > 0 {
+		fmt.Fprintf(in.Out, "WARNING: %d of %d discovery calls failed (%v); results of the other calls are kept.\n", dr.Failed, dr.Calls, dr.FirstErr)
 	}
-
-	n, typesNow, err := persistProposals(ctx, d.Proposals, base, sample, topics, phrases, now().UTC())
-	res.Proposed = n
+	res.Proposed = dr.Proposed
 	if err != nil {
 		return res, err
 	}
 	fmt.Fprintf(in.Out, "event rules: %d proposals created or updated\n", res.Proposed)
 
-	s := &session{
-		ctx: ctx, d: d, in: in, base: base, sample: sample, control: control, text: sampleText(sample),
-		now: now, res: &res, approvedNow: map[string]bool{},
-	}
+	s := &session{ctx: ctx, d: d, in: in, c: c, now: now, res: &res, approvedNow: map[string]bool{}}
 	if err := s.review(); err != nil {
 		return res, err
 	}
@@ -198,11 +180,11 @@ func knownTarget(kind, target string) (eventruleproposal.TargetKind, bool) {
 }
 
 // persistProposals validates and upserts the LLM output as pending
-// proposals and returns how many were stored and the IDs of the type
-// proposals stored or updated. A phrase already in any bucket of base (the
+// proposals (evidence must be in text, the sample's lowercased title +
+// summary by article ID) and returns how many were stored and the IDs of
+// the type proposals stored or updated. A phrase already in any bucket of base (the
 // hand-written plus the current generated rules) is not stored.
-func persistProposals(ctx context.Context, repo eventruleproposalport.Repository, base eventsignals.Rules, sample []eventruleproposal.Sample, topics []appout.EventTopicProposal, phrases []appout.EventPhraseProposal, now time.Time) (int, map[string]bool, error) {
-	text := sampleText(sample)
+func persistProposals(ctx context.Context, repo eventruleproposalport.Repository, base eventsignals.Rules, text map[string]string, topics []appout.EventTopicProposal, phrases []appout.EventPhraseProposal, now time.Time) (int, map[string]bool, error) {
 	n := 0
 	typesNow := map[string]bool{}
 	for _, lp := range phrases {
@@ -298,17 +280,12 @@ func phrasesByStatus(ctx context.Context, repo eventruleproposalport.Repository,
 
 // session is the state of one Run's interactive part.
 type session struct {
-	ctx    context.Context
-	d      Deps
-	in     Input
-	base   eventsignals.Rules
-	sample []eventruleproposal.Sample
-	// control is the typed control sample: Impact runs over it as well so
-	// Retyped can count already-typed articles a phrase would change.
-	control []eventruleproposal.Sample
-	text    map[string]string // article ID -> lowercased title + summary
-	now     func() time.Time
-	res     *Result
+	ctx context.Context
+	d   Deps
+	in  Input
+	c   Context
+	now func() time.Time
+	res *Result
 	// approvedNow holds the IDs approved during this run; other approved
 	// proposals are carried over and re-presented before the gate.
 	approvedNow map[string]bool
@@ -327,22 +304,6 @@ func (s *session) readLine() (line string, ok bool, err error) {
 		return "", false, nil
 	}
 	return s.in.Scanner.Text(), true, nil
-}
-
-// impact measures p over the generic sample plus the typed control sample.
-func (s *session) impact(p eventruleproposal.Proposal) eventruleproposal.ImpactResult {
-	all := s.sample
-	if len(s.control) > 0 {
-		all = append(append([]eventruleproposal.Sample(nil), s.sample...), s.control...)
-	}
-	return eventruleproposal.Impact(s.base, p, all, s.now().UTC())
-}
-
-func (s *session) save(p eventruleproposal.Proposal, verb string) error {
-	if err := s.d.Proposals.Save(s.ctx, p); err != nil {
-		return fmt.Errorf("eventrulecycle: %s %s: %w", verb, p.ID, err)
-	}
-	return nil
 }
 
 func (s *session) pause() {
@@ -374,27 +335,23 @@ func (s *session) review() error {
 		if p.Status != eventruleproposal.StatusPending {
 			continue
 		}
-		p.Phrase = normalizePhrase(p.Phrase)
-		impact := s.impact(p)
-		verdict := eventruleproposal.Check(p, impact, len(s.sample), s.in.CheckOptions)
+		a := assessAt(s.c, p, s.in.CheckOptions, s.now())
+		p = a.Proposal
 		fmt.Fprintf(s.in.Out, "\n--- Event rule proposal %d/%d ---\n", i+1, len(pending))
-		if onlyNoMatches(verdict) {
+		if a.NoEvidence {
 			fmt.Fprintf(s.in.Out, "%s %s · %q: no evidence in this sample; left pending.\n", p.TargetKind, p.Target, p.Phrase)
 			continue
 		}
-		if !verdict.OK {
-			rejected, err := p.Reject(s.now().UTC())
-			if err != nil {
-				return fmt.Errorf("eventrulecycle: auto-reject %s: %w", p.ID, err)
-			}
-			if err := s.save(rejected, "auto-reject"); err != nil {
+		if !a.Verdict.OK {
+			// The CLI auto-rejects a failing proposal; the panel only flags it.
+			if _, err := decide(s.ctx, s.d, p.ID, "auto-reject", "", eventruleproposal.Proposal.Reject, s.now()); err != nil {
 				return err
 			}
-			fmt.Fprintf(s.in.Out, "%s %s · %q auto-rejected: %s\n", p.TargetKind, p.Target, p.Phrase, strings.Join(verdict.Reasons, "; "))
+			fmt.Fprintf(s.in.Out, "%s %s · %q auto-rejected: %s\n", p.TargetKind, p.Target, p.Phrase, strings.Join(a.Verdict.Reasons, "; "))
 			s.res.Rejected++
 			continue
 		}
-		printProposal(s.in.Out, p, impact)
+		printProposal(s.in.Out, p, a.Impact)
 		for {
 			fmt.Fprint(s.in.Out, "Action: [a]ccept, [r]eject, [e]dit phrase, [s]kip, [q]uit: ")
 			line, ok, err := s.readLine()
@@ -426,11 +383,7 @@ func (s *session) review() error {
 func (s *session) handle(p eventruleproposal.Proposal, action string) (advance, stop bool, err error) {
 	switch action {
 	case "a", "accept", "approve":
-		approved, err := p.Approve(s.now().UTC())
-		if err != nil {
-			return false, false, fmt.Errorf("eventrulecycle: approve %s: %w", p.ID, err)
-		}
-		if err := s.save(approved, "approve"); err != nil {
+		if _, err := Approve(s.ctx, s.d, p, s.now()); err != nil {
 			return false, false, err
 		}
 		s.approvedNow[p.ID] = true
@@ -438,11 +391,7 @@ func (s *session) handle(p eventruleproposal.Proposal, action string) (advance, 
 		s.res.Approved++
 		return true, false, nil
 	case "r", "reject":
-		rejected, err := p.Reject(s.now().UTC())
-		if err != nil {
-			return false, false, fmt.Errorf("eventrulecycle: reject %s: %w", p.ID, err)
-		}
-		if err := s.save(rejected, "reject"); err != nil {
+		if _, err := Reject(s.ctx, s.d, p, s.now()); err != nil {
 			return false, false, err
 		}
 		fmt.Fprintf(s.in.Out, "Rejected %q.\n", p.Phrase)
@@ -473,55 +422,26 @@ func (s *session) edit(p eventruleproposal.Proposal) (advance, stop bool, err er
 	if !ok {
 		return false, true, nil
 	}
-	edited := p
-	edited.ID = ""
-	edited.Phrase = normalizePhrase(line)
-	edited.CreatedAt = s.now().UTC()
-	edited.DecidedAt = time.Time{}
-	if edited.Phrase == "" || edited.Phrase == p.Phrase {
+	a, err := Edit(s.ctx, s.d, s.c, p, line, s.in.CheckOptions, s.now(), true)
+	switch {
+	case errors.Is(err, ErrPhraseUnchanged):
 		fmt.Fprintln(s.in.Out, "Phrase unchanged; choose another action.")
 		return false, false, nil
-	}
-	edited.EvidenceIDs = nil
-	for _, id := range p.EvidenceIDs {
-		if strings.Contains(s.text[id], edited.Phrase) {
-			edited.EvidenceIDs = append(edited.EvidenceIDs, id)
-		}
-	}
-	if len(edited.EvidenceIDs) == 0 {
-		fmt.Fprintf(s.in.Out, "No cited article contains %q; choose another action.\n", edited.Phrase)
+	case errors.Is(err, ErrNoCitedEvidence):
+		fmt.Fprintf(s.in.Out, "No cited article contains %q; choose another action.\n", a.Proposal.Phrase)
 		return false, false, nil
-	}
-	impact := s.impact(edited)
-	if v := eventruleproposal.Check(edited, impact, len(s.sample), s.in.CheckOptions); !v.OK {
-		fmt.Fprintf(s.in.Out, "Edited phrase %q fails the checks: %s\n", edited.Phrase, strings.Join(v.Reasons, "; "))
+	case errors.Is(err, ErrEditFailsChecks):
+		fmt.Fprintf(s.in.Out, "Edited phrase %q fails the checks: %s\n", a.Proposal.Phrase, strings.Join(a.Verdict.Reasons, "; "))
 		return false, false, nil
-	}
-	stored, err := s.d.Proposals.Upsert(s.ctx, edited)
-	if err != nil {
-		return false, false, fmt.Errorf("eventrulecycle: store edited phrase %q: %w", edited.Phrase, err)
-	}
-	if stored.Status != eventruleproposal.StatusPending {
-		fmt.Fprintf(s.in.Out, "Phrase %q was already %s; choose another action.\n", stored.Phrase, stored.Status)
+	case errors.Is(err, ErrAlreadyDecided) && a.Proposal.ID != "":
+		fmt.Fprintf(s.in.Out, "Phrase %q was already %s; choose another action.\n", a.Proposal.Phrase, a.Proposal.Status)
 		return false, false, nil
-	}
-	approved, err := stored.Approve(s.now().UTC())
-	if err != nil {
-		return false, false, fmt.Errorf("eventrulecycle: approve %s: %w", stored.ID, err)
-	}
-	if err := s.save(approved, "approve"); err != nil {
+	case err != nil:
 		return false, false, err
 	}
-	s.approvedNow[stored.ID] = true
-	superseded, err := p.Reject(s.now().UTC())
-	if err != nil {
-		return false, false, fmt.Errorf("eventrulecycle: supersede %s: %w", p.ID, err)
-	}
-	if err := s.save(superseded, "supersede"); err != nil {
-		return false, false, err
-	}
-	printImpact(s.in.Out, impact)
-	fmt.Fprintf(s.in.Out, "Approved edited phrase %q (original %q superseded).\n", approved.Phrase, p.Phrase)
+	s.approvedNow[a.Proposal.ID] = true
+	printImpact(s.in.Out, a.Impact)
+	fmt.Fprintf(s.in.Out, "Approved edited phrase %q (original %q superseded).\n", a.Proposal.Phrase, p.Phrase)
 	s.res.Approved++
 	return true, false, nil
 }
@@ -560,7 +480,7 @@ func (s *session) confirmCarriedOver(carried []eventruleproposal.Proposal) ([]ev
 	for i, p := range carried {
 		fmt.Fprintf(s.in.Out, "\n--- Event rule %d/%d: approved, not yet applied ---\n", i+1, len(carried))
 		fmt.Fprintf(s.in.Out, "%s · ", p.ID)
-		printProposal(s.in.Out, p, s.impact(p))
+		printProposal(s.in.Out, p, impactOf(s.c, p, s.now()))
 		for decided := false; !decided; {
 			fmt.Fprint(s.in.Out, "Action: [k]eep for this apply, [r]eject, [q]uit: ")
 			line, ok, err := s.readLine()
@@ -576,11 +496,7 @@ func (s *session) confirmCarriedOver(carried []eventruleproposal.Proposal) ([]ev
 				kept = append(kept, p)
 				decided = true
 			case "r", "reject":
-				rejected, err := p.Reject(s.now().UTC())
-				if err != nil {
-					return nil, fmt.Errorf("eventrulecycle: reject %s: %w", p.ID, err)
-				}
-				if err := s.save(rejected, "reject"); err != nil {
+				if _, err := Reject(s.ctx, s.d, p, s.now()); err != nil {
 					return nil, err
 				}
 				fmt.Fprintf(s.in.Out, "Rejected %q.\n", p.Phrase)
@@ -600,7 +516,7 @@ func (s *session) confirmCarriedOver(carried []eventruleproposal.Proposal) ([]ev
 // apply gates and writes the phrase proposals approved in this run plus
 // the carried-over ones the operator kept.
 func (s *session) apply() error {
-	approved, err := phrasesByStatus(s.ctx, s.d.Proposals, eventruleproposal.StatusApproved)
+	approved, err := ApprovedNotApplied(s.ctx, s.d)
 	if err != nil {
 		return err
 	}
@@ -621,58 +537,31 @@ func (s *session) apply() error {
 	if len(toApply) == 0 {
 		return nil
 	}
-	d := s.d
-	if d.Gate == nil || d.ReadApplied == nil || d.WriteApplied == nil {
-		return errors.New("eventrulecycle: Gate, ReadApplied and WriteApplied are required to apply approved rules")
+	r, err := Apply(s.ctx, s.d, toApply, s.now())
+	// Candidate is set once the gate has scored it.
+	if r.Candidate != nil {
+		s.res.GateRan, s.res.GateAffected = true, r.Gate.Affected
+		fmt.Fprintf(s.in.Out, "Clustering gate: %s\n", GateExercise(r.Gate.Affected))
 	}
-	existing, err := d.ReadApplied(d.GeneratedPath)
+	s.res.Applied = len(r.Applied)
 	if err != nil {
-		return fmt.Errorf("eventrulecycle: read generated rules: %w", err)
+		return err
 	}
-	candidate := append([]AppliedRule(nil), existing...)
-	seen := make(map[string]bool, len(candidate))
-	for _, r := range candidate {
-		seen[ruleKey(r)] = true
+	if r.Nothing {
+		// Every listed proposal was decided elsewhere before the gate.
+		return nil
 	}
-	for _, p := range toApply {
-		r := AppliedRule{TargetKind: string(p.TargetKind), Target: p.Target, Phrase: normalizePhrase(p.Phrase), ProposalID: p.ID, PromptVersion: p.PromptVersion}
-		if seen[ruleKey(r)] {
-			continue
-		}
-		seen[ruleKey(r)] = true
-		candidate = append(candidate, r)
-	}
-
-	gate, err := d.Gate(s.ctx, candidate)
-	if err != nil {
-		return fmt.Errorf("eventrulecycle: clustering gate: %w", err)
-	}
-	s.res.GateRan, s.res.GateAffected = true, gate.Affected
-	fmt.Fprintf(s.in.Out, "Clustering gate: %s\n", GateExercise(gate.Affected))
-	if !gate.OK {
+	if r.Blocked {
 		s.res.GateBlocked = true
-		s.res.GateReason = gate.Reason
-		fmt.Fprintf(s.in.Out, "Clustering gate blocked %d approved rule(s): %s\n", len(toApply), gate.Reason)
-		for _, p := range toApply {
+		s.res.GateReason = r.Reason
+		fmt.Fprintf(s.in.Out, "Clustering gate blocked %d approved rule(s): %s\n", len(r.Gated), r.Reason)
+		for _, p := range r.Gated {
 			fmt.Fprintf(s.in.Out, "  - %s %s %s %q\n", p.ID, p.TargetKind, p.Target, p.Phrase)
 		}
 		fmt.Fprintln(s.in.Out, "They stay approved; no rules file was written. Reject the offender in the next run.")
 		return nil
 	}
-	if err := d.WriteApplied(d.GeneratedPath, candidate); err != nil {
-		return fmt.Errorf("eventrulecycle: write generated rules: %w", err)
-	}
-	for _, p := range toApply {
-		applied, err := p.MarkApplied(s.now().UTC())
-		if err != nil {
-			return fmt.Errorf("eventrulecycle: mark applied %s: %w", p.ID, err)
-		}
-		if err := s.save(applied, "mark applied"); err != nil {
-			return err
-		}
-		s.res.Applied++
-	}
-	fmt.Fprintf(s.in.Out, "Clustering gate passed; %d rule(s) applied to %s\n", s.res.Applied, d.GeneratedPath)
+	fmt.Fprintf(s.in.Out, "Clustering gate passed; %d rule(s) applied to %s\n", s.res.Applied, s.d.GeneratedPath)
 	return nil
 }
 

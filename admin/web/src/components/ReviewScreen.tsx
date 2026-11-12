@@ -28,6 +28,8 @@ export interface ReviewScreenProps<T> {
   onRefresh(): void;
   notice?: Notice;
   emptyText: string;
+  /** When true, the decision buttons and keys are disabled (skip and moving still work). */
+  decisionsDisabled?: boolean;
 }
 
 function inField(target: EventTarget | null): boolean {
@@ -94,7 +96,7 @@ export function ReviewScreen<T>(props: ReviewScreenProps<T>) {
   };
 
   const decide = async (d: ReviewDecision<T>) => {
-    if (current === undefined || busyRef.current) return;
+    if (current === undefined || busyRef.current || props.decisionsDisabled) return;
     busyRef.current = true;
     setBusy(true);
     setLocal(null);
@@ -190,7 +192,7 @@ export function ReviewScreen<T>(props: ReviewScreenProps<T>) {
                   key={d.key}
                   type="button"
                   class={"btn" + (i === 0 ? " primary" : "")}
-                  disabled={busy}
+                  disabled={busy || props.decisionsDisabled}
                   onClick={() => decide(d)}
                 >
                   {d.label} <kbd>{d.key.toUpperCase()}</kbd>

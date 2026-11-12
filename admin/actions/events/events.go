@@ -47,9 +47,10 @@ type impactParams struct {
 }
 
 // Actions returns events.type_list, .brief, .gate, .impact, .type_approve
-// and .type_reject.
+// and .type_reject, and the rule review actions events.rules_discover,
+// .rules_queue, .rules_decide, .rules_reject_failing and .rules_apply.
 func Actions() []action.Action {
-	return []action.Action{
+	return append([]action.Action{
 		{
 			Name: "events.type_list", Group: group, Title: "List event type proposals",
 			Description: "Lists the pending and approved new event type proposals with their evidence article ids.",
@@ -86,7 +87,7 @@ func Actions() []action.Action {
 				return runDecide(ctx, env, params, false)
 			},
 		},
-	}
+	}, ruleActions()...)
 }
 
 func invalid(format string, args ...any) error {

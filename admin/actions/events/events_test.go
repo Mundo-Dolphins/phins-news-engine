@@ -126,7 +126,12 @@ func TestMetadata(t *testing.T) {
 		"events.gate": {action.KindRead, 2, false}, "events.impact": {action.KindRead, 2, true},
 		"events.type_approve": {action.KindWrite, 1, false}, "events.type_reject": {action.KindWrite, 1, false},
 	}
-	as := events.Actions()
+	var as []action.Action
+	for _, a := range events.Actions() {
+		if !strings.HasPrefix(a.Name, "events.rules_") { // see TestRulesMetadata
+			as = append(as, a)
+		}
+	}
 	if len(as) != len(want) {
 		t.Fatalf("got %d actions", len(as))
 	}
