@@ -221,7 +221,8 @@ func (r *Repository) Get(ctx context.Context, id string) (eventruleproposal.Prop
 	return p, nil
 }
 
-// Save implements eventruleproposalport.Repository.
+// Save persists the status and decided_at of an existing proposal whatever
+// its stored status, for seeding fixtures; decisions use Transition.
 func (r *Repository) Save(ctx context.Context, p eventruleproposal.Proposal) error {
 	res, err := r.db.ExecContext(ctx, `UPDATE event_rule_proposals SET status = ?, decided_at = ? WHERE id = ?`,
 		string(p.Status), nullableTime(p.DecidedAt), p.ID)
@@ -232,4 +233,27 @@ func (r *Repository) Save(ctx context.Context, p eventruleproposal.Proposal) err
 		return fmt.Errorf("sqliteeventruleproposal: proposal %q: %w", p.ID, sql.ErrNoRows)
 	}
 	return nil
+}
+
+// Transition implements eventruleproposalport.Repository: the update is
+// guarded by the expected prior status, so of two racing decisions only one
+// lands.
+func (r *Repository) Transition(ctx context.Context, p eventruleproposal.Proposal, from eventruleproposal.Status) error {
+	res, err := r.db.ExecContext(ctx, `UPDATE event_rule_proposals SET status = ?, decided_at = ? WHERE id = ? AND status = ?`,
+		string(p.Status), nullableTime(p.DecidedAt), p.ID, string(from))
+	if err != nil {
+		return fmt.Errorf("sqliteeventruleproposal: transition: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("sqliteeventruleproposal: transition: %w", err)
+	}
+	if n > 0 {
+		return nil
+	}
+	cur, err := r.Get(ctx, p.ID)
+	if err != nil {
+		return err
+	}
+	return fmt.Errorf("sqliteeventruleproposal: proposal %q is %s, not %s: %w", p.ID, cur.Status, from, eventruleproposalport.ErrStatusChanged)
 }

@@ -498,7 +498,7 @@ func TestRulesDecideRejectApprovedLeavesApprovedList(t *testing.T) {
 	if err != nil || len(list(t, asMap(t, res.Object), "approved")) != 1 {
 		t.Fatalf("before: %+v, %v", res, err)
 	}
-	if _, err := f.run("events.rules_decide", `{"id":"`+id+`","decision":"reject"}`); err != nil {
+	if _, err := f.run("events.rules_decide", `{"id":"`+id+`","decision":"reject","from":"approved"}`); err != nil {
 		t.Fatal(err)
 	}
 	if f.status(id) != eventruleproposal.StatusRejected {
@@ -521,5 +521,93 @@ func TestRulesDecideEditOntoDecidedPhraseIsConflict(t *testing.T) {
 	wantCode(t, err, action.CodeConflict)
 	if f.status(orig) != eventruleproposal.StatusPending || f.status(takenID) != eventruleproposal.StatusApproved {
 		t.Errorf("orig = %s, taken = %s", f.status(orig), f.status(takenID))
+	}
+}
+
+func TestRulesRejectFailingOnlyListedIDs(t *testing.T) {
+	f := newFixture(t)
+	f.seedGeneric("art-1", "Springfield Isotopes inks a deal with Tavion Dale")
+	good := f.seed(rulePhrase("inks a deal", "art-1"))
+	listed := f.seed(rulePhrase("xx yy", "art-1"))
+	unlisted := f.seed(rulePhrase("ab cd", "art-1"))
+	res, err := f.run("events.rules_reject_failing", `{"ids":["`+listed+`","`+good+`","evr_unknown"]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejected := list(t, asMap(t, res.Object), "rejected")
+	if len(rejected) != 1 || obj(rejected[0])["id"] != listed {
+		t.Fatalf("rejected = %v", rejected)
+	}
+	want := map[string]eventruleproposal.Status{
+		good: eventruleproposal.StatusPending, listed: eventruleproposal.StatusRejected, unlisted: eventruleproposal.StatusPending,
+	}
+	for id, st := range want {
+		if f.status(id) != st {
+			t.Errorf("%s = %s, want %s", id, f.status(id), st)
+		}
+	}
+}
+
+func TestRulesEmptySampleReviewsAndRejectsNothing(t *testing.T) {
+	f := newFixture(t)
+	bad := f.seed(rulePhrase("xx yy", "art-1"))
+	appr := rulePhrase("inks a deal", "art-1")
+	appr.Status = eventruleproposal.StatusApproved
+	f.seed(appr)
+
+	res, err := f.run("events.rules_queue", `{}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := asMap(t, res.Object)
+	if len(list(t, m, "items")) != 0 || len(list(t, m, "no_evidence")) != 0 || len(list(t, m, "approved")) != 1 || m["notice"] != "no generic articles in the sample" {
+		t.Errorf("queue = %v", m)
+	}
+	if !strings.Contains(res.Summary, "no generic articles in the sample") {
+		t.Errorf("queue summary = %q", res.Summary)
+	}
+
+	res, err = f.run("events.rules_reject_failing", `{}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list(t, asMap(t, res.Object), "rejected")) != 0 || !strings.Contains(res.Summary, "no generic articles in the sample") {
+		t.Errorf("reject failing = %+v", res)
+	}
+	if f.status(bad) != eventruleproposal.StatusPending {
+		t.Errorf("status = %s, want pending", f.status(bad))
+	}
+}
+
+func TestRulesDecideRejectFrom(t *testing.T) {
+	f := newFixture(t)
+	appr := rulePhrase("inks a deal", "art-1")
+	appr.Status = eventruleproposal.StatusApproved
+	id := f.seed(appr)
+	// The queue's R targets a pending proposal: one approved since is a conflict.
+	_, err := f.run("events.rules_decide", `{"id":"`+id+`","decision":"reject"}`)
+	wantCode(t, err, action.CodeConflict)
+	if f.status(id) != eventruleproposal.StatusApproved {
+		t.Fatalf("status = %s, want approved", f.status(id))
+	}
+	_, err = f.run("events.rules_decide", `{"id":"`+id+`","decision":"accept","from":"approved"}`)
+	wantCode(t, err, action.CodeInvalidParams)
+	if _, err := f.run("events.rules_decide", `{"id":"`+id+`","decision":"reject","from":"approved"}`); err != nil {
+		t.Fatal(err)
+	}
+	if f.status(id) != eventruleproposal.StatusRejected {
+		t.Errorf("status = %s, want rejected", f.status(id))
+	}
+}
+
+func TestRulesEntityCatalogUnsetIsConflictWithReason(t *testing.T) {
+	f := newFixture(t)
+	f.cfg.Clustering.EntityCatalog.GeneratedPath = ""
+	for _, name := range []string{"events.rules_queue", "events.rules_apply", "events.rules_reject_failing"} {
+		_, err := f.run(name, `{}`)
+		wantCode(t, err, action.CodeConflict)
+		if !strings.Contains(err.Error(), "clustering.entity_catalog paths are not configured") {
+			t.Errorf("%s err = %v", name, err)
+		}
 	}
 }

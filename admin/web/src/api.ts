@@ -124,13 +124,28 @@ export const getJob = (id: string) => call<Job>("GET", "/api/jobs/" + encodeURIC
 export const cancelJob = (id: string) => call<void>("POST", "/api/jobs/" + encodeURIComponent(id) + "/cancel");
 export const listAudit = () => call<AuditEntry[]>("GET", "/api/audit");
 
-/** jobEvents streams a job's log; returns a function that closes the stream. */
-export function jobEvents(id: string, onLine: (l: LogLine) => void, onEnd: (j: Job) => void): () => void {
+/**
+ * jobEvents streams a job's log; returns a function that closes the stream.
+ * When onError is given, a stream error closes the stream and calls it
+ * (without it the browser keeps reconnecting).
+ */
+export function jobEvents(
+  id: string,
+  onLine: (l: LogLine) => void,
+  onEnd: (j: Job) => void,
+  onError?: () => void,
+): () => void {
   const es = new EventSource("/api/jobs/" + encodeURIComponent(id) + "/events");
   es.addEventListener("log", (e) => onLine(JSON.parse((e as MessageEvent).data)));
   es.addEventListener("end", (e) => {
     onEnd(JSON.parse((e as MessageEvent).data));
     es.close();
   });
+  if (onError) {
+    es.onerror = () => {
+      es.close();
+      onError();
+    };
+  }
   return () => es.close();
 }

@@ -151,19 +151,23 @@ run them, without the panel ever endangering the running bot.
   days plus the typed control sample) and check options. **Discover** runs
   `events.rules_discover`, a long-running exclusive job that asks the
   offline-training LLM for phrases and stores them as pending proposals
-  (failed calls give a `WARNING:` summary; a disabled LLM is a `conflict`);
-  the screen follows the job and reloads the queue when it ends.
+  (failed calls give a `WARNING:` summary; a disabled or misconfigured LLM
+  makes the job fail with the reason, since the job starts before the
+  check); the screen follows the job (polling it if its event stream
+  drops) and reloads the queue when it ends. With no generic article in
+  the sample the queue is empty with that notice and nothing is rejected.
   **Review** shows `events.rules_queue` on the shared screen: target kind
   and target, the phrase, its impact on the sample (generic articles moved
   per type, examples, retyped articles), the check verdict and the cited
   articles linked to their originals. `A` accept, `R` reject, `S` skip,
-  `E` edit (`events.rules_decide`). The panel never auto-rejects, unlike
+  `E` edit (`events.rules_decide`; `R` rejects only a proposal still
+  pending, the apply list's reject only one still approved). The panel never auto-rejects, unlike
   the CLI: a proposal that fails the checks is flagged "does not pass" with
   its reasons and offers no `A` (an accept of it, from MCP or a stale
   screen, is a `conflict` with the reasons); the owner rejects it, one by
   one or with "reject all failing" (`events.rules_reject_failing`, after a
-  confirmation), which rejects only the proposals still pending and still
-  failing. Proposals with no evidence in the sample stay pending, outside
+  confirmation; the ids it listed are sent), which rejects only those
+  proposals still pending and still failing. Proposals with no evidence in the sample stay pending, outside
   the queue, listed apart. `E` opens an inline editor: Enter previews the
   phrase (impact and verdict, nothing written), Save or `Ctrl+Enter` saves
   it once the last preview of that text passed — the edited rule is approved
@@ -173,7 +177,12 @@ run them, without the panel ever endangering the running bot.
   long-running exclusive job: the gate scores the generated rules plus all
   of them (no keep step) and shows the before/after metrics; on PASS it
   writes the generated rules file under `ConfigFilesMu` and marks them
-  applied, on BLOCKED it shows the reason and leaves them approved. The
+  applied, on BLOCKED it shows the reason and leaves them approved. Every
+  decision is saved only while the proposal is still in the status it was
+  read in, and a rule rejected while the gate ran makes apply a `conflict`
+  ("run apply again") with nothing written; the screen also disables the
+  decisions while the apply job runs. A failure marking the rules applied
+  after the file was written says so; running apply again finishes it. The
   logic lives in `app/eventrulecycle`, shared with the CLI.
 - **Production writes only operational state.** Reads everywhere, plus
   `claims.retry`, `claims.release`, `outbox.expire`, `outbox.repair` and the

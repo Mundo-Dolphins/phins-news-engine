@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
-import { ApiError, jobEvents, runAction, type Job, type Result } from "../api";
+import { ApiError, getJob, jobEvents, runAction, type Job, type Result } from "../api";
 import { ReviewScreen, type Notice, type ReviewDecision } from "../components/ReviewScreen";
 import { LocalOnly } from "../components/LocalOnly";
 import { ImpactView, PhraseEditor, Verdict, type Assessment } from "../components/PhraseEditor";
@@ -32,6 +32,8 @@ interface Queue {
   items: RuleProposal[];
   no_evidence: RuleRef[];
   approved: RuleRef[];
+  /** Set when nothing is reviewed, e.g. "no generic articles in the sample". */
+  notice?: string;
 }
 
 interface Metrics {
@@ -65,6 +67,9 @@ type JobState =
 const keyOf = (t: { id: string }) => t.id;
 const moves = (t: RuleProposal) => t.impact.moved.reduce((n, m) => n + m.count, 0);
 const active = (status: string) => status === "queued" || status === "running";
+
+/** How often a job is polled once its event stream has failed. */
+const POLL_MS = 2000;
 
 /** gone matches the errors for a proposal that is no longer pending. */
 const gone = (e: unknown) =>
@@ -138,7 +143,7 @@ function RuleEntry({ t }: { t: RuleProposal }) {
 }
 
 /** ConfirmRejectFailing lists the failing proposals and asks before rejecting them all. */
-function ConfirmRejectFailing({ items, onConfirm, onCancel }: { items: RuleProposal[]; onConfirm(): void; onCancel(): void }) {
+function ConfirmRejectFailing({ items, onConfirm, onCancel }: { items: RuleProposal[]; onConfirm(ids: string[]): void; onCancel(): void }) {
   const dialog = useRef<HTMLDivElement>(null);
   const cancel = useRef<HTMLButtonElement>(null);
   const [sent, setSent] = useState(false);
@@ -174,7 +179,7 @@ function ConfirmRejectFailing({ items, onConfirm, onCancel }: { items: RulePropo
             onClick={() => {
               if (sent) return;
               setSent(true);
-              onConfirm();
+              onConfirm(items.map((t) => t.id));
             }}
           >
             Reject {items.length}
@@ -311,8 +316,10 @@ function ReviewEventsScreen() {
         items: obj?.items ?? [],
         no_evidence: obj?.no_evidence ?? [],
         approved: obj?.approved ?? [],
+        notice: obj?.notice || undefined,
       });
       setLoadError("");
+      setReviewNotice(undefined);
     } catch (e) {
       setLoadError("Could not load the event rule review: " + errorText(e));
     }
@@ -322,20 +329,41 @@ function ReviewEventsScreen() {
     load();
   }, [load]);
 
-  /** untilEnd resolves with the job once it has finished, following its event stream. */
+  /**
+   * untilEnd resolves with the job once it has finished, following its event
+   * stream; when the stream fails it polls the job instead.
+   */
   const untilEnd = (job: Job) =>
     active(job.status)
-      ? new Promise<Job>((resolve) => {
+      ? new Promise<Job>((resolve, reject) => {
           // The end may arrive before jobEvents returns its closer.
           let close: (() => void) | null = null;
           let ended = false;
+          const finish = () => {
+            ended = true;
+            if (close) streams.current.delete(close);
+          };
+          const poll = async () => {
+            try {
+              for (;;) {
+                const j = await getJob(job.id);
+                if (!active(j.status)) return resolve(j);
+                await new Promise((r) => setTimeout(r, POLL_MS));
+              }
+            } catch (e) {
+              reject(e);
+            }
+          };
           close = jobEvents(
             job.id,
             () => {},
             (j) => {
-              ended = true;
-              if (close) streams.current.delete(close);
+              finish();
               resolve(j);
+            },
+            () => {
+              finish();
+              poll();
             },
           );
           if (!ended) streams.current.add(close);
@@ -367,15 +395,32 @@ function ReviewEventsScreen() {
   };
 
   const busyJob = discover.kind === "running" || apply.kind === "running";
+  // A decision taken while the gate runs could change what it writes.
+  const applying = apply.kind === "running";
 
   const hide = (t: { id: string }) => setHidden((h) => new Set(h).add(keyOf(t)));
 
+  /** addApproved lists an accepted proposal in the apply zone without reloading the queue. */
+  const addApproved = (t: Pick<RuleRef, "id" | "target_kind" | "target" | "phrase">) =>
+    setQueue((q) =>
+      q && !q.approved.some((r) => r.id === t.id)
+        ? {
+            ...q,
+            approved: [
+              ...q.approved,
+              { id: t.id, target_kind: t.target_kind, target: t.target, phrase: t.phrase, decided_at: new Date().toISOString() },
+            ],
+          }
+        : q,
+    );
+
   /** decide posts one decision; the item leaves the queue unless the server refused it. */
   const decide = async (t: RuleProposal, decision: "accept" | "reject"): Promise<Notice | void> => {
+    setReviewNotice(undefined);
     try {
       const out = await runAction("events.rules_decide", { id: t.id, decision }, false);
       hide(t);
-      if (decision === "accept") load();
+      if (decision === "accept") addApproved(t);
       if ("job" in out) return { kind: "info", text: `“${t.phrase}”: started as job ${out.job.id}.` };
       return { kind: "info", text: out.result.summary || `“${t.phrase}”: ${decision} done` };
     } catch (e) {
@@ -402,7 +447,10 @@ function ReviewEventsScreen() {
       key: "e",
       label: "Edit phrase",
       // Settles when the editor closes (no decision) or the edit is saved.
-      onDecide: (t) => new Promise((resolve) => setEditing({ t, settle: resolve })),
+      onDecide: (t) => {
+        setReviewNotice(undefined);
+        return new Promise((resolve) => setEditing({ t, settle: resolve }));
+      },
     },
   ];
 
@@ -415,18 +463,19 @@ function ReviewEventsScreen() {
     if (!editing) return;
     const result = await edit(editing.t, phrase, false);
     hide(editing.t);
+    const saved = result.object as Partial<RuleRef> | undefined;
+    if (saved?.id) addApproved({ id: saved.id, target_kind: editing.t.target_kind, target: editing.t.target, phrase: saved.phrase ?? phrase });
     setEditing(null);
     editing.settle({ kind: "info", text: result.summary || `“${editing.t.phrase}” replaced by “${phrase}”.` });
-    load();
   };
 
   const visible = (queue?.items ?? []).filter((t) => !hidden.has(keyOf(t)));
   const failingItems = visible.filter((t) => !t.passes);
   const approved = (queue?.approved ?? []).filter((t) => !hiddenApproved.has(keyOf(t)));
 
-  const rejectFailing = async () => {
+  const rejectFailing = async (ids: string[]) => {
     try {
-      const out = await runAction("events.rules_reject_failing", {}, false);
+      const out = await runAction("events.rules_reject_failing", { ids }, false);
       if ("job" in out) throw new Error("unexpected job for events.rules_reject_failing");
       const rejected = (out.result.object as { rejected?: RuleRef[] } | undefined)?.rejected ?? [];
       setHidden((h) => {
@@ -446,7 +495,7 @@ function ReviewEventsScreen() {
   const rejectApproved = async (r: RuleRef) => {
     setApplyNotice(undefined);
     try {
-      const out = await runAction("events.rules_decide", { id: r.id, decision: "reject" }, false);
+      const out = await runAction("events.rules_decide", { id: r.id, decision: "reject", from: "approved" }, false);
       setHiddenApproved((h) => new Set(h).add(r.id));
       if (!("job" in out)) setApplyNotice({ kind: "info", text: out.result.summary || `“${r.phrase}” rejected.` });
     } catch (e) {
@@ -506,7 +555,7 @@ function ReviewEventsScreen() {
         </h2>
         {failingItems.length > 0 && (
           <div class="rules-zone-bar">
-            <button type="button" class="btn danger" onClick={() => setConfirming(true)}>
+            <button type="button" class="btn danger" disabled={editing !== null || applying} onClick={() => setConfirming(true)}>
               Reject all failing ({failingItems.length})
             </button>
             <span class="muted">Failing proposals are flagged “does not pass” and offer no Accept.</span>
@@ -540,7 +589,12 @@ function ReviewEventsScreen() {
             onSkip={hide}
             onRefresh={load}
             notice={loadError ? { kind: "error", text: loadError } : reviewNotice}
-            emptyText="Nothing to review: no event rule proposal with evidence in the sample is pending."
+            decisionsDisabled={applying}
+            emptyText={
+              queue.notice
+                ? `Nothing to review: ${queue.notice}.`
+                : "Nothing to review: no event rule proposal with evidence in the sample is pending."
+            }
           />
         )}
         {queue && queue.no_evidence.length > 0 && (
@@ -583,7 +637,7 @@ function ReviewEventsScreen() {
                   <span class="rules-approved-phrase">“{r.phrase}”</span> <Target t={r} />
                   {r.decided_at && <span class="muted"> · approved {when(r.decided_at)}</span>}
                   <span class="spacer" />
-                  <button type="button" class="btn" onClick={() => rejectApproved(r)}>
+                  <button type="button" class="btn" disabled={applying} onClick={() => rejectApproved(r)}>
                     Reject
                   </button>
                 </li>

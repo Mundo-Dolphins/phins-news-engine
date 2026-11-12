@@ -40,7 +40,15 @@ type ruleDecideParams struct {
 	Decision string `json:"decision" help:"accept, reject or edit" enum:"accept,reject,edit" required:"true"`
 	Phrase   string `json:"phrase" help:"replacement phrase (edit only)"`
 	Preview  bool   `json:"preview" help:"edit only: return the impact and verdict of the phrase without saving"`
+	From     string `json:"from" help:"reject only: the status the proposal must still be in, pending (the review queue) or approved (the apply list)" enum:"pending,approved" default:"pending"`
 }
+
+type rejectFailingParams struct {
+	IDs []string `json:"ids" help:"reject only these proposals (the ones the caller listed), when still pending and still failing; all failing pending proposals when omitted"`
+}
+
+// emptySampleNotice explains a review with no sample: nothing is judged.
+const emptySampleNotice = "no generic articles in the sample"
 
 func ruleActions() []action.Action {
 	return []action.Action{
@@ -56,13 +64,13 @@ func ruleActions() []action.Action {
 		},
 		{
 			Name: "events.rules_decide", Group: group, Title: "Decide an event rule phrase",
-			Description: "Accepts, rejects or edits a pending event rule phrase proposal. A proposal failing the checks cannot be accepted. Edit replaces the phrase (preview shows its impact without saving).",
+			Description: "Accepts, rejects or edits a pending event rule phrase proposal, or rejects an approved one not yet applied (from approved). A proposal failing the checks cannot be accepted. Edit replaces the phrase (preview shows its impact without saving).",
 			Kind:        action.KindWrite, Modes: localOnly, Params: ruleDecideParams{}, Run: runRulesDecide,
 		},
 		{
 			Name: "events.rules_reject_failing", Group: group, Title: "Reject failing event rule phrases",
-			Description: "Rejects the pending event rule phrase proposals that fail the checks now and returns them. Proposals without evidence stay pending.",
-			Kind:        action.KindWrite, Modes: localOnly, Params: noParams{}, Run: runRulesRejectFailing,
+			Description: "Rejects the pending event rule phrase proposals that fail the checks now (only the given ids when set) and returns them. Proposals without evidence stay pending; with no generic article in the sample nothing is rejected.",
+			Kind:        action.KindWrite, Modes: localOnly, Params: rejectFailingParams{}, Run: runRulesRejectFailing,
 		},
 		{
 			Name: "events.rules_apply", Group: group, Title: "Apply approved event rule phrases",
@@ -80,7 +88,8 @@ func ruleError(err error) error {
 	case errors.Is(err, eventrulecycle.ErrPhraseUnchanged), errors.Is(err, eventrulecycle.ErrNoCitedEvidence):
 		return &action.Error{Code: action.CodeInvalidParams, Message: err.Error()}
 	case errors.Is(err, eventrulecycle.ErrEditFailsChecks), errors.Is(err, eventrulecycle.ErrAlreadyDecided),
-		errors.Is(err, eventrules.ErrAlreadyDecided), errors.Is(err, eventrules.ErrGateDatasetMissing):
+		errors.Is(err, eventrules.ErrAlreadyDecided), errors.Is(err, eventrules.ErrGateDatasetMissing),
+		errors.Is(err, eventrulecycle.ErrApplyStale):
 		return action.Conflict(err)
 	}
 	return err
@@ -92,8 +101,8 @@ func ruleDeps(env action.Env, llm appout.EventRuleDiscoveryLLM) (eventrulecycle.
 	if env.Config == nil {
 		return eventrulecycle.Deps{}, errors.New("events: no configuration loaded")
 	}
-	if env.Config.Clustering.RulesPath == "" {
-		return eventrulecycle.Deps{}, action.Conflict(errors.New("clustering.rules_path is empty"))
+	if reason := eventrules.ReviewDisabledReason(env.Config); reason != "" {
+		return eventrulecycle.Deps{}, action.Conflict(errors.New(reason))
 	}
 	return eventrules.CycleDeps(env.Config, env.DB, gateDatasetPath, llm, func(w string) { env.Log.Warn(w) }, env.Now), nil
 }
@@ -210,9 +219,12 @@ func runRulesQueue(ctx context.Context, env action.Env, _ any) (action.Result, e
 	if err != nil {
 		return action.Result{}, err
 	}
-	pending, err := eventrulecycle.Pending(ctx, d, c, eventruleproposal.DefaultCheckOptions())
-	if err != nil {
-		return action.Result{}, err
+	var pending []eventrulecycle.Assessment
+	// As the CLI: with no sample the backlog is not judged at all.
+	if len(c.Sample) > 0 {
+		if pending, err = eventrulecycle.Pending(ctx, d, c, eventruleproposal.DefaultCheckOptions()); err != nil {
+			return action.Result{}, err
+		}
 	}
 	items, noEvidence := []map[string]any{}, []map[string]any{}
 	for _, a := range pending {
@@ -239,11 +251,17 @@ func runRulesQueue(ctx context.Context, env action.Env, _ any) (action.Result, e
 			"decided_at": p.DecidedAt.UTC().Format(time.RFC3339),
 		})
 	}
+	notice := ""
+	summary := fmt.Sprintf("%d proposal(s) to review, %d without evidence, %d approved not applied",
+		len(items), len(noEvidence), len(approved))
+	if len(c.Sample) == 0 {
+		notice = emptySampleNotice
+		summary = fmt.Sprintf("Nothing to review: %s; %d approved not applied", notice, len(approved))
+	}
 	return action.Result{
-		Render: "object",
-		Object: map[string]any{"sampled": len(c.Sample), "items": items, "no_evidence": noEvidence, "approved": approved},
-		Summary: fmt.Sprintf("%d proposal(s) to review, %d without evidence, %d approved not applied",
-			len(items), len(noEvidence), len(approved)),
+		Render:  "object",
+		Object:  map[string]any{"sampled": len(c.Sample), "items": items, "no_evidence": noEvidence, "approved": approved, "notice": notice},
+		Summary: summary,
 	}, nil
 }
 
@@ -254,6 +272,10 @@ func runRulesDecide(ctx context.Context, env action.Env, params any) (action.Res
 	}
 	if p.Decision != "edit" && (p.Phrase != "" || p.Preview) {
 		return action.Result{}, invalid("phrase and preview apply to edit only")
+	}
+	from := eventruleproposal.Status(p.From)
+	if p.Decision != "reject" && from != eventruleproposal.StatusPending {
+		return action.Result{}, invalid("from applies to reject only")
 	}
 	if p.Decision == "edit" && strings.TrimSpace(p.Phrase) == "" {
 		return action.Result{}, invalid("phrase is required to edit")
@@ -270,13 +292,15 @@ func runRulesDecide(ctx context.Context, env action.Env, params any) (action.Res
 		return action.Result{}, action.Conflict(fmt.Errorf("proposal %s is not an event rule phrase proposal", p.ID))
 	}
 	if p.Decision == "reject" {
-		decided, err := eventrulecycle.Reject(ctx, d, cur, env.Now())
+		decided, err := eventrulecycle.RejectFrom(ctx, d, cur, from, env.Now())
 		if err != nil {
 			return action.Result{}, ruleError(err)
 		}
 		env.Log.Info("event rule proposal decided", "id", decided.ID, "status", string(decided.Status), "by", env.Actor)
-		return action.Result{Render: "object", Object: map[string]any{"id": decided.ID, "status": string(decided.Status)},
-			Summary: fmt.Sprintf("Event rule %q rejected.", decided.Phrase)}, nil
+		return action.Result{
+			Render: "object", Object: map[string]any{"id": decided.ID, "status": string(decided.Status)},
+			Summary: fmt.Sprintf("Event rule %q rejected.", decided.Phrase),
+		}, nil
 	}
 	if cur.Status != eventruleproposal.StatusPending {
 		return action.Result{}, action.Conflict(fmt.Errorf("proposal %s is %s, not pending", p.ID, cur.Status))
@@ -296,16 +320,20 @@ func runRulesDecide(ctx context.Context, env action.Env, params any) (action.Res
 			return action.Result{}, ruleError(err)
 		}
 		env.Log.Info("event rule proposal decided", "id", decided.ID, "status", string(decided.Status), "by", env.Actor)
-		return action.Result{Render: "object", Object: map[string]any{"id": decided.ID, "status": string(decided.Status)},
-			Summary: fmt.Sprintf("Event rule %q approved.", decided.Phrase)}, nil
+		return action.Result{
+			Render: "object", Object: map[string]any{"id": decided.ID, "status": string(decided.Status)},
+			Summary: fmt.Sprintf("Event rule %q approved.", decided.Phrase),
+		}, nil
 	}
 	a, err := eventrulecycle.Edit(ctx, d, c, cur, p.Phrase, opts, env.Now(), !p.Preview)
 	if p.Preview && errors.Is(err, eventrulecycle.ErrEditFailsChecks) {
 		// A preview reports a failing phrase as a result the editor shows.
 		obj := assessmentObject(a)
 		obj["preview"], obj["id"] = true, ""
-		return action.Result{Render: "object", Object: obj,
-			Summary: fmt.Sprintf("Preview of %q does not pass: %s", a.Proposal.Phrase, strings.Join(reasonsOf(a), "; "))}, nil
+		return action.Result{
+			Render: "object", Object: obj,
+			Summary: fmt.Sprintf("Preview of %q does not pass: %s", a.Proposal.Phrase, strings.Join(reasonsOf(a), "; ")),
+		}, nil
 	}
 	if err != nil {
 		return action.Result{}, ruleError(err)
@@ -320,33 +348,43 @@ func runRulesDecide(ctx context.Context, env action.Env, params any) (action.Res
 	return action.Result{Render: "object", Object: obj, Summary: fmt.Sprintf("Event rule %q replaced by %q and approved.", cur.Phrase, a.Proposal.Phrase)}, nil
 }
 
-func runRulesRejectFailing(ctx context.Context, env action.Env, _ any) (action.Result, error) {
+func runRulesRejectFailing(ctx context.Context, env action.Env, params any) (action.Result, error) {
+	p, ok := params.(*rejectFailingParams)
+	if !ok {
+		return action.Result{}, errBadParams
+	}
 	d, c, err := prepared(ctx, env)
 	if err != nil {
 		return action.Result{}, err
+	}
+	rejected := []map[string]any{}
+	if len(c.Sample) == 0 {
+		return action.Result{
+			Render: "object", Object: map[string]any{"rejected": rejected, "notice": emptySampleNotice},
+			Summary: "Nothing rejected: " + emptySampleNotice + ".",
+		}, nil
 	}
 	pending, err := eventrulecycle.Pending(ctx, d, c, eventruleproposal.DefaultCheckOptions())
 	if err != nil {
 		return action.Result{}, err
 	}
-	rejected := []map[string]any{}
+	var only map[string]bool
+	if p.IDs != nil {
+		only = make(map[string]bool, len(p.IDs))
+		for _, id := range p.IDs {
+			only[id] = true
+		}
+	}
 	if afterRejectFailingListed != nil {
 		afterRejectFailingListed()
 	}
 	for _, a := range pending {
-		if !failing(a) {
+		if !failing(a) || (only != nil && !only[a.Proposal.ID]) {
 			continue
 		}
-		// Reject also accepts approved rows, so re-read: only a proposal
-		// still pending is rejected, never one approved since the listing.
-		cur, err := d.Proposals.Get(ctx, a.Proposal.ID)
-		if err != nil {
-			return action.Result{}, ruleError(err)
-		}
-		if cur.Status != eventruleproposal.StatusPending {
-			continue
-		}
-		if _, err := eventrulecycle.Reject(ctx, d, a.Proposal, env.Now()); err != nil {
+		// Only a proposal still pending is rejected, never one approved
+		// since the listing.
+		if _, err := eventrulecycle.RejectFrom(ctx, d, a.Proposal, eventruleproposal.StatusPending, env.Now()); err != nil {
 			if errors.Is(err, eventrulecycle.ErrAlreadyDecided) {
 				continue // decided elsewhere since the listing
 			}
@@ -355,8 +393,10 @@ func runRulesRejectFailing(ctx context.Context, env action.Env, _ any) (action.R
 		rejected = append(rejected, map[string]any{"id": a.Proposal.ID, "phrase": a.Proposal.Phrase, "reasons": reasonsOf(a)})
 	}
 	env.Log.Info("event rule proposals rejected", "count", len(rejected), "by", env.Actor)
-	return action.Result{Render: "object", Object: map[string]any{"rejected": rejected},
-		Summary: fmt.Sprintf("%d failing proposal(s) rejected.", len(rejected))}, nil
+	return action.Result{
+		Render: "object", Object: map[string]any{"rejected": rejected, "notice": ""},
+		Summary: fmt.Sprintf("%d failing proposal(s) rejected.", len(rejected)),
+	}, nil
 }
 
 func runRulesApply(ctx context.Context, env action.Env, _ any) (action.Result, error) {

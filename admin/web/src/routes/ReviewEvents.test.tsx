@@ -1,5 +1,5 @@
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/preact";
-import { ApiError, getSession, jobEvents, runAction, type Job, type RunOutcome } from "../api";
+import { ApiError, getJob, getSession, jobEvents, runAction, type Job, type RunOutcome } from "../api";
 import { ReviewEvents } from "./ReviewEvents";
 
 vi.mock("../api", async (orig) => ({
@@ -7,9 +7,11 @@ vi.mock("../api", async (orig) => ({
   runAction: vi.fn(),
   getSession: vi.fn(),
   jobEvents: vi.fn(),
+  getJob: vi.fn(),
 }));
 const run = vi.mocked(runAction);
 const events = vi.mocked(jobEvents);
+const poll = vi.mocked(getJob);
 
 const impact = (count = 3) => ({
   moved: [{ type: "sign", count }],
@@ -98,6 +100,7 @@ describe("ReviewEvents", () => {
   beforeEach(() => {
     run.mockReset();
     events.mockReset();
+    poll.mockReset();
     vi.mocked(getSession).mockResolvedValue({ username: "ana", mode: "local" });
   });
 
@@ -116,16 +119,17 @@ describe("ReviewEvents", () => {
     expect(within(c).getByRole("button", { name: "Accept A" })).toBeTruthy();
   });
 
-  it("accepts a passing proposal with A and reloads the queue", async () => {
-    const s = await open({ items: [rule()] }, { "events.rules_decide": () => obj({ id: "r1", status: "approved" }, 'Event rule "agrees to terms" approved.') });
+  it("accepts a passing proposal with A and adds it to the apply list without reloading the queue", async () => {
+    await open({ items: [rule(), rule({ id: "r4", phrase: "signs with" })] }, { "events.rules_decide": () => obj({ id: "r1", status: "approved" }, 'Event rule "agrees to terms" approved.') });
     await screen.findByRole("heading", { name: /agrees to terms/ });
-    s.setQueue({ approved: [{ id: "r1", target_kind: "action", target: "sign", phrase: "agrees to terms", decided_at: "2026-11-10T10:00:00Z" }] });
     fireEvent.keyDown(window, { key: "a" });
     await waitFor(() => expect(run).toHaveBeenCalledWith("events.rules_decide", { id: "r1", decision: "accept" }, false));
     expect(await screen.findByText('Event rule "agrees to terms" approved.')).toBeTruthy();
-    await waitFor(() => expect(calls("events.rules_queue").length).toBe(2));
     const apply = screen.getByRole("region", { name: /Apply/ });
     expect(await within(apply).findByText(/agrees to terms/)).toBeTruthy();
+    expect(screen.getByRole("heading", { name: /signs with/ })).toBeTruthy();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(calls("events.rules_queue").length).toBe(1);
   });
 
   it("flags a failing proposal with its reasons and offers no Accept; A does nothing", async () => {
@@ -168,7 +172,7 @@ describe("ReviewEvents", () => {
     fireEvent.click(confirm);
     fireEvent.click(confirm);
     await waitFor(() => expect(calls("events.rules_reject_failing").length).toBe(1));
-    expect(run).toHaveBeenCalledWith("events.rules_reject_failing", {}, false);
+    expect(run).toHaveBeenCalledWith("events.rules_reject_failing", { ids: ["r2", "r3"] }, false);
     expect(await screen.findByText(/2 failing proposal\(s\) rejected/)).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByRole("heading", { name: /agrees to terms/ })).toBeTruthy();
@@ -251,7 +255,7 @@ describe("ReviewEvents", () => {
     const apply = screen.getByRole("region", { name: /Apply/ });
     await within(apply).findByText(/inks deal/);
     fireEvent.click(within(apply).getByRole("button", { name: /Reject/ }));
-    await waitFor(() => expect(run).toHaveBeenCalledWith("events.rules_decide", { id: "r7", decision: "reject" }, false));
+    await waitFor(() => expect(run).toHaveBeenCalledWith("events.rules_decide", { id: "r7", decision: "reject", from: "approved" }, false));
     await waitFor(() => expect(within(apply).queryByRole("button", { name: "Reject" })).toBeNull());
     expect(within(apply).getByText("No approved rule waiting.")).toBeTruthy();
   });
@@ -267,7 +271,7 @@ describe("ReviewEvents", () => {
     const apply = screen.getByRole("region", { name: /Apply/ });
     await within(apply).findByText(/inks deal/);
     fireEvent.click(within(apply).getByRole("button", { name: "Run gate and apply" }));
-    await waitFor(() => expect(events).toHaveBeenCalledWith("j2", expect.any(Function), expect.any(Function)));
+    await waitFor(() => expect(events).toHaveBeenCalledWith("j2", expect.any(Function), expect.any(Function), expect.any(Function)));
     end(
       job("j2", "events.rules_apply", "succeeded", {
         render: "object",
@@ -313,7 +317,7 @@ describe("ReviewEvents", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Discover phrases" }));
     await waitFor(() => expect(run).toHaveBeenCalledWith("events.rules_discover", {}, false));
-    await waitFor(() => expect(events).toHaveBeenCalledWith("j1", expect.any(Function), expect.any(Function)));
+    await waitFor(() => expect(events).toHaveBeenCalledWith("j1", expect.any(Function), expect.any(Function), expect.any(Function)));
     expect(screen.getByRole("link", { name: /j1/ }).getAttribute("href")).toBe("/jobs/j1");
     expect((screen.getByRole("button", { name: /Discover phrases|Discovering/ }) as HTMLButtonElement).disabled).toBe(true);
     s.setQueue({ items: [rule()] });
@@ -371,5 +375,88 @@ describe("ReviewEvents", () => {
     fireEvent.keyDown(window, { key: "a" });
     expect((await screen.findByRole("alert")).textContent).toContain("fails the checks");
     expect(screen.getByRole("heading", { name: /agrees to terms/ })).toBeTruthy();
+  });
+  it("disables the decisions and the apply list's Reject while apply runs", async () => {
+    const approved = [{ id: "r7", target_kind: "action", target: "sign", phrase: "inks deal", decided_at: "2026-11-09T10:00:00Z" }];
+    await open({ items: [rule()], approved }, { "events.rules_apply": () => ({ job: job("j5", "events.rules_apply") }) });
+    let end: (j: Job) => void = () => {};
+    events.mockImplementation((_id, _line, onEnd) => {
+      end = onEnd;
+      return () => {};
+    });
+    await screen.findByRole("heading", { name: /agrees to terms/ });
+    const apply = screen.getByRole("region", { name: /Apply/ });
+    await within(apply).findByText(/inks deal/);
+    fireEvent.click(within(apply).getByRole("button", { name: "Run gate and apply" }));
+    await waitFor(() => expect(events).toHaveBeenCalled());
+    expect((within(apply).getByRole("button", { name: "Reject" }) as HTMLButtonElement).disabled).toBe(true);
+    for (const name of [/Accept/, /^Reject R/, /Edit phrase/]) {
+      expect((within(card()).getByRole("button", { name }) as HTMLButtonElement).disabled).toBe(true);
+    }
+    for (const key of ["a", "r", "e"]) fireEvent.keyDown(window, { key });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(decideCalls()).toEqual([]);
+    expect(screen.queryByRole("textbox", { name: /New phrase/ })).toBeNull();
+    end(job("j5", "events.rules_apply", "succeeded", { render: "object", summary: "Nothing to apply.", object: { nothing: true, blocked: false, reason: "", applied: [], generated_rules: "g.yml" } }));
+    await waitFor(() => expect((within(card()).getByRole("button", { name: /Accept/ }) as HTMLButtonElement).disabled).toBe(false));
+  });
+
+  it("disables Reject all failing while the phrase editor is open", async () => {
+    await open({ items: [rule(), failing()] });
+    await screen.findByRole("heading", { name: /agrees to terms/ });
+    const all = () => screen.getByRole("button", { name: /Reject all failing/ }) as HTMLButtonElement;
+    expect(all().disabled).toBe(false);
+    fireEvent.keyDown(window, { key: "e" });
+    await screen.findByRole("textbox", { name: /New phrase/ });
+    expect(all().disabled).toBe(true);
+  });
+
+  it("clears the reject-all notice on the next decision", async () => {
+    await open(
+      { items: [failing(), rule()] },
+      {
+        "events.rules_reject_failing": () => obj({ rejected: [{ id: "r2", phrase: "the", reasons: ["x"] }] }, "1 failing proposal(s) rejected."),
+        "events.rules_decide": () => obj({ id: "r1", status: "rejected" }, 'Event rule "agrees to terms" rejected.'),
+      },
+    );
+    await screen.findByRole("heading", { name: /“the”/ });
+    fireEvent.click(screen.getByRole("button", { name: "Reject all failing (1)" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Reject 1" }));
+    expect(await screen.findByText(/1 failing proposal\(s\) rejected/)).toBeTruthy();
+    await screen.findByRole("heading", { name: /agrees to terms/ });
+    fireEvent.keyDown(window, { key: "r" });
+    expect(await screen.findByText('Event rule "agrees to terms" rejected.')).toBeTruthy();
+    expect(screen.queryByText(/1 failing proposal\(s\) rejected/)).toBeNull();
+  });
+
+  it("shows the empty-sample notice", async () => {
+    serve({});
+    run.mockImplementation(async (name) => {
+      if (name === "events.rules_queue") return obj({ sampled: 0, items: [], no_evidence: [], approved: [], notice: "no generic articles in the sample" });
+      throw new Error("unexpected action " + name);
+    });
+    render(<ReviewEvents />);
+    expect(await screen.findByText(/no generic articles in the sample/)).toBeTruthy();
+  });
+
+  it("polls the job when its event stream fails", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await open({}, { "events.rules_apply": () => ({ job: job("j6", "events.rules_apply") }) });
+      events.mockImplementation((_id, _line, _end, onError) => {
+        onError?.();
+        return () => {};
+      });
+      poll
+        .mockResolvedValueOnce(job("j6", "events.rules_apply", "running"))
+        .mockResolvedValueOnce(job("j6", "events.rules_apply", "succeeded", { render: "object", summary: "Nothing to apply.", object: { nothing: true, blocked: false, reason: "", applied: [], generated_rules: "g.yml" } }));
+      fireEvent.click(screen.getByRole("button", { name: "Run gate and apply" }));
+      await waitFor(() => expect(poll).toHaveBeenCalledTimes(1));
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(await screen.findByText("Nothing to apply.")).toBeTruthy();
+      expect(poll).toHaveBeenCalledWith("j6");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

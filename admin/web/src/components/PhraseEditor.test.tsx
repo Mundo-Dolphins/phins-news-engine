@@ -58,13 +58,14 @@ describe("PhraseEditor", () => {
   });
 
   it("shows a failing preview with its reasons and keeps Save disabled", async () => {
-    const { input, save } = setup(vi.fn().mockResolvedValue(assessment({ passes: false, reasons: ["matches 1 article(s), need 2"] })));
+    const { input, save, onSave } = setup(vi.fn().mockResolvedValue(assessment({ passes: false, reasons: ["matches 1 article(s), need 2"] })));
     fireEvent.input(input, { target: { value: "agrees to terms" } });
     fireEvent.keyDown(input, { key: "Enter" });
     expect(await screen.findByText(/Does not pass/)).toBeTruthy();
     expect(screen.getByText("matches 1 article(s), need 2")).toBeTruthy();
     expect(save().disabled).toBe(true);
     fireEvent.keyDown(input, { key: "Enter", ctrlKey: true });
+    expect(onSave).not.toHaveBeenCalled();
   });
 
   it("enables Save only after a passing preview of the current text", async () => {

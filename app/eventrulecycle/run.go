@@ -344,7 +344,7 @@ func (s *session) review() error {
 		}
 		if !a.Verdict.OK {
 			// The CLI auto-rejects a failing proposal; the panel only flags it.
-			if _, err := decide(s.ctx, s.d, p.ID, "auto-reject", eventruleproposal.Proposal.Reject, s.now()); err != nil {
+			if _, err := decide(s.ctx, s.d, p.ID, "auto-reject", "", eventruleproposal.Proposal.Reject, s.now()); err != nil {
 				return err
 			}
 			fmt.Fprintf(s.in.Out, "%s %s · %q auto-rejected: %s\n", p.TargetKind, p.Target, p.Phrase, strings.Join(a.Verdict.Reasons, "; "))
@@ -547,11 +547,15 @@ func (s *session) apply() error {
 	if err != nil {
 		return err
 	}
+	if r.Nothing {
+		// Every listed proposal was decided elsewhere before the gate.
+		return nil
+	}
 	if r.Blocked {
 		s.res.GateBlocked = true
 		s.res.GateReason = r.Reason
-		fmt.Fprintf(s.in.Out, "Clustering gate blocked %d approved rule(s): %s\n", len(toApply), r.Reason)
-		for _, p := range toApply {
+		fmt.Fprintf(s.in.Out, "Clustering gate blocked %d approved rule(s): %s\n", len(r.Gated), r.Reason)
+		for _, p := range r.Gated {
 			fmt.Fprintf(s.in.Out, "  - %s %s %s %q\n", p.ID, p.TargetKind, p.Target, p.Phrase)
 		}
 		fmt.Fprintln(s.in.Out, "They stay approved; no rules file was written. Reject the offender in the next run.")

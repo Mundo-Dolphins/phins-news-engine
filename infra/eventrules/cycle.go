@@ -30,9 +30,17 @@ const (
 // CycleStepDisabledReason returns why the event rules step cannot run with
 // cfg, or "" when it can.
 func CycleStepDisabledReason(cfg *config.Config) string {
-	switch {
-	case cfg.OfflineTraining.LLM.BaseURL == "" || cfg.OfflineTraining.LLM.Model == "":
+	if cfg.OfflineTraining.LLM.BaseURL == "" || cfg.OfflineTraining.LLM.Model == "" {
 		return "offline_training.llm.base_url and model are not configured"
+	}
+	return ReviewDisabledReason(cfg)
+}
+
+// ReviewDisabledReason returns why the event rules can be neither reviewed
+// nor applied with cfg (the LLM aside, which only discovery needs), or ""
+// when they can. Its texts are those of CycleStepDisabledReason.
+func ReviewDisabledReason(cfg *config.Config) string {
+	switch {
 	case cfg.Clustering.RulesPath == "":
 		return "clustering.rules_path is empty"
 	case cfg.Clustering.EntityCatalog.ManualPath == "" || cfg.Clustering.EntityCatalog.GeneratedPath == "":

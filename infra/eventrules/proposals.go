@@ -12,6 +12,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqliteeventruleproposal"
 	"github.com/Mundo-Dolphins/phins-news-engine/app/eventrulecycle"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventruleproposal"
+	"github.com/Mundo-Dolphins/phins-news-engine/ports/eventruleproposalport"
 )
 
 // maxBriefExamples bounds the evidence titles quoted in a brief.
@@ -81,7 +82,12 @@ func DecideType(ctx context.Context, db *sql.DB, id string, approve bool, now ti
 	if err != nil {
 		return eventruleproposal.Proposal{}, &textError{msg: err.Error(), sentinel: ErrAlreadyDecided}
 	}
-	if err := repo.Save(ctx, decided); err != nil {
+	// Guarded by the status read above: a decision landing in between
+	// (the panel, another CLI) is reported, never overwritten.
+	if err := repo.Transition(ctx, decided, p.Status); err != nil {
+		if errors.Is(err, eventruleproposalport.ErrStatusChanged) {
+			return eventruleproposal.Proposal{}, &textError{msg: fmt.Sprintf("proposal %s was decided elsewhere since it was read; reload it", p.ID), sentinel: ErrAlreadyDecided}
+		}
 		return eventruleproposal.Proposal{}, err
 	}
 	return decided, nil

@@ -18,6 +18,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventruleproposal"
 	infrasqlite "github.com/Mundo-Dolphins/phins-news-engine/infra/sqlite"
 	"github.com/Mundo-Dolphins/phins-news-engine/migrations"
+	"github.com/Mundo-Dolphins/phins-news-engine/ports/eventruleproposalport"
 )
 
 var migratedTestDBTemplate string
@@ -225,5 +226,36 @@ func TestGetAndSave_NotFound(t *testing.T) {
 	}
 	if err := repo.Save(ctx, eventruleproposal.Proposal{ID: "evr_missing", Status: eventruleproposal.StatusApproved}); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("Save() error = %v, want sql.ErrNoRows", err)
+	}
+}
+
+func TestTransition_StatusChangedSinceRead(t *testing.T) {
+	ctx := context.Background()
+	repo := sqliteeventruleproposal.NewRepository(newTestDB(t))
+	p, err := repo.Upsert(ctx, phraseProposal("cut", "a1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
+	approved, _ := p.Approve(at)
+	if err := repo.Transition(ctx, approved, eventruleproposal.StatusPending); err != nil {
+		t.Fatal(err)
+	}
+	// A second decision read while the row was pending: it is approved now.
+	rejected, _ := p.Reject(at)
+	if err := repo.Transition(ctx, rejected, eventruleproposal.StatusPending); !errors.Is(err, eventruleproposalport.ErrStatusChanged) {
+		t.Fatalf("Transition() error = %v, want ErrStatusChanged", err)
+	}
+	got, err := repo.Get(ctx, p.ID)
+	if err != nil || got.Status != eventruleproposal.StatusApproved {
+		t.Fatalf("got %+v, %v; want it still approved", got, err)
+	}
+}
+
+func TestTransition_NotFound(t *testing.T) {
+	repo := sqliteeventruleproposal.NewRepository(newTestDB(t))
+	err := repo.Transition(context.Background(), eventruleproposal.Proposal{ID: "evr_missing", Status: eventruleproposal.StatusApproved}, eventruleproposal.StatusPending)
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("Transition() error = %v, want sql.ErrNoRows", err)
 	}
 }

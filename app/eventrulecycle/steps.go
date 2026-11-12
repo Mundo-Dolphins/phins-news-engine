@@ -10,6 +10,7 @@ import (
 
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventruleproposal"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals"
+	"github.com/Mundo-Dolphins/phins-news-engine/ports/eventruleproposalport"
 )
 
 // The non-interactive steps of the cycle. Run composes them with the
@@ -29,6 +30,9 @@ var (
 	// decision applies to (decided elsewhere, or an edit onto an already
 	// decided phrase); errors.Is matches it.
 	ErrAlreadyDecided = errors.New("proposal already decided")
+	// ErrApplyStale reports an Apply whose proposals were decided elsewhere
+	// while the gate ran; nothing was written. errors.Is matches it.
+	ErrApplyStale = errors.New("proposals changed during the gate; run apply again")
 )
 
 // Context is what the review of one cycle is judged against: the base rules
@@ -152,29 +156,45 @@ func ApprovedNotApplied(ctx context.Context, d Deps) ([]eventruleproposal.Propos
 // Approve approves the stored proposal p.ID at now. A proposal no longer
 // pending returns ErrAlreadyDecided.
 func Approve(ctx context.Context, d Deps, p eventruleproposal.Proposal, now time.Time) (eventruleproposal.Proposal, error) {
-	return decide(ctx, d, p.ID, "approve", eventruleproposal.Proposal.Approve, now)
+	return decide(ctx, d, p.ID, "approve", "", eventruleproposal.Proposal.Approve, now)
 }
 
 // Reject rejects the stored proposal p.ID (pending, or approved and not yet
 // applied) at now. Any other status returns ErrAlreadyDecided.
 func Reject(ctx context.Context, d Deps, p eventruleproposal.Proposal, now time.Time) (eventruleproposal.Proposal, error) {
-	return decide(ctx, d, p.ID, "reject", eventruleproposal.Proposal.Reject, now)
+	return decide(ctx, d, p.ID, "reject", "", eventruleproposal.Proposal.Reject, now)
+}
+
+// RejectFrom is Reject only while the stored proposal p.ID is in status
+// from, so a reject meant for a pending proposal never drops one approved
+// since it was listed. Any other status returns ErrAlreadyDecided.
+func RejectFrom(ctx context.Context, d Deps, p eventruleproposal.Proposal, from eventruleproposal.Status, now time.Time) (eventruleproposal.Proposal, error) {
+	return decide(ctx, d, p.ID, "reject", from, eventruleproposal.Proposal.Reject, now)
 }
 
 // decide re-reads proposal id, so a stale copy never overwrites a decision
 // taken elsewhere, normalises its phrase (legacy rows may not be), applies
-// transition and saves the result; verb names the decision in errors.
-func decide(ctx context.Context, d Deps, id, verb string, transition func(eventruleproposal.Proposal, time.Time) (eventruleproposal.Proposal, error), now time.Time) (eventruleproposal.Proposal, error) {
+// transition and saves the result guarded by the status it was read in, so
+// a decision landing in between returns ErrAlreadyDecided instead of being
+// overwritten. A non-empty from also requires that status; verb names the
+// decision in errors.
+func decide(ctx context.Context, d Deps, id, verb string, from eventruleproposal.Status, transition func(eventruleproposal.Proposal, time.Time) (eventruleproposal.Proposal, error), now time.Time) (eventruleproposal.Proposal, error) {
 	cur, err := d.Proposals.Get(ctx, id)
 	if err != nil {
 		return eventruleproposal.Proposal{}, fmt.Errorf("eventrulecycle: reload %s: %w", id, err)
+	}
+	if from != "" && cur.Status != from {
+		return eventruleproposal.Proposal{}, fmt.Errorf("eventrulecycle: %s %s: %w: it is %s, not %s", verb, id, ErrAlreadyDecided, cur.Status, from)
 	}
 	cur.Phrase = normalizePhrase(cur.Phrase)
 	decided, err := transition(cur, now.UTC())
 	if err != nil {
 		return eventruleproposal.Proposal{}, fmt.Errorf("eventrulecycle: %s %s: %w: %w", verb, id, ErrAlreadyDecided, err)
 	}
-	if err := d.Proposals.Save(ctx, decided); err != nil {
+	if err := d.Proposals.Transition(ctx, decided, cur.Status); err != nil {
+		if errors.Is(err, eventruleproposalport.ErrStatusChanged) {
+			return eventruleproposal.Proposal{}, fmt.Errorf("eventrulecycle: %s %s: %w: %w", verb, id, ErrAlreadyDecided, err)
+		}
 		return eventruleproposal.Proposal{}, fmt.Errorf("eventrulecycle: %s %s: %w", verb, id, err)
 	}
 	return decided, nil
@@ -238,7 +258,7 @@ func Edit(ctx context.Context, d Deps, c Context, p eventruleproposal.Proposal, 
 	if err != nil {
 		return Assessment{}, err
 	}
-	if _, err := decide(ctx, d, p.ID, "supersede", eventruleproposal.Proposal.Reject, now); err != nil {
+	if _, err := decide(ctx, d, p.ID, "supersede", "", eventruleproposal.Proposal.Reject, now); err != nil {
 		return Assessment{}, err
 	}
 	a.Proposal = approved
@@ -246,12 +266,14 @@ func Edit(ctx context.Context, d Deps, c Context, p eventruleproposal.Proposal, 
 }
 
 // ApplyResult is the outcome of Apply. Candidate is the full rule set the
-// gate scored (nil when the gate did not score one); Applied the proposals
+// gate scored (nil when the gate did not score one); Gated the proposals
+// still approved when re-read, whose rules it added; Applied the proposals
 // marked applied; Blocked and Reason report a gate refusal, after which the
 // proposals stay approved and no file is written; Nothing means there was
 // nothing to apply and the gate did not run.
 type ApplyResult struct {
 	Applied   []eventruleproposal.Proposal
+	Gated     []eventruleproposal.Proposal
 	Candidate []AppliedRule
 	Gate      GateResult
 	Blocked   bool
@@ -264,7 +286,10 @@ type ApplyResult struct {
 // writes the generated file and marks toApply applied at now. Each proposal
 // is re-read first and skipped unless still approved, so a decision taken
 // since toApply was listed is neither overwritten nor written to the file;
-// when none is left the result is Nothing.
+// when none is left the result is Nothing. After a passing gate each one is
+// re-read again: if any is no longer approved, ErrApplyStale is returned
+// and nothing is written. A failure marking them applied after the file was
+// written returns an error saying so; running Apply again finishes it.
 func Apply(ctx context.Context, d Deps, toApply []eventruleproposal.Proposal, now time.Time) (ApplyResult, error) {
 	var r ApplyResult
 	current := make([]eventruleproposal.Proposal, 0, len(toApply))
@@ -283,6 +308,7 @@ func Apply(ctx context.Context, d Deps, toApply []eventruleproposal.Proposal, no
 	}
 	toApply = current
 	sortProposals(toApply)
+	r.Gated = toApply
 	if d.Gate == nil || d.ReadApplied == nil || d.WriteApplied == nil {
 		return r, errors.New("eventrulecycle: Gate, ReadApplied and WriteApplied are required to apply approved rules")
 	}
@@ -314,16 +340,26 @@ func Apply(ctx context.Context, d Deps, toApply []eventruleproposal.Proposal, no
 		r.Blocked, r.Reason = true, gate.Reason
 		return r, nil
 	}
+	// The gate can take minutes: a rule rejected meanwhile must not be written.
+	for _, p := range toApply {
+		cur, err := d.Proposals.Get(ctx, p.ID)
+		if err != nil {
+			return r, fmt.Errorf("eventrulecycle: reload %s: %w", p.ID, err)
+		}
+		if cur.Status != eventruleproposal.StatusApproved {
+			return r, ErrApplyStale
+		}
+	}
 	if err := d.WriteApplied(d.GeneratedPath, candidate); err != nil {
 		return r, fmt.Errorf("eventrulecycle: write generated rules: %w", err)
 	}
 	for _, p := range toApply {
 		applied, err := p.MarkApplied(now.UTC())
-		if err != nil {
-			return r, fmt.Errorf("eventrulecycle: mark applied %s: %w", p.ID, err)
+		if err == nil {
+			err = d.Proposals.Transition(ctx, applied, eventruleproposal.StatusApproved)
 		}
-		if err := d.Proposals.Save(ctx, applied); err != nil {
-			return r, fmt.Errorf("eventrulecycle: mark applied %s: %w", p.ID, err)
+		if err != nil {
+			return r, fmt.Errorf("eventrulecycle: the rules file %s was written but marking %s applied failed (%w); run apply again to finish marking", d.GeneratedPath, p.ID, err)
 		}
 		r.Applied = append(r.Applied, applied)
 	}
