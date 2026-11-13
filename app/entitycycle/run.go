@@ -128,24 +128,32 @@ func FinishReview(_ context.Context, d Deps, approvedAny bool) (regenerated bool
 	return true, nil
 }
 
-func review(ctx context.Context, d Deps, in Input, now func() time.Time, res *Result) error {
-	inSession := make(map[string]bool, len(in.SessionArticleIDs))
-	for _, id := range in.SessionArticleIDs {
-		inSession[id] = true
+// SourcedFrom keeps the proposals with at least one source among articleIDs,
+// in their order: the step reviews only the proposals of its session's
+// articles.
+func SourcedFrom(proposals []entityproposal.Proposal, articleIDs []string) []entityproposal.Proposal {
+	in := make(map[string]bool, len(articleIDs))
+	for _, id := range articleIDs {
+		in[id] = true
 	}
-	all, err := d.Proposals.List(ctx, "", string(entityproposal.StatusPending))
-	if err != nil {
-		return fmt.Errorf("entitycycle: list pending proposals: %w", err)
-	}
-	var mine []entityproposal.Proposal
-	for _, p := range all {
+	var kept []entityproposal.Proposal
+	for _, p := range proposals {
 		for _, s := range p.Sources {
-			if inSession[s.ArticleID] {
-				mine = append(mine, p)
+			if in[s.ArticleID] {
+				kept = append(kept, p)
 				break
 			}
 		}
 	}
+	return kept
+}
+
+func review(ctx context.Context, d Deps, in Input, now func() time.Time, res *Result) error {
+	all, err := d.Proposals.List(ctx, "", string(entityproposal.StatusPending))
+	if err != nil {
+		return fmt.Errorf("entitycycle: list pending proposals: %w", err)
+	}
+	mine := SourcedFrom(all, in.SessionArticleIDs)
 	sort.SliceStable(mine, func(i, j int) bool { return entityproposal.Score(mine[i]) > entityproposal.Score(mine[j]) })
 	if len(mine) == 0 {
 		fmt.Fprintln(in.Out, "No pending entity proposals for this session.")

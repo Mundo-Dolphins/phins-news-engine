@@ -11,15 +11,19 @@ import (
 
 	sqliteadapter "github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqlite"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/action"
+	"github.com/Mundo-Dolphins/phins-news-engine/app/entitycycle"
 	"github.com/Mundo-Dolphins/phins-news-engine/app/entitydiscovery"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/article"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/entityproposal"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/entitycatalog"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/entitywiring"
 )
 
 type reviewQueueParams struct {
 	Limit int `json:"limit" help:"maximum number of pending proposals to return, best-scored first (1..500)" default:"100"`
+	// SessionID restricts the queue to the editorial cycle's entity step.
+	SessionID string `json:"session_id" help:"only proposals sourced from the articles published or rejected in this editorial cycle review session"`
 }
 
 type catalogSearchParams struct {
@@ -93,6 +97,13 @@ func runReviewQueue(ctx context.Context, env action.Env, params any) (action.Res
 	proposals, err := repo(env).List(ctx, "", string(entityproposal.StatusPending))
 	if err != nil {
 		return action.Result{}, err
+	}
+	if p.SessionID != "" {
+		ids, err := entitywiring.SessionArticleIDs(ctx, env.DB, p.SessionID)
+		if err != nil {
+			return action.Result{}, err
+		}
+		proposals = entitycycle.SourcedFrom(proposals, ids)
 	}
 	sort.SliceStable(proposals, func(i, j int) bool {
 		return entityproposal.Score(proposals[i]) > entityproposal.Score(proposals[j])

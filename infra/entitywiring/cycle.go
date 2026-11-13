@@ -70,11 +70,10 @@ func CycleDeps(ctx context.Context, cfg *config.Config, db *sql.DB, sessionID, v
 	if err := ValidateCycleVerification(verification); err != nil {
 		return deps, in, err
 	}
-	decisions, err := sqliteadapter.NewReviewDecisionRepository(db).ListBySession(ctx, sessionID)
+	ids, err := SessionArticleIDs(ctx, db, sessionID)
 	if err != nil {
-		return deps, in, fmt.Errorf("entities: list session decisions: %w", err)
+		return deps, in, err
 	}
-	ids := sessionArticleIDs(decisions)
 	if len(ids) == 0 {
 		return deps, in, nil
 	}
@@ -153,6 +152,17 @@ func cycleStages(cfg *config.Config, mode string) (wikidataOn, fallbackOn, choos
 	default: // local
 		return cfg.EntityDiscovery.Wikidata.Enabled, false, true, true
 	}
+}
+
+// SessionArticleIDs is the sample of the entity step of review session
+// sessionID: the articles the operator published or rejected in it, once
+// each, in decision order.
+func SessionArticleIDs(ctx context.Context, db *sql.DB, sessionID string) ([]string, error) {
+	decisions, err := sqliteadapter.NewReviewDecisionRepository(db).ListBySession(ctx, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("entities: list session decisions: %w", err)
+	}
+	return sessionArticleIDs(decisions), nil
 }
 
 // sessionArticleIDs is the sample of the entity step: the articles the operator

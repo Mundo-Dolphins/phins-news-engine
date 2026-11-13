@@ -351,6 +351,66 @@ func Actions() []action.Action {
 			Kind:        action.KindDestructive, Modes: localOnly, Params: promoteParams{}, Run: runPromote,
 		},
 		{
+			Name: "cycle.review_open", Group: group, Title: "Open article review",
+			Description: "Starts the cycle's review session with a fresh selection, or resumes the latest paused, failed or running one (a paused CLI session too) with its frozen articles and decisions.",
+			Kind:        action.KindWrite, Modes: localOnly, Run: runReviewOpen,
+		},
+		{
+			Name: "cycle.review_queue", Group: group, Title: "Article review queue",
+			Description: "Every article of the review session in the CLI's order, decided ones included: headline, full summary, link, source, date, score, prior label, the other articles of its cluster and its decision.",
+			Kind:        action.KindRead, Modes: localOnly, Run: runReviewQueue,
+		},
+		{
+			Name: "cycle.review_decide", Group: group, Title: "Decide an article",
+			Description: "Records the decision on one article of the review session, exactly as the CLI's review keys; an article already decided can be decided again.",
+			Kind:        action.KindWrite, Modes: localOnly, Params: reviewDecideParams{}, Run: runReviewDecide,
+		},
+		{
+			Name: "cycle.review_finish", Group: group, Title: "Finish article review",
+			Description: "Completes the review session once every article is decided and finishes the step.",
+			Kind:        action.KindWrite, Modes: localOnly, Run: runReviewFinish,
+		},
+		{
+			Name: "cycle.review_pause", Group: group, Title: "Pause article review",
+			Description: "Pauses the review session (the CLI's save-and-exit); opening the review again resumes it.",
+			Kind:        action.KindWrite, Modes: localOnly, Run: runReviewPause,
+		},
+		{
+			Name: "cycle.entities_discover", Group: group, Title: "Discover entities in the session",
+			Description: "Runs entity discovery over the articles published or rejected in the review session; the proposals are then reviewed with entities.review_queue (session_id) and entities.approve/reject.",
+			Kind:        action.KindWrite, Modes: localOnly, LongRunning: true, Run: runEntitiesDiscover,
+		},
+		{
+			Name: "cycle.entities_finish", Group: group, Title: "Finish entity review",
+			Description: "Regenerates the entity catalog when a proposal of the session was approved and finishes the step with the approvals and rejections since the discovery.",
+			Kind:        action.KindWrite, Modes: localOnly, Run: runEntitiesFinish,
+		},
+		{
+			Name: "cycle.event_rules_finish", Group: group, Title: "Finish event rules review",
+			Description: "Finishes the event rules step with the counters of the review queue (decisions go through events.rules_*); nothing is rejected automatically.",
+			Kind:        action.KindWrite, Modes: localOnly, Params: eventRulesFinishParams{}, Run: runEventRulesFinish,
+		},
+		{
+			Name: "cycle.terms_prepare", Group: group, Title: "Mine dictionary terms",
+			Description: "Mines candidate dictionary terms from the review session and offers the pending ones; decisions already made are kept.",
+			Kind:        action.KindWrite, Modes: localOnly, Run: runTermsPrepare,
+		},
+		{
+			Name: "cycle.terms_queue", Group: group, Title: "Mined terms queue",
+			Description: "The offered mined terms with support, first article, category guess and decision, and the dictionary's categories.",
+			Kind:        action.KindRead, Modes: localOnly, Run: runTermsQueue,
+		},
+		{
+			Name: "cycle.terms_decide", Group: group, Title: "Decide a mined term",
+			Description: "Approves (a category is required when the guess is not one of the dictionary's), rejects (added to the mining policy's ignored_terms) or categorizes one mined term. The dictionary is written when the step finishes.",
+			Kind:        action.KindWrite, Modes: localOnly, Params: termsDecideParams{}, Run: runTermsDecide,
+		},
+		{
+			Name: "cycle.terms_finish", Group: group, Title: "Write mined terms",
+			Description: "Once every offered term is decided, adds the approved ones to the dictionary (patch version bump) and finishes the step.",
+			Kind:        action.KindDestructive, Modes: localOnly, Run: runTermsFinish,
+		},
+		{
 			Name: "cycle.summary", Group: group, Title: "Cycle summary",
 			Description: "The cycle's audit report assembled from the step results; deploy stays in the terminal.",
 			Kind:        action.KindRead, Modes: localOnly, Run: runSummary,

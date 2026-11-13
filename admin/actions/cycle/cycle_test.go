@@ -215,16 +215,28 @@ func TestMetadata(t *testing.T) {
 		kind                         action.Kind
 		long, exclusive, swaps, read bool
 	}{
-		"cycle.state":           {kind: action.KindRead},
-		"cycle.start":           {kind: action.KindWrite},
-		"cycle.next":            {kind: action.KindWrite},
-		"cycle.abandon":         {kind: action.KindDestructive},
-		"cycle.sync":            {kind: action.KindWrite, long: true, exclusive: true, swaps: true},
-		"cycle.telegram_import": {kind: action.KindWrite, long: true},
-		"cycle.roster_sync":     {kind: action.KindWrite, long: true},
-		"cycle.train":           {kind: action.KindWrite, long: true, exclusive: true},
-		"cycle.promote":         {kind: action.KindDestructive},
-		"cycle.summary":         {kind: action.KindRead},
+		"cycle.state":              {kind: action.KindRead},
+		"cycle.start":              {kind: action.KindWrite},
+		"cycle.next":               {kind: action.KindWrite},
+		"cycle.abandon":            {kind: action.KindDestructive},
+		"cycle.sync":               {kind: action.KindWrite, long: true, exclusive: true, swaps: true},
+		"cycle.telegram_import":    {kind: action.KindWrite, long: true},
+		"cycle.roster_sync":        {kind: action.KindWrite, long: true},
+		"cycle.train":              {kind: action.KindWrite, long: true, exclusive: true},
+		"cycle.promote":            {kind: action.KindDestructive},
+		"cycle.summary":            {kind: action.KindRead},
+		"cycle.review_open":        {kind: action.KindWrite},
+		"cycle.review_queue":       {kind: action.KindRead},
+		"cycle.review_decide":      {kind: action.KindWrite},
+		"cycle.review_finish":      {kind: action.KindWrite},
+		"cycle.review_pause":       {kind: action.KindWrite},
+		"cycle.entities_discover":  {kind: action.KindWrite, long: true},
+		"cycle.entities_finish":    {kind: action.KindWrite},
+		"cycle.event_rules_finish": {kind: action.KindWrite},
+		"cycle.terms_prepare":      {kind: action.KindWrite},
+		"cycle.terms_queue":        {kind: action.KindRead},
+		"cycle.terms_decide":       {kind: action.KindWrite},
+		"cycle.terms_finish":       {kind: action.KindDestructive},
 	}
 	got := map[string]bool{}
 	for _, a := range cycle.Actions() {

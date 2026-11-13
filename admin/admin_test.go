@@ -601,8 +601,11 @@ func TestCatalogCycleActions(t *testing.T) {
 	}
 	slices.Sort(got)
 	want := []string{
-		"cycle.abandon", "cycle.next", "cycle.promote", "cycle.roster_sync", "cycle.start",
-		"cycle.state", "cycle.summary", "cycle.sync", "cycle.telegram_import", "cycle.train",
+		"cycle.abandon", "cycle.entities_discover", "cycle.entities_finish", "cycle.event_rules_finish",
+		"cycle.next", "cycle.promote", "cycle.review_decide", "cycle.review_finish", "cycle.review_open",
+		"cycle.review_pause", "cycle.review_queue", "cycle.roster_sync", "cycle.start",
+		"cycle.state", "cycle.summary", "cycle.sync", "cycle.telegram_import", "cycle.terms_decide",
+		"cycle.terms_finish", "cycle.terms_prepare", "cycle.terms_queue", "cycle.train",
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("local cycle actions = %v, want %v", got, want)

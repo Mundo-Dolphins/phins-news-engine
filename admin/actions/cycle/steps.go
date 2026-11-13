@@ -98,6 +98,12 @@ type (
 		Rejected        int    `json:"rejected"`
 		DiscoveryFailed bool   `json:"discovery_failed"`
 		SkipReason      string `json:"skip_reason"`
+		// Warnings are the discovery's warning lines.
+		Warnings []string `json:"warnings,omitempty"`
+		// DiscoveryStartedAt is when the step's first discovery started; the
+		// approvals and rejections counted are the ones made since.
+		DiscoveryStartedAt *time.Time `json:"discovery_started_at,omitempty"`
+		Regenerated        bool       `json:"regenerated,omitempty"`
 	}
 	eventRulesResult struct {
 		Sampled          int    `json:"sampled"`
@@ -109,8 +115,23 @@ type (
 		GateNotExercised bool   `json:"gate_not_exercised"`
 		SkipReason       string `json:"skip_reason"`
 	}
+	// minedTermsResult holds the offered terms while the step is pending
+	// and, once finished, what the dictionary write did.
 	minedTermsResult struct {
+		// Added is the session's approved terms, as the CLI reports them.
 		Added int `json:"added"`
+		// Entries is how many new entries the write added; From and To the
+		// dictionary versions (empty when it was not modified).
+		Entries int    `json:"entries"`
+		From    string `json:"from"`
+		To      string `json:"to"`
+		// Prepared is set by cycle.terms_prepare; Offered lists the terms
+		// offered for review, in the CLI's order.
+		Prepared   bool     `json:"prepared"`
+		Offered    []string `json:"offered"`
+		Categories []string `json:"categories"`
+		Warnings   []string `json:"warnings"`
+		Mined      int      `json:"mined"`
 	}
 )
 
