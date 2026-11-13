@@ -205,6 +205,18 @@ kbd { font-family: ui-monospace, monospace; font-size: .75em; padding: 0 5px; bo
 .dict-undecided { font-weight: 600; color: var(--warn-fg); background: var(--warn-bg); padding: 6px 10px; border-radius: 6px; }
 .dict-diff { max-height: 50vh; overflow: auto; padding: 10px 12px; background: var(--code-bg); border-radius: 6px; font-size: .85em; white-space: pre; }
 .dict-regression ul { margin: 0; padding-left: 20px; }
+.cycle-article .cycle-headline { font-size: 1.6rem; line-height: 1.25; margin: 0 0 8px; }
+.cycle-decided { margin: 0 0 10px; }
+.cycle-decided .badge, .entry-meta .cycle-decision { margin-left: 0; }
+.cycle-summary { margin: 0 0 12px; font-size: 1.05rem; line-height: 1.6; white-space: pre-wrap; word-break: break-word; max-width: 72ch; }
+.cycle-original { margin: 0; word-break: break-word; }
+.review-item .cycle-original a { font-weight: 600; }
+.cycle-facts { margin: 18px 0 0; font-size: .9em; }
+.cycle-decision-publish, .cycle-term-approved { color: var(--accent); border-color: var(--accent); }
+.cycle-decision-reject, .cycle-decision-duplicate, .cycle-term-rejected { color: var(--danger); border-color: var(--danger); }
+.cycle-decision-ambiguous, .cycle-decision-edit_category { color: var(--warn-fg); background: var(--warn-bg); border-color: var(--warn-fg); }
+.cycle-term-approved, .cycle-term-rejected { margin-left: 0; }
+.cycle-review-bar { margin: 0 0 12px; }
 @media (max-width: 720px) {
   .review-grid { grid-template-columns: 1fr; }
   .review-queue { position: static; max-height: 30vh; }

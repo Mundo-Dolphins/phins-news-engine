@@ -14,6 +14,8 @@ import { ReviewDataset } from "./routes/ReviewDataset";
 import { ReviewEntities } from "./routes/ReviewEntities";
 import { ReviewEvents } from "./routes/ReviewEvents";
 import { ReviewDictionary } from "./routes/ReviewDictionary";
+import { ReviewArticles } from "./routes/ReviewArticles";
+import { ReviewTerms } from "./routes/ReviewTerms";
 import "./style.css";
 
 function NotFound() {
@@ -37,6 +39,8 @@ function App() {
       <Route path="/review/entities" component={ReviewEntities} />
       <Route path="/review/events" component={ReviewEvents} />
       <Route path="/review/dictionary" component={ReviewDictionary} />
+      <Route path="/review/articles" component={ReviewArticles} />
+      <Route path="/review/terms" component={ReviewTerms} />
       <Route default component={NotFound} />
     </Router>
   );

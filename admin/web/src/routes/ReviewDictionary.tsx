@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { listActions, runAction, type Result } from "../api";
-import { ConfirmDialog } from "../components/ConfirmDialog";
+import { DestructiveConfirm } from "../components/ConfirmDialog";
 import { LocalOnly } from "../components/LocalOnly";
 import { ProposalEditor } from "../components/ProposalEditor";
 import { ReviewScreen, type Notice, type ReviewDecision } from "../components/ReviewScreen";
@@ -306,25 +306,6 @@ function ConfirmType({ t, count, accept, onConfirm, onCancel }: { t: Proposal; c
           </button>
         </div>
       </div>
-    </div>
-  );
-}
-
-/** DestructiveConfirm is `ConfirmDialog` with no key press reaching the review's shortcuts. */
-function DestructiveConfirm({ name, onConfirm, onCancel }: { name: string; onConfirm(): void; onCancel(): void }) {
-  const root = useRef<HTMLDivElement>(null);
-  const field = useRef<HTMLElement | null>(null);
-  useLayoutEffect(() => {
-    field.current = root.current?.querySelector("input") ?? null;
-  }, []);
-  useShortcutIsolation(root, field, onCancel);
-  const onKeyDown = (e: KeyboardEvent) => {
-    e.stopPropagation();
-    if (e.key === "Escape") onCancel();
-  };
-  return (
-    <div ref={root} onKeyDown={onKeyDown}>
-      <ConfirmDialog name={name} onConfirm={onConfirm} onCancel={onCancel} />
     </div>
   );
 }

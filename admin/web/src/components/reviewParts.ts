@@ -1,4 +1,4 @@
-import { ApiError, getJob, jobEvents, type Job } from "../api";
+import { ApiError, getJob, jobEvents, runAction, type Job } from "../api";
 import type { RefObject } from "preact";
 import { useLayoutEffect, useRef } from "preact/hooks";
 
@@ -90,4 +90,21 @@ export function untilJobEnd(job: Job, streams: Set<() => void>): Promise<Job> {
     );
     if (!ended) streams.add(close);
   });
+}
+
+/**
+ * CycleStepView is where the editorial cycle stands for one of its review
+ * steps: not there (no cycle, or the cycle is at another step), at the
+ * step and open, or at the step with the step already finished.
+ */
+export type CycleStepView = "elsewhere" | "open" | "finished";
+
+/** cycleStepView reads `cycle.state` and tells where the cycle stands for `step`. */
+export async function cycleStepView(step: string): Promise<CycleStepView> {
+  const out = await runAction("cycle.state", {}, false);
+  if ("job" in out) throw new Error("unexpected job for cycle.state");
+  const cycle = (out.result.object as { cycle?: { step: string; steps?: Record<string, { status: string }> } | null } | undefined)?.cycle;
+  if (!cycle || cycle.step !== step) return "elsewhere";
+  const status = cycle.steps?.[step]?.status;
+  return status === "done" || status === "skipped" ? "finished" : "open";
 }

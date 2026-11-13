@@ -225,4 +225,22 @@ describe("ReviewScreen", () => {
     rerender(view({ key: "zz" }));
     expect(screen.getByRole("heading", { name: "Item Charlie" })).toBeTruthy();
   });
+  it("with skipKey K: K skips instead of moving up, S reaches a decision, the arrows still move", async () => {
+    const same = vi.fn(async (_t: It): Promise<Notice | void> => undefined);
+    const { onSkip } = setup({ skipKey: "k", decisions: [{ key: "s", label: "Same news", onDecide: same }] });
+    fireEvent.keyDown(window, { key: "j" });
+    expect(screen.getByRole("heading", { name: "Item Bravo" })).toBeTruthy();
+    fireEvent.keyDown(window, { key: "k" });
+    expect(onSkip).toHaveBeenCalledWith(items[1]);
+    expect(screen.getByRole("heading", { name: "Item Bravo" })).toBeTruthy();
+    fireEvent.keyDown(window, { key: "k", repeat: true });
+    expect(onSkip).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(window, { key: "s" });
+    await waitFor(() => expect(same).toHaveBeenCalledWith(items[1]));
+    expect(onSkip).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(window, { key: "ArrowUp" });
+    expect(screen.getByRole("heading", { name: "Item Alpha" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Skip K" })).toBeTruthy();
+    expect(screen.getByText(/move · /).textContent).toContain("↑");
+  });
 });
