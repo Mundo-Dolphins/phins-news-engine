@@ -29,6 +29,8 @@ type fixture struct {
 	cs    *mcp.ClientSession
 	wiped atomic.Int32
 	st    *store.Store
+	// swapStarted is closed when fake.swap runs; it then waits for swapRelease.
+	swapStarted, swapRelease chan struct{}
 }
 
 func setup(t *testing.T, blocked error) *fixture {
@@ -38,7 +40,7 @@ func setup(t *testing.T, blocked error) *fixture {
 
 func setupFn(t *testing.T, blocked func() error) *fixture {
 	t.Helper()
-	f := &fixture{}
+	f := &fixture{swapStarted: make(chan struct{}), swapRelease: make(chan struct{})}
 	reg := &action.Registry{}
 	local := []action.Mode{action.ModeLocal}
 	reg.Add(
@@ -55,6 +57,12 @@ func setupFn(t *testing.T, blocked func() error) *fixture {
 		action.Action{Name: "fake.slow", Group: "fake", Title: "Slow", Description: "Long.", Kind: action.KindWrite, Modes: local, LongRunning: true,
 			Run: func(context.Context, action.Env, any) (action.Result, error) {
 				return action.Result{Render: "text", Text: "done"}, nil
+			}},
+		action.Action{Name: "fake.swap", Group: "fake", Title: "Swap", Kind: action.KindWrite, Modes: local, LongRunning: true, SwapsDB: true,
+			Run: func(context.Context, action.Env, any) (action.Result, error) {
+				close(f.swapStarted)
+				<-f.swapRelease
+				return action.Result{}, nil
 			}},
 		action.Action{Name: "fake.prod", Group: "fake", Title: "Prod", Kind: action.KindRead, Modes: []action.Mode{action.ModeProduction},
 			Run: func(context.Context, action.Env, any) (action.Result, error) { return action.Result{}, nil }},
@@ -117,12 +125,12 @@ func TestListToolsMatchesModeCatalog(t *testing.T) {
 	for _, tl := range res.Tools {
 		tools[tl.Name] = tl
 	}
-	for _, n := range []string{"fake_echo", "fake_wipe", "fake_slow", "jobs_get", "jobs_list", "jobs_cancel"} {
+	for _, n := range []string{"fake_echo", "fake_wipe", "fake_slow", "fake_swap", "jobs_get", "jobs_list", "jobs_cancel"} {
 		if tools[n] == nil {
 			t.Errorf("missing tool %s", n)
 		}
 	}
-	if tools["fake_prod"] != nil || len(tools) != 6 {
+	if tools["fake_prod"] != nil || len(tools) != 7 {
 		t.Errorf("unexpected tools: %d", len(tools))
 	}
 	echo := tools["fake_echo"]
@@ -264,5 +272,18 @@ func TestLongRunningReturnsJobThenJobsGet(t *testing.T) {
 	res = f.call(t, "jobs_cancel", map[string]any{"id": id})
 	if !res.IsError || !strings.HasPrefix(text(t, res), "conflict: ") {
 		t.Errorf("cancel finished: %q", text(t, res))
+	}
+}
+
+func TestActionDuringSwapIsConflict(t *testing.T) {
+	f := setup(t, nil)
+	if res := f.call(t, "fake_swap", nil); res.IsError {
+		t.Fatal(text(t, res))
+	}
+	<-f.swapStarted
+	defer close(f.swapRelease)
+	res := f.call(t, "fake_echo", map[string]any{"text": "hi"})
+	if !res.IsError || text(t, res) != "conflict: database sync in progress" {
+		t.Fatalf("echo during swap = %q", text(t, res))
 	}
 }

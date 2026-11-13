@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -42,6 +43,8 @@ type Runner struct {
 
 	wg sync.WaitGroup
 
+	gate dbGate
+
 	mu        sync.Mutex
 	exclusive bool
 	runs      map[string]*run
@@ -69,6 +72,30 @@ func New(ctx context.Context, st *store.Store, now func() time.Time) (*Runner, e
 
 // Wait blocks until all detached jobs have finished.
 func (r *Runner) Wait() { r.wg.Wait() }
+
+// UseDB sets the operational DB handed to every action as Env.DB. Call it
+// before serving; later changes go through an action's Env.SwapDB.
+func (r *Runner) UseDB(db *sql.DB) { r.gate.set(db) }
+
+// DB returns the operational DB currently handed to actions (nil if none
+// was set).
+func (r *Runner) DB() *sql.DB { return r.gate.current() }
+
+// enter admits a run: it takes the DB gate (failing with
+// [ErrDBSwapInProgress] or [ErrActionsRunning]), sets env.DB and env.SwapDB
+// from it, then takes the exclusive slot when a needs it. The returned leave
+// releases both.
+func (r *Runner) enter(a action.Action, env *action.Env) (leave func(), err error) {
+	leaveGate, err := r.gate.enter(a, env)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.acquire(a); err != nil {
+		leaveGate()
+		return nil, err
+	}
+	return func() { r.release(a); leaveGate() }, nil
+}
 
 func (r *Runner) acquire(a action.Action) error {
 	if !a.Exclusive {
@@ -137,13 +164,17 @@ func (r *Runner) audit(a action.Action, env action.Env, raw json.RawMessage, out
 
 // RunSync runs a in the calling goroutine without creating a job row.
 // Exclusive actions need the exclusive slot and fail with [ErrBusy] if taken.
+// Every run passes the DB gate: it fails with [ErrDBSwapInProgress] while an
+// action with SwapsDB runs, and such an action fails with [ErrActionsRunning]
+// while anything else runs. env.DB is the current operational DB.
 // rawParams is only used for the audit entry of write/destructive actions.
 // A nil env.Log defaults to slog.Default().
 func (r *Runner) RunSync(ctx context.Context, a action.Action, env action.Env, params any, rawParams json.RawMessage) (action.Result, error) {
-	if err := r.acquire(a); err != nil {
+	leave, err := r.enter(a, &env)
+	if err != nil {
 		return action.Result{}, err
 	}
-	defer r.release(a)
+	defer leave()
 	if env.Log == nil {
 		env.Log = slog.Default()
 	}
@@ -158,20 +189,22 @@ func (r *Runner) RunSync(ctx context.Context, a action.Action, env action.Env, p
 // Start runs a as a detached job, a child of the runner's base context and
 // independent of any request. The job is persisted as running and its slog
 // records are appended to the job log. Exclusive actions fail with [ErrBusy]
-// if the slot is taken.
+// if the slot is taken; the DB gate applies as in [Runner.RunSync] and is held
+// until the job's action returns.
 func (r *Runner) Start(a action.Action, env action.Env, params any, rawParams json.RawMessage) (store.Job, error) {
-	if err := r.acquire(a); err != nil {
+	leave, err := r.enter(a, &env)
+	if err != nil {
 		return store.Job{}, err
 	}
 	id, err := newID()
 	if err != nil {
-		r.release(a)
+		leave()
 		return store.Job{}, err
 	}
 	started := r.now()
 	job := store.Job{ID: id, Action: a.Name, Actor: env.Actor, Status: statusRunning, Params: rawParams, CreatedAt: started, StartedAt: &started}
 	if err := r.st.CreateJob(context.WithoutCancel(r.base), job); err != nil {
-		r.release(a)
+		leave()
 		return store.Job{}, err
 	}
 
@@ -186,14 +219,17 @@ func (r *Runner) Start(a action.Action, env action.Env, params any, rawParams js
 	}
 	env.Log = slog.New(newLogHandler(func(line string) { r.appendLog(rn, line) }))
 	r.wg.Add(1)
-	go r.finish(ctx, rn, job, a, env, params, rawParams)
+	go r.finish(ctx, rn, job, a, env, params, rawParams, leave)
 	return job, nil
 }
 
-// finish runs the action, persists the outcome and releases the job's resources.
-func (r *Runner) finish(ctx context.Context, rn *run, job store.Job, a action.Action, env action.Env, params any, raw json.RawMessage) {
+// finish runs the action, persists the outcome and releases the job's
+// resources. The DB gate and exclusive slot are released as soon as the action
+// returns, so a job seen as finished no longer blocks a DB swap.
+func (r *Runner) finish(ctx context.Context, rn *run, job store.Job, a action.Action, env action.Env, params any, raw json.RawMessage, leave func()) {
 	defer r.wg.Done()
 	res, err := execute(ctx, a, env, params)
+	leave()
 	out := outcome(ctx, err)
 
 	fin := r.now()
@@ -212,9 +248,6 @@ func (r *Runner) finish(ctx context.Context, rn *run, job store.Job, a action.Ac
 	rn.close()
 	r.mu.Lock()
 	delete(r.runs, job.ID)
-	if a.Exclusive {
-		r.exclusive = false
-	}
 	r.mu.Unlock()
 }
 

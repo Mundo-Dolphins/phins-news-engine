@@ -2,6 +2,7 @@ package jobs_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/action"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/jobs"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/store"
+	infrasqlite "github.com/Mundo-Dolphins/phins-news-engine/infra/sqlite"
 )
 
 var t0 = time.Date(2026, 11, 5, 10, 0, 0, 0, time.UTC)
@@ -373,5 +375,176 @@ func TestRunSyncCreatesNoJobAndPassesParams(t *testing.T) {
 	}
 	if list, _ := s.ListJobs(context.Background(), 10); len(list) != 0 {
 		t.Errorf("jobs = %+v", list)
+	}
+}
+
+func openDB(t *testing.T, name string) *sql.DB {
+	t.Helper()
+	db, err := infrasqlite.Open(filepath.Join(t.TempDir(), name), 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	return db
+}
+
+func isClosed(db *sql.DB) bool {
+	err := db.Ping()
+	return err != nil && strings.Contains(err.Error(), "database is closed")
+}
+
+func swapAct(run func(context.Context, action.Env, any) (action.Result, error)) action.Action {
+	a := act(action.KindWrite, run)
+	a.Name, a.SwapsDB = "test.swap", true
+	return a
+}
+
+func wantConflict(t *testing.T, err error, msg string) {
+	t.Helper()
+	var ae *action.Error
+	if !errors.As(err, &ae) || ae.Code != action.CodeConflict || ae.Message != msg {
+		t.Fatalf("err = %v, want conflict %q", err, msg)
+	}
+}
+
+func TestSwapRefusedWhileJobRuns(t *testing.T) {
+	r, _ := newRunner(t)
+	r.UseDB(openDB(t, "op.db"))
+	release, started := make(chan struct{}), make(chan struct{})
+	job := act(action.KindRead, func(context.Context, action.Env, any) (action.Result, error) {
+		close(started)
+		<-release
+		return action.Result{}, nil
+	})
+	if _, err := r.Start(job, env(), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	ran := false
+	swap := swapAct(func(context.Context, action.Env, any) (action.Result, error) { ran = true; return action.Result{}, nil })
+	_, err := r.RunSync(context.Background(), swap, env(), nil, nil)
+	wantConflict(t, err, "other actions are running; try again when they finish")
+	if !errors.Is(err, jobs.ErrActionsRunning) {
+		t.Errorf("err = %v, want ErrActionsRunning", err)
+	}
+	if _, err := r.Start(swap, env(), nil, nil); !errors.Is(err, jobs.ErrActionsRunning) {
+		t.Errorf("Start swap = %v, want ErrActionsRunning", err)
+	}
+	if ran {
+		t.Error("swap action ran while a job was running")
+	}
+	close(release)
+	r.Wait()
+	if _, err := r.RunSync(context.Background(), swap, env(), nil, nil); err != nil || !ran {
+		t.Fatalf("swap after job finished: err=%v ran=%v", err, ran)
+	}
+}
+
+func TestActionDuringSwapFailsFast(t *testing.T) {
+	r, _ := newRunner(t)
+	r.UseDB(openDB(t, "op.db"))
+	release, started := make(chan struct{}), make(chan struct{})
+	swap := swapAct(func(context.Context, action.Env, any) (action.Result, error) {
+		close(started)
+		<-release
+		return action.Result{}, nil
+	})
+	if _, err := r.Start(swap, env(), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	ran := false
+	other := act(action.KindRead, func(context.Context, action.Env, any) (action.Result, error) { ran = true; return action.Result{}, nil })
+	_, err := r.RunSync(context.Background(), other, env(), nil, nil)
+	wantConflict(t, err, "database sync in progress")
+	if !errors.Is(err, jobs.ErrDBSwapInProgress) {
+		t.Errorf("err = %v, want ErrDBSwapInProgress", err)
+	}
+	if _, err := r.Start(other, env(), nil, nil); !errors.Is(err, jobs.ErrDBSwapInProgress) {
+		t.Errorf("Start during swap = %v", err)
+	}
+	if _, err := r.RunSync(context.Background(), swap, env(), nil, nil); !errors.Is(err, jobs.ErrDBSwapInProgress) {
+		t.Errorf("second swap during swap = %v", err)
+	}
+	if ran {
+		t.Error("action ran during the swap")
+	}
+	close(release)
+	r.Wait()
+	if _, err := r.RunSync(context.Background(), other, env(), nil, nil); err != nil || !ran {
+		t.Fatalf("after swap: err=%v ran=%v", err, ran)
+	}
+}
+
+func TestActionsSeeNewDBAfterSwap(t *testing.T) {
+	r, _ := newRunner(t)
+	oldDB, newDB := openDB(t, "old.db"), openDB(t, "new.db")
+	r.UseDB(oldDB)
+	swap := swapAct(func(_ context.Context, e action.Env, _ any) (action.Result, error) {
+		if e.DB != oldDB {
+			t.Error("swap action does not start with the current DB")
+		}
+		e.SwapDB(newDB)
+		if isClosed(oldDB) {
+			t.Error("old DB closed before the swapping action returned")
+		}
+		return action.Result{}, nil
+	})
+	if _, err := r.RunSync(context.Background(), swap, env(), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !isClosed(oldDB) {
+		t.Error("old DB still open after the swap")
+	}
+	if isClosed(newDB) || r.DB() != newDB {
+		t.Error("runner does not hold the new DB")
+	}
+	var seen []*sql.DB
+	var swapFns []bool
+	read := act(action.KindRead, func(_ context.Context, e action.Env, _ any) (action.Result, error) {
+		seen = append(seen, e.DB)
+		swapFns = append(swapFns, e.SwapDB != nil)
+		return action.Result{}, nil
+	})
+	if _, err := r.RunSync(context.Background(), read, env(), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Start(read, env(), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	r.Wait()
+	if len(seen) != 2 || seen[0] != newDB || seen[1] != newDB {
+		t.Errorf("actions saw %v, want the new DB twice", seen)
+	}
+	if swapFns[0] || swapFns[1] {
+		t.Error("non-swapping action received SwapDB")
+	}
+}
+
+func TestEnvDBReadAfterGate(t *testing.T) {
+	r, _ := newRunner(t)
+	oldDB, newDB := openDB(t, "old.db"), openDB(t, "new.db")
+	r.UseDB(oldDB)
+	built := action.Env{Actor: "user:admin", DB: oldDB, SwapDB: func(*sql.DB) { t.Error("stale SwapDB called") }}
+	swap := swapAct(func(_ context.Context, e action.Env, _ any) (action.Result, error) {
+		e.SwapDB(newDB)
+		return action.Result{}, nil
+	})
+	if _, err := r.RunSync(context.Background(), swap, env(), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	var got *sql.DB
+	read := act(action.KindRead, func(_ context.Context, e action.Env, _ any) (action.Result, error) {
+		got = e.DB
+		if e.SwapDB != nil {
+			e.SwapDB(oldDB)
+		}
+		return action.Result{}, nil
+	})
+	if _, err := r.RunSync(context.Background(), read, built, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got != newDB {
+		t.Error("env built before the swap still handed out the old DB")
 	}
 }

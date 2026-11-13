@@ -10,6 +10,7 @@ import (
 
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/fetcherwiring"
+	"github.com/Mundo-Dolphins/phins-news-engine/ports/out"
 )
 
 // Kind classifies the side effects of an action.
@@ -51,6 +52,35 @@ type Env struct {
 	// FetcherExtensions are the host's fetcher categories, as the CLI
 	// receives them, for actions that build the process fetcher.
 	FetcherExtensions fetcherwiring.Extensions
+	// SwapDB is non-nil only while an action with SwapsDB runs: it installs
+	// newDB as the operational DB for every later action (web and MCP) and
+	// closes the replaced handle once the swapping action returns.
+	SwapDB func(newDB *sql.DB)
+	// State is the admin's own key/value state; it lives in the admin store,
+	// so it survives a swap of the operational DB.
+	State StateStore
+	// Remote is the host's remote-sync and Telegram hooks; its zero value
+	// means they are not available on this host.
+	Remote Remote
+}
+
+// StateStore is a small persistent key/value store.
+type StateStore interface {
+	// GetState returns the value stored under key and whether it exists.
+	GetState(ctx context.Context, key string) ([]byte, bool, error)
+	// PutState stores value under key, replacing any previous value.
+	PutState(ctx context.Context, key string, value []byte) error
+}
+
+// Remote holds the host-provided hooks to reach the remote host and
+// Telegram. Host and KeyPath never come from a panel field.
+type Remote struct {
+	// Host is the remote host address; KeyPath the SSH key used to reach it.
+	Host, KeyPath string
+	// NewSync builds the remote sync for the given script and key.
+	NewSync func(scriptPath, keyPath string) out.RemoteSync
+	// NewTelegramClient builds the Telegram channel history client.
+	NewTelegramClient func(out.TelegramImportClientConfig) (out.TelegramChannelImporter, error)
 }
 
 // Action is one admin operation.
@@ -59,6 +89,9 @@ type Action struct {
 	Kind                            Kind
 	Modes                           []Mode
 	LongRunning, Exclusive          bool
+	// SwapsDB marks an action that may replace the operational DB (through
+	// Env.SwapDB); it runs only when no other action or job is running.
+	SwapsDB bool
 	// Params is the zero value of the params struct, used for the schema.
 	// It may be nil for actions without parameters.
 	Params any

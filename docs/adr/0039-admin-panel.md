@@ -237,13 +237,24 @@ the admin migrates its DB copy, as the CLI does.
 **Own state in `admin.db`.** Jobs, their logs, the audit trail and sessions
 live in a separate SQLite file (`ADMIN_DB_PATH`, default `data/admin.db`),
 not in the operational DB. Sessions persist across restarts. Jobs left
-`running` by a previous process are marked `interrupted` at start.
+`running` by a previous process are marked `interrupted` at start. A small
+key/value table (`admin_state`, `Env.State`) keeps admin progress that must
+survive a replacement of the operational DB.
 
 **Not hurting the bot.** The admin opens the operational DB with
 `_txlock=immediate`: every transaction starts with `BEGIN IMMEDIATE` and
 waits out `busy_timeout` instead of failing with `SQLITE_BUSY` on a lock
 upgrade. The bot's own transaction mode is not changed. At most one
 `Exclusive` job runs at a time (`409` otherwise).
+
+**Replacing the operational DB.** An action marked `SwapsDB` may install a
+new operational DB handle (`Env.SwapDB`). The job runner gates every run: a
+`SwapsDB` action starts only when nothing else runs (`409 conflict` "other
+actions are running; try again when they finish"), and any action requested
+while it runs fails fast (`409 conflict` "database sync in progress"), over
+REST and MCP alike. Each run reads `Env.DB` from the gate, so later actions
+use the new handle; the old one is closed once the swapping action returns.
+Host hooks for the remote host and Telegram arrive as `Options.Remote`.
 
 **Access.** Plain HTTP on the LAN. Clients must come from
 `ADMIN_ALLOWED_CIDRS`; the client address is `RemoteAddr`, and

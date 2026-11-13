@@ -617,3 +617,35 @@ func TestWriteBlockedPlainErrorIs503(t *testing.T) {
 		t.Fatalf("got %d %s", resp.StatusCode, b)
 	}
 }
+
+func TestDBSwapRefusalsAreConflicts(t *testing.T) {
+	release, started := make(chan struct{}), make(chan struct{})
+	e := newEnv(t, func(d *httpapi.Deps) {
+		d.Registry.Add(action.Action{Name: "t.swap", Group: "t", Kind: action.KindWrite, LongRunning: true, SwapsDB: true,
+			Modes: []action.Mode{action.ModeLocal},
+			Run: func(context.Context, action.Env, any) (action.Result, error) {
+				close(started)
+				<-release
+				return action.Result{}, nil
+			}})
+	})
+	e.login(t)
+	wait := startJob(t, e, "t.wait")
+	resp, b := e.do(t, "POST", "/api/actions/t.swap", map[string]any{})
+	if resp.StatusCode != 409 || errCode(t, b) != "conflict" ||
+		!strings.Contains(string(b), "other actions are running; try again when they finish") {
+		t.Fatalf("swap while a job runs = %d %s", resp.StatusCode, b)
+	}
+	if resp, b := e.do(t, "POST", "/api/jobs/"+wait.ID+"/cancel", nil); resp.StatusCode/100 != 2 {
+		t.Fatalf("cancel = %d %s", resp.StatusCode, b)
+	}
+	waitStatus(t, e, wait.ID, "cancelled")
+	swap := startJob(t, e, "t.swap")
+	<-started
+	resp, b = e.do(t, "POST", "/api/actions/t.read", map[string]any{})
+	if resp.StatusCode != 409 || errCode(t, b) != "conflict" || !strings.Contains(string(b), "database sync in progress") {
+		t.Fatalf("action during swap = %d %s", resp.StatusCode, b)
+	}
+	close(release)
+	waitStatus(t, e, swap.ID, "succeeded")
+}

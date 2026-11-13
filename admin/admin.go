@@ -105,12 +105,16 @@ type Options struct {
 	// FetcherExtensions are the host's fetcher categories, copied into every
 	// action Env.
 	FetcherExtensions fetcherwiring.Extensions
+	// Remote is the host's remote-sync and Telegram hooks, copied into every
+	// action Env; the zero value means they are not available on this host.
+	Remote action.Remote
 }
 
 // Run starts the admin panel and blocks until ctx is done or a server fails.
 // It returns nil after a clean shutdown. Shutdown order: stop the HTTP
 // servers (no new jobs), cancel the running jobs, wait for them, then close
-// the databases.
+// the databases (the operational DB handle current at that point, which an
+// action with SwapsDB may have replaced).
 func Run(ctx context.Context, opts Options) error {
 	// Caller-supplied listeners are ours to close on every path, including
 	// early failures (closing twice after the servers stop is harmless).
@@ -145,7 +149,10 @@ func Run(ctx context.Context, opts Options) error {
 	if err != nil {
 		return fmt.Errorf("admin: open operational DB: %w", err)
 	}
-	defer opDB.Close()
+	// currentDB is the operational DB in use: opDB until the runner owns it,
+	// then whatever handle the runner's DB gate holds after any swap.
+	currentDB := func() *sql.DB { return opDB }
+	defer func() { _ = currentDB().Close() }()
 
 	var writesBlocked func() error
 	if mode == action.ModeLocal {
@@ -155,7 +162,7 @@ func Run(ctx context.Context, opts Options) error {
 	} else {
 		var lastReason string
 		guard := newSchemaState(func() error {
-			err := schemaGuard(ctx, cfg.SQLite.Path, opDB)
+			err := schemaGuard(ctx, cfg.SQLite.Path, currentDB())
 			switch {
 			case err == nil && lastReason != "":
 				log.Info("admin: schema matches again, write actions enabled")
@@ -190,13 +197,17 @@ func Run(ctx context.Context, opts Options) error {
 		closeAll(listeners)
 		return fmt.Errorf("admin: job runner: %w", err)
 	}
+	runner.UseDB(opDB)
+	currentDB = runner.DB
 
 	statsLogPath := opts.StatsLogPath
 	if statsLogPath == "" {
 		statsLogPath = "data/logs/out.log"
 	}
+	// The runner overrides DB with the gate's current handle when it runs
+	// the action.
 	envFor := func(actor string) action.Env {
-		return action.Env{DB: opDB, Config: cfg, Mode: mode, Now: now, Log: log, Actor: actor, StatsLogPath: statsLogPath,
+		return action.Env{DB: runner.DB(), State: st, Remote: opts.Remote, Config: cfg, Mode: mode, Now: now, Log: log, Actor: actor, StatsLogPath: statsLogPath,
 			ConfigPath: opts.ConfigPath, Profile: profile, FetcherExtensions: opts.FetcherExtensions}
 	}
 	streamsDone := make(chan struct{})
