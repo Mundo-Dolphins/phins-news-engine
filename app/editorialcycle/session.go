@@ -17,6 +17,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/article"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/reviewdecision"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/training"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
 	"github.com/Mundo-Dolphins/phins-news-engine/ports/out"
 )
 
@@ -48,9 +49,12 @@ const (
 // every backfill already tells the operator the set is a reconstruction.
 const legacyBackfillSampleSize = 25
 
+// selectionWindowDays bounds the corpus SelectFresh selects a new session's
+// candidates from.
+const selectionWindowDays = 30
+
 // legacyBackfillWindowDays bounds the corpus the legacy repair reselects
-// from, mirroring the 30-day window cmd/editorialcycle.go passes to
-// activelearning.Select for a real run.
+// from, mirroring the 30-day window SelectFresh uses for a real run.
 const legacyBackfillWindowDays = 30
 
 // Flags is the subset of `editorial cycle`'s CLI flags a session
@@ -87,6 +91,36 @@ func (d Deps) activeLearningDeps() activelearning.Deps {
 		Articles: d.Articles, Labels: d.Labels, Events: d.Events,
 		ReviewDecisions: d.ReviewDecisions, Clock: d.Clock, ExcludedSourceIDs: d.ExcludedSourceIDs,
 	}
+}
+
+// ExcludedSourceIDs is the set of sources a cycle never offers for manual
+// review: the model-bypass and unconditional-publish sources of cfg.
+func ExcludedSourceIDs(cfg *config.Config) map[string]bool {
+	ids := make(map[string]bool, len(cfg.Editorial.ModelBypassSourceIDs)+len(cfg.Editorial.UnconditionalPublishSourceIDs))
+	for _, id := range cfg.Editorial.ModelBypassSourceIDs {
+		ids[id] = true
+	}
+	for _, id := range cfg.Editorial.UnconditionalPublishSourceIDs {
+		ids[id] = true
+	}
+	return ids
+}
+
+// SelectFresh selects the candidate set a new session freezes, the
+// freshCandidates StartOrResume takes: the last 30 days of articles, at most
+// cfg.EditorialCycle.PoolLimit scored, sampleSize returned (cfg's sample size
+// when sampleSize <= 0), skipping deps.ExcludedSourceIDs and articles marked
+// ambiguous within the configured cooldown.
+func SelectFresh(ctx context.Context, deps Deps, cfg *config.Config, sampleSize int) ([]activelearning.Candidate, error) {
+	if sampleSize <= 0 {
+		sampleSize = cfg.EditorialCycle.SampleSize
+	}
+	return activelearning.Select(ctx, deps.activeLearningDeps(), activelearning.Options{
+		Since:             deps.Clock.Now().AddDate(0, 0, -selectionWindowDays),
+		PoolLimit:         cfg.EditorialCycle.PoolLimit,
+		SampleSize:        sampleSize,
+		AmbiguousCooldown: cfg.EditorialCycle.AmbiguousCooldown(),
+	})
 }
 
 // StartOrResume returns the latest resumable session (running, paused,
@@ -419,6 +453,16 @@ func Pause(ctx context.Context, deps Deps, session out.EditorialCycleSession, re
 func Fail(ctx context.Context, deps Deps, session out.EditorialCycleSession, cause error) error {
 	_ = cause
 	return transition(ctx, deps, session, statusFailed)
+}
+
+// Abandon transitions session to "cancelled": the operator gave the cycle up.
+// A cancelled session is never resumed; the next StartOrResume starts afresh.
+//
+// session must be the freshest known value for that session, never a stale
+// copy — the status write overwrites the whole row. See transition's CALLER
+// INVARIANT.
+func Abandon(ctx context.Context, deps Deps, session out.EditorialCycleSession) error {
+	return transition(ctx, deps, session, statusCancelled)
 }
 
 // transition is the single writer of editorial_cycle_sessions.status:

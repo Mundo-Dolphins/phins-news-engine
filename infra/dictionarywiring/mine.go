@@ -5,11 +5,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 
 	sqliteadapter "github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqlite"
 	"github.com/Mundo-Dolphins/phins-news-engine/app/dictionarymining"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/dictionary"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/clock"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionaryfile"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionaryminingfile"
@@ -147,4 +149,29 @@ func miningFilter(cfg *config.Config) (dictionarymining.FilterConfig, error) {
 		return dictionarymining.FilterConfig{}, &MineSetupError{fmt.Errorf("load mining policy: %w", err)}
 	}
 	return filter, nil
+}
+
+// MinedTermReview wires the mined-term review of dictionarymining (Prepare,
+// Offer, Decide, Write) over db and cfg: mining through SelectMineCandidates,
+// the dictionary file at cfg.Dictionary.Path and the mining policy file at
+// cfg.DictionaryMining.Path. Rejection notices go to notices.
+func MinedTermReview(db *sql.DB, cfg *config.Config, notices io.Writer) dictionarymining.ReviewDeps {
+	return dictionarymining.ReviewDeps{
+		Mine: func(ctx context.Context, sessionID string) (dictionarymining.Selection, error) {
+			sel, err := SelectMineCandidates(ctx, db, cfg, sessionID)
+			return dictionarymining.Selection{
+				Session: sel.Report.Session, Candidates: sel.Report.Candidates, Warnings: sel.Report.Warnings,
+				Dictionary: sel.Dictionary, Filter: sel.Filter,
+			}, err
+		},
+		Candidates:     sqliteadapter.NewDictionaryCandidateRepository(db),
+		LoadDictionary: func() (dictionary.Dictionary, error) { return dictionaryfile.Load(cfg.Dictionary.Path) },
+		SaveDictionary: func(d dictionary.Dictionary) error { return dictionaryfile.Save(cfg.Dictionary.Path, d) },
+		IgnoreTerm: func(term string) (bool, error) {
+			return dictionaryminingfile.AddIgnoredTerm(cfg.DictionaryMining.Path, term)
+		},
+		PolicyPath: cfg.DictionaryMining.Path,
+		Clock:      clock.Real{},
+		Out:        notices,
+	}
 }

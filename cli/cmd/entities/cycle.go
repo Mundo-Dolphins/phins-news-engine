@@ -5,15 +5,10 @@ import (
 	"bufio"
 	"database/sql"
 	"fmt"
-	"time"
 
 	"github.com/spf13/cobra"
 
-	sqliteadapter "github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqlite"
-	"github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqliteentityproposal"
 	"github.com/Mundo-Dolphins/phins-news-engine/app/entitycycle"
-	"github.com/Mundo-Dolphins/phins-news-engine/app/entitydiscovery"
-	"github.com/Mundo-Dolphins/phins-news-engine/domain/entityproposal"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/entitywiring"
 	appout "github.com/Mundo-Dolphins/phins-news-engine/ports/out"
@@ -21,22 +16,16 @@ import (
 
 // Verification modes of the cycle's entity step.
 const (
-	CycleVerificationLocal = "local"
-	CycleVerificationFull  = "full"
-	CycleVerificationNone  = "none"
+	CycleVerificationLocal = entitywiring.CycleVerificationLocal
+	CycleVerificationFull  = entitywiring.CycleVerificationFull
+	CycleVerificationNone  = entitywiring.CycleVerificationNone
 )
 
 // CycleOptions configures RunCycleStep.
 type CycleOptions struct{ Verification string }
 
 // ValidateCycleVerification checks an --entities-verification value.
-func ValidateCycleVerification(v string) error {
-	switch v {
-	case CycleVerificationLocal, CycleVerificationFull, CycleVerificationNone:
-		return nil
-	}
-	return fmt.Errorf("--entities-verification must be local, full or none (got %q)", v)
-}
+func ValidateCycleVerification(v string) error { return entitywiring.ValidateCycleVerification(v) }
 
 // NewCycleLLM builds the discovery LLM; a variable so tests can substitute it.
 var NewCycleLLM = func(cmd *cobra.Command, cfg config.EntityDiscoveryConfig, maxTokens int, disableThinking bool) appout.EntityDiscoveryLLM {
@@ -57,109 +46,20 @@ func CycleStepDisabledReason(cfg *config.Config) string {
 	return ""
 }
 
-// cycleStages maps a verification mode to the chain stages. local never uses
-// web search; full behaves like `entities discover --verify --fallback`.
-func cycleStages(cfg *config.Config, mode string) (wikidataOn, fallbackOn, chooserOn, verify bool) {
-	switch mode {
-	case CycleVerificationFull:
-		w, f := entitywiring.ResolveStages(cfg.EntityDiscovery.Verification, cfg.CatalogMaintenance.WebLookup.Enabled, entitywiring.Stages{Fallback: true})
-		return w, f, true, true
-	case CycleVerificationNone:
-		return false, false, false, false
-	default: // local
-		return cfg.EntityDiscovery.Wikidata.Enabled, false, true, true
-	}
-}
-
-// cycleVerifyMinConfidence is the confidence below which a discovered alias is
-// sent through verification; it matches `entities discover`'s
-// --verify-min-confidence default.
-const cycleVerifyMinConfidence = 0.85
-
-// sessionArticleIDs is the sample of the entity step: the articles the operator
-// published or rejected in the session, once each. Skipped, ambiguous,
-// duplicate and update decisions are not part of it.
-func sessionArticleIDs(decisions []appout.ReviewDecision) []string {
-	seen := map[string]bool{}
-	var ids []string
-	for _, d := range decisions {
-		if (d.Label != "publish" && d.Label != "reject") || seen[d.ArticleID] {
-			continue
-		}
-		seen[d.ArticleID] = true
-		ids = append(ids, d.ArticleID)
-	}
-	return ids
-}
-
 // RunCycleStep runs the entity step of `editorial cycle` for one session.
 func RunCycleStep(cmd *cobra.Command, cfg *config.Config, db *sql.DB, sessionID string, scanner *bufio.Scanner, opts CycleOptions) (entitycycle.Result, error) {
 	var zero entitycycle.Result
-	if err := ValidateCycleVerification(opts.Verification); err != nil {
+	newLLM := func(dc config.EntityDiscoveryConfig, maxTokens int, disableThinking bool, _ appout.Logger) appout.EntityDiscoveryLLM {
+		return NewCycleLLM(cmd, dc, maxTokens, disableThinking)
+	}
+	deps, in, err := entitywiring.CycleDeps(cmd.Context(), cfg, db, sessionID, opts.Verification, cmd.OutOrStderr(), newLLM)
+	if err != nil {
 		return zero, err
 	}
-	decisions, err := sqliteadapter.NewReviewDecisionRepository(db).ListBySession(cmd.Context(), sessionID)
-	if err != nil {
-		return zero, fmt.Errorf("entities: list session decisions: %w", err)
-	}
-	ids := sessionArticleIDs(decisions)
-	if len(ids) == 0 {
+	if len(in.SessionArticleIDs) == 0 {
 		fmt.Fprintln(cmd.OutOrStdout(), "entities: the session has no reviewed articles")
 		return zero, nil
 	}
-
-	discoveryCfg, maxTokens, disableThinking, err := entitywiring.DiscoveryConfig(cfg, entitywiring.LLMOverrides{})
-	if err != nil {
-		return zero, fmt.Errorf("entities: %w", err)
-	}
-	catalog, err := entitywiring.CatalogIndex(cfg.Clustering.EntityCatalog.ManualPath, cfg.Clustering.EntityCatalog.GeneratedPath)
-	if err != nil {
-		return zero, fmt.Errorf("entities: %w", err)
-	}
-	llm := NewCycleLLM(cmd, discoveryCfg, maxTokens, disableThinking)
-
-	wikidataOn, fallbackOn, chooserOn, verify := cycleStages(cfg, opts.Verification)
-	leagueStage, err := entitywiring.LeagueStage(cfg, catalog, time.Now(), discoveryLogger{out: cmd.OutOrStderr(), component: "entities"})
-	if err != nil {
-		return zero, fmt.Errorf("entities: %w", err)
-	}
-	var verifier entitydiscovery.Verifier
-	if verify {
-		verifier, _, err = entitywiring.ChainVerifier(cmd.Context(), db, cfg, llm, catalog, wikidataOn, fallbackOn, chooserOn, cliLoggers(cmd))
-		if err != nil {
-			return zero, fmt.Errorf("entities: %w", err)
-		}
-	}
-
-	batch := discoveryCfg.BatchSize
-	if batch <= 0 {
-		batch = 20
-	}
-	repo := sqliteentityproposal.NewEntityProposalRepository(db)
-	deps := entitycycle.Deps{
-		Lister:    entitycycle.SessionLister{IDs: ids, Articles: sqliteadapter.NewArticleRepository(db), Processed: repo},
-		LLM:       llm,
-		Proposals: repo,
-		Catalog:   catalog,
-		Verifier:  verifier,
-		Apply: func(p entityproposal.Proposal, now time.Time) error {
-			return entitydiscovery.ApplyApproval(p, entitydiscovery.CatalogPaths{
-				DictionaryPath: cfg.Dictionary.Path, ManualCatalogPath: cfg.Clustering.EntityCatalog.ManualPath,
-				GeneratedCatalogPath: cfg.Clustering.EntityCatalog.GeneratedPath,
-			}, now)
-		},
-		Regenerate: func() error {
-			_, err := GenerateCatalog(cfg.Dictionary.Path, cfg.Clustering.EntityCatalog.GeneratedPath)
-			return err
-		},
-		Now: time.Now,
-	}
-	if leagueStage != nil {
-		deps.League = leagueStage.Index
-	}
-	return entitycycle.Run(cmd.Context(), deps, entitycycle.Input{
-		SessionArticleIDs: ids, ExtractorVersion: discoveryCfg.ExtractorVersion,
-		BatchSize: batch, Limit: len(ids), VerifyMinConfidence: cycleVerifyMinConfidence,
-		Scanner: scanner, Out: cmd.OutOrStdout(),
-	})
+	in.Scanner, in.Out = scanner, cmd.OutOrStdout()
+	return entitycycle.Run(cmd.Context(), deps, in)
 }

@@ -56,6 +56,35 @@ type Result struct {
 // through the resulting proposals. An unreachable discovery LLM is a warning,
 // never an error: the cycle continues without entities.
 func Run(ctx context.Context, d Deps, in Input) (Result, error) {
+	res, err := Discover(ctx, d, in)
+	if err != nil {
+		return res, err
+	}
+	now := d.Now
+	if now == nil {
+		now = time.Now
+	}
+
+	// Proposals already pending for this session (from an earlier, interrupted
+	// run) need no LLM, so they are offered even after an outage.
+	reviewErr := review(ctx, d, in, now, &res)
+	// Regenerate whenever the files were edited, even if the review then failed.
+	regenerated, err := FinishReview(ctx, d, res.catalogDirty)
+	if err != nil {
+		return res, errors.Join(reviewErr, err)
+	}
+	if regenerated {
+		res.Regenerated = true
+		fmt.Fprintln(in.Out, "entity catalog regenerated")
+	}
+	return res, reviewErr
+}
+
+// Discover runs entity discovery over the session's articles and prints its
+// counters and warnings to in.Out, leaving every proposal pending for a later
+// review. An unreachable discovery LLM is a warning (Result.DiscoveryFailed),
+// never an error. in.Scanner is not used.
+func Discover(ctx context.Context, d Deps, in Input) (Result, error) {
 	var res Result
 	now := d.Now
 	if now == nil {
@@ -82,19 +111,21 @@ func Run(ctx context.Context, d Deps, in Input) (Result, error) {
 	} else if res.BatchesFailed > 0 {
 		fmt.Fprintf(in.Out, "WARNING: %d of %d discovery batches failed; their articles stay unprocessed for a later run.\n", res.BatchesFailed, res.Batches)
 	}
+	return res, nil
+}
 
-	// Proposals already pending for this session (from an earlier, interrupted
-	// run) need no LLM, so they are offered even after an outage.
-	reviewErr := review(ctx, d, in, now, &res)
-	// Regenerate whenever the files were edited, even if the review then failed.
-	if res.catalogDirty && d.Regenerate != nil {
-		if err := d.Regenerate(); err != nil {
-			return res, errors.Join(reviewErr, fmt.Errorf("entitycycle: regenerate catalog: %w", err))
-		}
-		res.Regenerated = true
-		fmt.Fprintln(in.Out, "entity catalog regenerated")
+// FinishReview closes a review of the session's proposals: when approvedAny
+// (an approval edited the catalog files) it regenerates the catalog and
+// reports regenerated. Regeneration is idempotent, so a caller that cannot
+// tell whether an approval reached the files may pass true.
+func FinishReview(_ context.Context, d Deps, approvedAny bool) (regenerated bool, err error) {
+	if !approvedAny || d.Regenerate == nil {
+		return false, nil
 	}
-	return res, reviewErr
+	if err := d.Regenerate(); err != nil {
+		return false, fmt.Errorf("entitycycle: regenerate catalog: %w", err)
+	}
+	return true, nil
 }
 
 func review(ctx context.Context, d Deps, in Input, now func() time.Time, res *Result) error {
