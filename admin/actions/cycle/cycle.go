@@ -103,6 +103,8 @@ type StepState struct {
 	Result    json.RawMessage `json:"result"`
 	Error     string          `json:"error"`
 	UpdatedAt time.Time       `json:"updated_at"`
+	// EnteredAt is when the wizard moved onto the step (nil until then).
+	EnteredAt *time.Time `json:"entered_at,omitempty"`
 }
 
 // finished reports whether the wizard may move past the step.
@@ -386,9 +388,19 @@ func Actions() []action.Action {
 			Kind:        action.KindWrite, Modes: localOnly, Run: runEntitiesFinish,
 		},
 		{
+			Name: "cycle.event_rules_discover", Group: group, Title: "Discover event rule phrases",
+			Description: "Runs the event rule discovery of the cycle (as events.rules_discover) and records its counters; the proposals are then decided with events.rules_queue and events.rules_decide.",
+			Kind:        action.KindWrite, Modes: localOnly, LongRunning: true, Exclusive: true, Run: runEventRulesDiscover,
+		},
+		{
+			Name: "cycle.event_rules_apply", Group: group, Title: "Apply event rule phrases",
+			Description: "Applies the approved event rule phrases when the clustering gate passes (as events.rules_apply) and records the outcome in the step.",
+			Kind:        action.KindWrite, Modes: localOnly, LongRunning: true, Exclusive: true, Run: runEventRulesApply,
+		},
+		{
 			Name: "cycle.event_rules_finish", Group: group, Title: "Finish event rules review",
-			Description: "Finishes the event rules step with the counters of the review queue (decisions go through events.rules_*); nothing is rejected automatically.",
-			Kind:        action.KindWrite, Modes: localOnly, Params: eventRulesFinishParams{}, Run: runEventRulesFinish,
+			Description: "Finishes the event rules step with the counters recorded by the cycle's discover and apply; nothing is rejected automatically.",
+			Kind:        action.KindWrite, Modes: localOnly, Run: runEventRulesFinish,
 		},
 		{
 			Name: "cycle.terms_prepare", Group: group, Title: "Mine dictionary terms",
@@ -541,6 +553,7 @@ func runStart(ctx context.Context, env action.Env, params any) (action.Result, e
 	for _, s := range Steps {
 		w.step(s).UpdatedAt = at
 	}
+	w.step(StepSync).EnteredAt = &at
 	if err := save(ctx, env, w); err != nil {
 		return action.Result{}, err
 	}
@@ -589,6 +602,8 @@ func runNext(ctx context.Context, env action.Env, params any) (action.Result, er
 		return action.Result{}, action.Conflict(fmt.Errorf("step %s is not finished (%s)", w.Step, cur.Status))
 	}
 	w.Step = Steps[slices.Index(Steps, w.Step)+1]
+	entered := env.Now()
+	w.step(w.Step).EnteredAt = &entered
 	if w.Step == StepSummary {
 		// The summary has nothing to run: it is ready as soon as it is reached.
 		if err := w.set(StepSummary, StatusDone, nil, "", env.Now()); err != nil {

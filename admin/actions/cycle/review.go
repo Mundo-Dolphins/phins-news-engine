@@ -1,28 +1,18 @@
 package cycle
 
 import (
-	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
-	"log/slog"
-	"strings"
-	"sync"
 	"time"
 
 	sqliteadapter "github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqlite"
-	"github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqliteentityproposal"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/action"
 	"github.com/Mundo-Dolphins/phins-news-engine/app/activelearning"
 	"github.com/Mundo-Dolphins/phins-news-engine/app/editorialcycle"
-	"github.com/Mundo-Dolphins/phins-news-engine/app/entitycycle"
-	"github.com/Mundo-Dolphins/phins-news-engine/app/eventrulecycle"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/article"
-	"github.com/Mundo-Dolphins/phins-news-engine/domain/entityproposal"
-	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventruleproposal"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/reviewdecision"
-	"github.com/Mundo-Dolphins/phins-news-engine/infra/entitywiring"
-	"github.com/Mundo-Dolphins/phins-news-engine/infra/eventrules"
 	"github.com/Mundo-Dolphins/phins-news-engine/ports/out"
 )
 
@@ -31,10 +21,6 @@ const (
 	sessionRunning   = "running"
 	sessionCompleted = "completed"
 )
-
-// discoveryLLM builds the entity step's discovery LLM; nil is the default
-// client. Tests substitute it.
-var discoveryLLM entitywiring.DiscoveryLLMFactory
 
 var errNoSession = action.Conflict(errors.New("open the article review first"))
 
@@ -73,21 +59,24 @@ func reviewDeps(env action.Env) editorialcycle.Deps {
 // excludeBypasses records the CLI's source-policy skip for the session's
 // pending candidates from sources excluded from manual review, so they
 // neither show nor block completion.
-func excludeBypasses(ctx context.Context, deps editorialcycle.Deps, sessionID string) error {
+func excludeBypasses(ctx context.Context, deps editorialcycle.Deps, sessionID string) (excluded int, err error) {
 	rows, err := deps.Candidates.ListPending(ctx, sessionID)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	pending := editorialcycle.CandidatesFromFrozen(rows)
 	for i, row := range rows {
 		a, err := deps.Articles.FindByID(ctx, row.ArticleID)
 		if err != nil {
-			return fmt.Errorf("editorial cycle: hydrate article %s: %w", row.ArticleID, err)
+			return 0, fmt.Errorf("editorial cycle: hydrate article %s: %w", row.ArticleID, err)
 		}
 		pending[i].Article = a
 	}
-	_, err = editorialcycle.ExcludeSourceBypasses(ctx, deps, sessionID, pending)
-	return err
+	manual, err := editorialcycle.ExcludeSourceBypasses(ctx, deps, sessionID, pending)
+	if err != nil {
+		return 0, err
+	}
+	return len(pending) - len(manual), nil
 }
 
 // reviewSet is the session's manual review set: its frozen candidates in
@@ -171,8 +160,12 @@ func runReviewOpen(ctx context.Context, env action.Env, _ any) (action.Result, e
 		return action.Result{}, err
 	}
 	if session.Status != sessionCompleted {
-		if err := excludeBypasses(ctx, deps, session.ID); err != nil {
+		excluded, err := excludeBypasses(ctx, deps, session.ID)
+		if err != nil {
 			return action.Result{}, err
+		}
+		if excluded > 0 {
+			env.Log.Info(fmt.Sprintf("excluded %d source-policy article(s) from manual review", excluded))
 		}
 	}
 	w.SessionID = session.ID
@@ -188,15 +181,24 @@ func runReviewOpen(ctx context.Context, env action.Env, _ any) (action.Result, e
 }
 
 // openSession starts or resumes the review session as `editorial cycle
-// --resume` does: the latest paused, failed or running session (a paused
-// CLI session too) is resumed with its frozen set; otherwise a new session
-// freezes a fresh selection. A session this cycle already completed (its
-// finish not recorded) is returned as it is.
+// --resume` does: the cycle's own session while it is resumable, otherwise
+// the latest paused, failed or running session (a paused CLI session too),
+// is resumed with its frozen set; with none a new session freezes a fresh
+// selection. A session this cycle already completed (its finish not
+// recorded) is returned as it is.
 func openSession(ctx context.Context, env action.Env, deps editorialcycle.Deps, w *Wizard) (out.EditorialCycleSession, string, error) {
+	var own *out.EditorialCycleSession
 	if w.SessionID != "" {
 		s, err := sqliteadapter.NewEditorialCycleSessionRepository(env.DB).Get(ctx, w.SessionID)
-		if err == nil && s.Status == sessionCompleted {
+		switch {
+		case err != nil && !errors.Is(err, sql.ErrNoRows):
+			return out.EditorialCycleSession{}, "", err
+		case err != nil:
+			// gone: start or resume as for a new cycle
+		case s.Status == sessionCompleted:
 			return s, "session " + s.ID + " is already complete; finish the review", nil
+		case s.Status == sessionRunning || s.Status == "paused" || s.Status == "failed":
+			own = &s
 		}
 	}
 	sampleSize := w.SampleSize
@@ -207,7 +209,16 @@ func openSession(ctx context.Context, env action.Env, deps editorialcycle.Deps, 
 	if err != nil {
 		return out.EditorialCycleSession{}, "", err
 	}
-	session, resumed, backfilled, err := editorialcycle.StartOrResume(ctx, deps, editorialcycle.Flags{SampleSize: sampleSize}, fresh)
+	flags := editorialcycle.Flags{SampleSize: sampleSize}
+	var (
+		session             out.EditorialCycleSession
+		resumed, backfilled bool
+	)
+	if own != nil {
+		session, resumed, backfilled, err = editorialcycle.Resume(ctx, deps, flags, *own, fresh)
+	} else {
+		session, resumed, backfilled, err = editorialcycle.StartOrResume(ctx, deps, flags, fresh)
+	}
 	if err != nil {
 		return out.EditorialCycleSession{}, "", err
 	}
@@ -405,7 +416,7 @@ func runReviewFinish(ctx context.Context, env action.Env, _ any) (action.Result,
 		return action.Result{}, err
 	}
 	if session.Status != sessionCompleted {
-		if err := excludeBypasses(ctx, deps, session.ID); err != nil {
+		if _, err := excludeBypasses(ctx, deps, session.ID); err != nil {
 			return action.Result{}, err
 		}
 	}
@@ -469,240 +480,4 @@ func runReviewPause(ctx context.Context, env action.Env, _ any) (action.Result, 
 		Object:  map[string]any{"session_id": session.ID, "status": session.Status},
 		Summary: "session saved — open the review again to resume",
 	}, nil
-}
-
-// logWriter turns the lines written to it into job log lines, keeping the
-// warnings.
-type logWriter struct {
-	mu       sync.Mutex
-	log      *slog.Logger
-	buf      bytes.Buffer
-	warnings []string
-}
-
-func newLogWriter(log *slog.Logger) *logWriter { return &logWriter{log: log} }
-
-func (l *logWriter) Write(p []byte) (int, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.buf.Write(p)
-	for {
-		line, err := l.buf.ReadString('\n')
-		if err != nil {
-			// Incomplete line: keep it for the next write.
-			l.buf.Reset()
-			l.buf.WriteString(line)
-			return len(p), nil
-		}
-		l.emit(strings.TrimRight(line, "\n"))
-	}
-}
-
-func (l *logWriter) emit(line string) {
-	if strings.TrimSpace(line) == "" {
-		return
-	}
-	if strings.HasPrefix(line, "WARNING") {
-		l.warnings = append(l.warnings, line)
-		l.log.Warn(line)
-		return
-	}
-	l.log.Info(line)
-}
-
-// flush logs a trailing partial line and returns the warnings.
-func (l *logWriter) flush() []string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if rest := l.buf.String(); rest != "" {
-		l.buf.Reset()
-		l.emit(rest)
-	}
-	return append([]string{}, l.warnings...)
-}
-
-const msgNoReviewedArticles = "entities: the session has no reviewed articles"
-
-func runEntitiesDiscover(ctx context.Context, env action.Env, _ any) (_ action.Result, err error) {
-	if env.Config == nil {
-		return action.Result{}, errNoConfig
-	}
-	cfg := env.Config
-	var prior entitiesResult
-	run, err := beginStep(ctx, env, StepEntities, func(s *StepState) error {
-		if reason := entitywiring.CycleStepDisabledReason(cfg); reason != "" {
-			return action.Conflict(fmt.Errorf("entities: step disabled (%s)", reason))
-		}
-		decodeInto(s, &prior)
-		return nil
-	})
-	if err != nil {
-		return action.Result{}, err
-	}
-	defer func() { run.finish(ctx, recover(), &err) }()
-	if run.w.SessionID == "" {
-		return action.Result{}, run.fail(ctx, nil, errNoSession)
-	}
-	// Approvals count from the first discovery of the step on.
-	started := env.Now()
-	if prior.DiscoveryStartedAt != nil {
-		started = *prior.DiscoveryStartedAt
-	}
-	logs := newLogWriter(env.Log)
-	deps, in, err := entitywiring.CycleDeps(ctx, cfg, env.DB, run.w.SessionID, run.w.EntitiesVerification, logs, discoveryLLM)
-	if err != nil {
-		return action.Result{}, run.fail(ctx, nil, err)
-	}
-	if len(in.SessionArticleIDs) == 0 {
-		// As the CLI: nothing to discover or review.
-		if err := run.end(ctx, StatusDone, entitiesResult{}, ""); err != nil {
-			return action.Result{}, err
-		}
-		return action.Result{Render: "object", Object: entitiesResult{}, Summary: msgNoReviewedArticles}, nil
-	}
-	in.Out = logs
-	res, err := entitycycle.Discover(ctx, deps, in)
-	warnings := logs.flush()
-	if err != nil {
-		return action.Result{}, run.fail(ctx, nil, fmt.Errorf("entities: %w", err))
-	}
-	result := entitiesResult{
-		Articles: res.Articles, Proposed: res.Proposed, DiscoveryFailed: res.DiscoveryFailed,
-		Warnings: warnings, DiscoveryStartedAt: &started,
-	}
-	// The step waits for the review of the session's proposals.
-	if err := run.end(ctx, StatusPending, result, ""); err != nil {
-		return action.Result{}, err
-	}
-	summary := fmt.Sprintf("entities: %d articles, %d batches (%d failed), %d proposals created or updated",
-		res.Articles, res.Batches, res.BatchesFailed, res.Proposed)
-	return action.Result{Render: "object", Object: result, Summary: summary}, nil
-}
-
-func runEntitiesFinish(ctx context.Context, env action.Env, _ any) (action.Result, error) {
-	if env.Config == nil {
-		return action.Result{}, errNoConfig
-	}
-	cfg := env.Config
-	mu.Lock()
-	defer mu.Unlock()
-	w, err := loadOpenStep(ctx, env, StepEntities)
-	if err != nil {
-		return action.Result{}, err
-	}
-	if w.SessionID == "" {
-		return action.Result{}, errNoSession
-	}
-	var r entitiesResult
-	decodeInto(w.step(StepEntities), &r)
-	if r.DiscoveryStartedAt == nil {
-		return action.Result{}, action.Conflict(errors.New("run the entity discovery first"))
-	}
-	ids, err := entitywiring.SessionArticleIDs(ctx, env.DB, w.SessionID)
-	if err != nil {
-		return action.Result{}, err
-	}
-	all, err := sqliteentityproposal.NewEntityProposalRepository(env.DB).List(ctx, "", "")
-	if err != nil {
-		return action.Result{}, err
-	}
-	// The operator's decisions on the session's proposals since the
-	// discovery (automatic rejections carry a reason).
-	r.Approved, r.Rejected = 0, 0
-	for _, p := range entitycycle.SourcedFrom(all, ids) {
-		if p.DecisionReason != "" || p.DecidedAt.Before(*r.DiscoveryStartedAt) {
-			continue
-		}
-		switch p.Status {
-		case entityproposal.StatusApproved:
-			r.Approved++
-		case entityproposal.StatusRejected:
-			r.Rejected++
-		}
-	}
-	ctx = context.WithoutCancel(ctx)
-	if r.Approved > 0 {
-		// Regeneration is idempotent: an approval of the session regenerates.
-		r.Regenerated, err = func() (bool, error) {
-			action.ConfigFilesMu.Lock()
-			defer action.ConfigFilesMu.Unlock()
-			return entitycycle.FinishReview(ctx, entitycycle.Deps{Regenerate: func() error {
-				_, err := entitywiring.GenerateCatalog(cfg.Dictionary.Path, cfg.Clustering.EntityCatalog.GeneratedPath)
-				return err
-			}}, true)
-		}()
-		if err != nil {
-			return action.Result{}, err
-		}
-	}
-	if err := w.set(StepEntities, StatusDone, r, "", env.Now()); err != nil {
-		return action.Result{}, err
-	}
-	if err := save(ctx, env, w); err != nil {
-		return action.Result{}, err
-	}
-	summary := fmt.Sprintf("Entity review complete. approved: %d, rejected: %d", r.Approved, r.Rejected)
-	if r.Regenerated {
-		summary += "; entity catalog regenerated"
-	}
-	return action.Result{Render: "object", Object: r, Summary: summary}, nil
-}
-
-type eventRulesFinishParams struct {
-	DiscoveryFailed  bool `json:"discovery_failed" help:"every discovery call failed (from events.rules_discover)"`
-	Applied          int  `json:"applied" help:"rules applied by events.rules_apply in this step"`
-	GateBlocked      bool `json:"gate_blocked" help:"the clustering gate blocked events.rules_apply"`
-	GateNotExercised bool `json:"gate_not_exercised" help:"the clustering gate ran but changed no benchmark article"`
-}
-
-func runEventRulesFinish(ctx context.Context, env action.Env, params any) (action.Result, error) {
-	p, ok := params.(*eventRulesFinishParams)
-	if !ok {
-		return action.Result{}, errBadParams
-	}
-	if env.Config == nil {
-		return action.Result{}, errNoConfig
-	}
-	if p.Applied < 0 {
-		return action.Result{}, invalid("applied must be 0 or more")
-	}
-	cfg := env.Config
-	mu.Lock()
-	defer mu.Unlock()
-	w, err := loadOpenStep(ctx, env, StepEventRules)
-	if err != nil {
-		return action.Result{}, err
-	}
-	// Only discovery needs the LLM: the review can finish without it.
-	if reason := eventrules.ReviewDisabledReason(cfg); reason != "" {
-		return action.Result{}, action.Conflict(fmt.Errorf("event rules: step disabled (%s)", reason))
-	}
-	// The counters events.rules_queue shows; nothing is decided here.
-	d := eventrules.CycleDeps(cfg, env.DB, eventrules.DefaultDatasetPath, nil, func(m string) { env.Log.Warn(m) }, env.Now)
-	c, err := eventrulecycle.Prepare(ctx, d)
-	if err != nil {
-		return action.Result{}, err
-	}
-	var pending []eventrulecycle.Assessment
-	if len(c.Sample) > 0 {
-		if pending, err = eventrulecycle.Pending(ctx, d, c, eventruleproposal.DefaultCheckOptions()); err != nil {
-			return action.Result{}, err
-		}
-	}
-	approved, err := eventrulecycle.ApprovedNotApplied(ctx, d)
-	if err != nil {
-		return action.Result{}, err
-	}
-	r := eventRulesResult{
-		Sampled: len(c.Sample), Proposed: len(pending), Approved: len(approved) + p.Applied, Applied: p.Applied,
-		DiscoveryFailed: p.DiscoveryFailed, GateBlocked: p.GateBlocked, GateNotExercised: p.GateNotExercised,
-	}
-	if err := w.set(StepEventRules, StatusDone, r, "", env.Now()); err != nil {
-		return action.Result{}, err
-	}
-	if err := save(context.WithoutCancel(ctx), env, w); err != nil {
-		return action.Result{}, err
-	}
-	return action.Result{Render: "object", Object: r, Summary: fmt.Sprintf(
-		"event rules: %d sampled, %d pending, %d approved, %d applied", r.Sampled, r.Proposed, r.Approved, r.Applied)}, nil
 }

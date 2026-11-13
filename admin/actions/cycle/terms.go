@@ -232,6 +232,11 @@ func runTermsDecide(ctx context.Context, env action.Env, params any) (action.Res
 		return action.Result{}, action.NotFound(fmt.Errorf("%q is not a mined term offered in this cycle", p.Term))
 	}
 	c := offered[i]
+	if c.Status == "rejected" {
+		// As the CLI, which offers pending terms only: the rejection is
+		// already in the mining policy file.
+		return action.Result{}, action.Conflict(fmt.Errorf("%q was already rejected and added to ignored_terms", p.Term))
+	}
 	if p.Category != "" && !slices.Contains(r.Categories, p.Category) {
 		return action.Result{}, invalid(fmt.Sprintf("%q is not one of the dictionary's categories", p.Category))
 	}

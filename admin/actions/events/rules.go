@@ -98,31 +98,48 @@ func ruleError(err error) error {
 // ruleDeps wires the cycle to the environment. Only discovery needs the LLM
 // (llm is nil elsewhere).
 func ruleDeps(env action.Env, llm appout.EventRuleDiscoveryLLM) (eventrulecycle.Deps, error) {
+	return ruleDepsAt(env, llm, gateDatasetPath)
+}
+
+// ruleDepsAt is ruleDeps with the gate scored on datasetPath.
+func ruleDepsAt(env action.Env, llm appout.EventRuleDiscoveryLLM, datasetPath string) (eventrulecycle.Deps, error) {
 	if env.Config == nil {
 		return eventrulecycle.Deps{}, errors.New("events: no configuration loaded")
 	}
 	if reason := eventrules.ReviewDisabledReason(env.Config); reason != "" {
 		return eventrulecycle.Deps{}, action.Conflict(errors.New(reason))
 	}
-	return eventrules.CycleDeps(env.Config, env.DB, gateDatasetPath, llm, func(w string) { env.Log.Warn(w) }, env.Now), nil
+	return eventrules.CycleDeps(env.Config, env.DB, datasetPath, llm, func(w string) { env.Log.Warn(w) }, env.Now), nil
 }
 
-func runRulesDiscover(ctx context.Context, env action.Env, _ any) (action.Result, error) {
+// DiscoverRules is the work of events.rules_discover: it samples recent
+// generic articles, asks the discovery LLM for event rule phrases and
+// stores them as pending proposals. llm nil is the offline-training client.
+// Failed LLM calls are counted in the result (Unavailable when all failed),
+// not returned as an error.
+func DiscoverRules(ctx context.Context, env action.Env, llm appout.EventRuleDiscoveryLLM) (eventrulecycle.DiscoverResult, error) {
 	if env.Config == nil {
-		return action.Result{}, errors.New("events: no configuration loaded")
+		return eventrulecycle.DiscoverResult{}, errors.New("events: no configuration loaded")
 	}
 	if reason := eventrules.CycleStepDisabledReason(env.Config); reason != "" {
-		return action.Result{}, action.Conflict(errors.New(reason))
+		return eventrulecycle.DiscoverResult{}, action.Conflict(errors.New(reason))
 	}
-	d, err := ruleDeps(env, newDiscoveryLLM(env.Config.OfflineTraining.LLM))
+	if llm == nil {
+		llm = newDiscoveryLLM(env.Config.OfflineTraining.LLM)
+	}
+	d, err := ruleDeps(env, llm)
 	if err != nil {
-		return action.Result{}, err
+		return eventrulecycle.DiscoverResult{}, err
 	}
 	c, err := eventrulecycle.Prepare(ctx, d)
 	if err != nil {
-		return action.Result{}, err
+		return eventrulecycle.DiscoverResult{}, err
 	}
-	r, err := eventrulecycle.Discover(ctx, d, c, env.Config.OfflineTraining.LLM.BatchSize)
+	return eventrulecycle.Discover(ctx, d, c, env.Config.OfflineTraining.LLM.BatchSize)
+}
+
+func runRulesDiscover(ctx context.Context, env action.Env, _ any) (action.Result, error) {
+	r, err := DiscoverRules(ctx, env, nil)
 	if err != nil {
 		return action.Result{}, err
 	}
@@ -399,26 +416,40 @@ func runRulesRejectFailing(ctx context.Context, env action.Env, params any) (act
 	}, nil
 }
 
-func runRulesApply(ctx context.Context, env action.Env, _ any) (action.Result, error) {
-	d, err := ruleDeps(env, nil)
+// ApplyRules is the work of events.rules_apply: it gates the generated rules
+// plus the approved phrases against the clustering benchmark at datasetPath
+// and, when it passes, writes the generated rules file
+// (eventrules.GeneratedPath) and marks them applied. A blocked gate is in
+// the result. The caller holds action.ConfigFilesMu.
+func ApplyRules(ctx context.Context, env action.Env, datasetPath string) (eventrulecycle.ApplyResult, error) {
+	d, err := ruleDepsAt(env, nil, datasetPath)
 	if err != nil {
-		return action.Result{}, err
+		return eventrulecycle.ApplyResult{}, err
 	}
-	action.ConfigFilesMu.Lock()
-	defer action.ConfigFilesMu.Unlock()
 	toApply, err := eventrulecycle.ApprovedNotApplied(ctx, d)
 	if err != nil {
-		return action.Result{}, err
+		return eventrulecycle.ApplyResult{}, err
 	}
 	r, err := eventrulecycle.Apply(ctx, d, toApply, env.Now())
 	if err != nil {
-		return action.Result{}, ruleError(err)
+		return r, ruleError(err)
 	}
+	return r, nil
+}
+
+func runRulesApply(ctx context.Context, env action.Env, _ any) (action.Result, error) {
+	action.ConfigFilesMu.Lock()
+	defer action.ConfigFilesMu.Unlock()
+	r, err := ApplyRules(ctx, env, gateDatasetPath)
+	if err != nil {
+		return action.Result{}, err
+	}
+	generated := eventrules.GeneratedPath(env.Config)
 	applied := make([]map[string]any, 0, len(r.Applied))
 	for _, p := range r.Applied {
 		applied = append(applied, map[string]any{"id": p.ID, "target_kind": string(p.TargetKind), "target": p.Target, "phrase": p.Phrase})
 	}
-	obj := map[string]any{"nothing": r.Nothing, "blocked": r.Blocked, "reason": r.Reason, "applied": applied, "generated_rules": d.GeneratedPath}
+	obj := map[string]any{"nothing": r.Nothing, "blocked": r.Blocked, "reason": r.Reason, "applied": applied, "generated_rules": generated}
 	if r.Candidate != nil {
 		obj["before"], obj["after"] = metricsOf(r.Gate.Before), metricsOf(r.Gate.After)
 		obj["dataset"] = eventrulecycle.GateExercise(r.Gate.Affected)
@@ -430,6 +461,6 @@ func runRulesApply(ctx context.Context, env action.Env, _ any) (action.Result, e
 	case r.Blocked:
 		return action.Result{Render: "object", Object: obj, Summary: "BLOCKED: " + r.Reason}, nil
 	}
-	env.Log.Info("event rules applied", "count", len(applied), "path", d.GeneratedPath, "by", env.Actor)
-	return action.Result{Render: "object", Object: obj, Summary: fmt.Sprintf("PASS: %d rule(s) applied to %s", len(applied), d.GeneratedPath)}, nil
+	env.Log.Info("event rules applied", "count", len(applied), "path", generated, "by", env.Actor)
+	return action.Result{Render: "object", Object: obj, Summary: fmt.Sprintf("PASS: %d rule(s) applied to %s", len(applied), generated)}, nil
 }

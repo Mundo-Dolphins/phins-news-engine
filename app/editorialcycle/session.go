@@ -174,7 +174,16 @@ func StartOrResume(ctx context.Context, deps Deps, flags Flags, freshCandidates 
 		session, resumed, err := startFresh(ctx, deps, flags, freshCandidates)
 		return session, resumed, false, err
 	}
+	return Resume(ctx, deps, flags, existing, freshCandidates)
+}
 
+// Resume is StartOrResume's resume path for one given resumable session
+// (running, paused or failed): it is flipped to "running" with its frozen
+// set, after the repairs StartOrResume documents — when every frozen
+// candidate was purged, it is cancelled and a new session is started from
+// freshCandidates (resumed false). existing must be the freshest value of
+// that session (see transition's CALLER INVARIANT).
+func Resume(ctx context.Context, deps Deps, flags Flags, existing out.EditorialCycleSession, freshCandidates []activelearning.Candidate) (out.EditorialCycleSession, bool, bool, error) {
 	resolvable, err := deps.Candidates.CountResolvable(ctx, existing.ID)
 	if err != nil {
 		return out.EditorialCycleSession{}, false, false, fmt.Errorf("editorialcycle: count resolvable candidates for %s: %w", existing.ID, err)

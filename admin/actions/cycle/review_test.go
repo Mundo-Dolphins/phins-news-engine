@@ -25,7 +25,6 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/weblookup"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
 	"github.com/Mundo-Dolphins/phins-news-engine/ports/out"
-	"github.com/Mundo-Dolphins/phins-news-engine/testsupport/repofs"
 )
 
 // longSummary is longer than any truncation the CLI or a card could apply.
@@ -437,16 +436,16 @@ func seedProposal(t *testing.T, db *sql.DB, name string, status entityproposal.S
 	}
 }
 
-func TestEntitiesFinishCountsSessionDecisionsSinceDiscovery(t *testing.T) {
+func TestEntitiesFinishCountsSessionDecisionsSinceStepEntered(t *testing.T) {
 	f := newFixture(t)
 	f.mustRun("cycle.start", `{}`)
 	seedSessionDecisions(t, f.db, "sess-e", map[string]string{"e1": "publish", "e2": "reject", "e3": "ambiguous"})
 	started := now.Add(-time.Hour)
 	f.setState(func(m map[string]any) {
 		m["step"], m["session_id"] = "entities", "sess-e"
-		stepMap(t, m, "entities")["result"] = map[string]any{
-			"articles": 2, "proposed": 4, "discovery_failed": false, "discovery_started_at": started.Format(time.RFC3339Nano),
-		}
+		st := stepMap(t, m, "entities")
+		st["entered_at"] = started.Format(time.RFC3339Nano)
+		st["result"] = map[string]any{"articles": 2, "proposed": 4, "discovery_failed": false, "discovered": true}
 	})
 	seedProposal(t, f.db, "Quill Farrowby", entityproposal.StatusApproved, now, "e1")
 	seedProposal(t, f.db, "Zeno Ashbury", entityproposal.StatusRejected, now, "e2")
@@ -541,17 +540,17 @@ func TestEntitiesDiscoverThenFinish(t *testing.T) {
 	}
 	s := f.state().Cycle.Steps["entities"]
 	var r struct {
-		Articles           int        `json:"articles"`
-		Proposed           int        `json:"proposed"`
-		Approved           int        `json:"approved"`
-		Rejected           int        `json:"rejected"`
-		DiscoveryFailed    bool       `json:"discovery_failed"`
-		DiscoveryStartedAt *time.Time `json:"discovery_started_at"`
+		Articles        int  `json:"articles"`
+		Proposed        int  `json:"proposed"`
+		Approved        int  `json:"approved"`
+		Rejected        int  `json:"rejected"`
+		DiscoveryFailed bool `json:"discovery_failed"`
+		Discovered      bool `json:"discovered"`
 	}
 	if err := json.Unmarshal(s.Result, &r); err != nil {
 		t.Fatal(err)
 	}
-	if s.Status != "pending" || r.Articles != 1 || r.Proposed != 1 || r.DiscoveryFailed || r.DiscoveryStartedAt == nil || !r.DiscoveryStartedAt.Equal(now) {
+	if s.Status != "pending" || r.Articles != 1 || r.Proposed != 1 || r.DiscoveryFailed || !r.Discovered {
 		t.Fatalf("after discovery: %+v %s", s, s.Result)
 	}
 	repo := sqliteentityproposal.NewEntityProposalRepository(f.db)
@@ -599,34 +598,4 @@ func TestEntitiesDiscoverNoReviewedArticles(t *testing.T) {
 	if s := f.state().Cycle.Steps["entities"]; s.Status != "done" {
 		t.Fatalf("step = %+v", s)
 	}
-}
-
-func TestEventRulesFinishRecordsCounters(t *testing.T) {
-	f := entityStepFixture(t, &fakeEntityLLM{})
-	f.setState(func(m map[string]any) { m["step"] = "event_rules" })
-	f.cfg.Clustering.RulesPath = ""
-	_, err := f.run("cycle.event_rules_finish", `{}`)
-	wantConflict(t, err, "clustering.rules_path is empty")
-	f.cfg.Clustering.RulesPath = repofs.ExampleConfig(t, "event_clustering_rules.yml")
-	_, err = f.run("cycle.event_rules_finish", `{"applied":-1}`)
-	wantInvalid(t, err, "applied")
-	f.mustRun("cycle.event_rules_finish", `{"applied":2,"gate_not_exercised":true}`)
-	s := f.state().Cycle.Steps["event_rules"]
-	var r struct {
-		Sampled          int  `json:"sampled"`
-		Proposed         int  `json:"proposed"`
-		Approved         int  `json:"approved"`
-		Applied          int  `json:"applied"`
-		DiscoveryFailed  bool `json:"discovery_failed"`
-		GateBlocked      bool `json:"gate_blocked"`
-		GateNotExercised bool `json:"gate_not_exercised"`
-	}
-	if err := json.Unmarshal(s.Result, &r); err != nil {
-		t.Fatal(err)
-	}
-	if s.Status != "done" || r.Sampled != 0 || r.Proposed != 0 || r.Approved != 2 || r.Applied != 2 || r.DiscoveryFailed || r.GateBlocked || !r.GateNotExercised {
-		t.Fatalf("step = %+v %s", s, s.Result)
-	}
-	_, err = f.run("cycle.event_rules_finish", `{}`)
-	wantConflict(t, err, "already finished")
 }

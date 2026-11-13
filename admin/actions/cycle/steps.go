@@ -100,10 +100,9 @@ type (
 		SkipReason      string `json:"skip_reason"`
 		// Warnings are the discovery's warning lines.
 		Warnings []string `json:"warnings,omitempty"`
-		// DiscoveryStartedAt is when the step's first discovery started; the
-		// approvals and rejections counted are the ones made since.
-		DiscoveryStartedAt *time.Time `json:"discovery_started_at,omitempty"`
-		Regenerated        bool       `json:"regenerated,omitempty"`
+		// Discovered is set once cycle.entities_discover has run.
+		Discovered  bool `json:"discovered,omitempty"`
+		Regenerated bool `json:"regenerated,omitempty"`
 	}
 	eventRulesResult struct {
 		Sampled          int    `json:"sampled"`
