@@ -299,6 +299,10 @@ export interface ReviewEventsProps {
   discoverAction?: string;
   /** applyAction is the long-running action Apply runs (default `events.rules_apply`). */
   applyAction?: string;
+  /** onJobStart is called when Discover or Apply starts. */
+  onJobStart?(): void;
+  /** onJobEnd is called once that run has ended, whatever its outcome. */
+  onJobEnd?(): void;
 }
 
 /**
@@ -309,7 +313,11 @@ export interface ReviewEventsProps {
 export function ReviewEventsScreen({
   discoverAction = "events.rules_discover",
   applyAction = "events.rules_apply",
+  onJobStart,
+  onJobEnd,
 }: ReviewEventsProps = {}) {
+  const jobHooks = useRef({ onJobStart, onJobEnd });
+  jobHooks.current = { onJobStart, onJobEnd };
   const [queue, setQueue] = useState<Queue | null>(null);
   const [loadError, setLoadError] = useState<string>("");
   // Decided and skipped proposals stay hidden for this page session, also
@@ -353,6 +361,7 @@ export function ReviewEventsScreen({
 
   /** startJob runs a long-running action and reports its end to set. */
   const startJob = async (name: string, set: (s: JobState) => void) => {
+    jobHooks.current.onJobStart?.();
     try {
       const out = await runAction(name, {}, false);
       let result: Result | undefined;
@@ -372,6 +381,7 @@ export function ReviewEventsScreen({
       set({ kind: "error", text: errorText(e) });
     } finally {
       load();
+      jobHooks.current.onJobEnd?.();
     }
   };
 

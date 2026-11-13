@@ -223,21 +223,27 @@ run them, without the panel ever endangering the running bot.
   status, result and error, the review session id and the start options)
   lives in the admin state under one key, so it survives a sync and a panel
   restart: reopening continues at the saved step without running earlier
-  steps again, and a step left `running` by an earlier process can be run
-  again. One cycle at a time; "Start cycle" takes the sample size and the
+  steps again; a step job still running is followed, and a step left
+  `running` by an earlier process can be run again (or, for event rules,
+  discovered or applied again) or skipped, so the wizard never stays
+  blocked. One cycle at a time; "Start cycle" takes the sample size and the
   entity verification depth (local, full, none); "Abandon cycle", after the
   typed confirmation, cancels the cycle and its review session. `cycle.next`
   refuses a step that is not finished; `skip` works on every step but the
   article review and the summary, and records why. The screen shows a rail
   of the nine steps with their status, the current step's panel, and Next,
-  Skip (skippable steps only) and Retry (failed job steps).
+  Skip (skippable steps only; not while a training winner waits for its
+  decision) and Retry (failed job steps).
   **Job steps** (`cycle.sync`, `cycle.telegram_import`, `cycle.roster_sync`,
   the entity discovery, the event rule discover and apply, `cycle.train`)
   run as long-running jobs whose log the panel follows; a failure marks the
   step failed with its error shown as is, and it can be retried. The sync is
-  the `SwapsDB` action of the gate above: it is refused while anything else
-  runs and every other action fails fast while it runs, and after it the
-  wizard reloads its state from the new database. The host's
+  the `SwapsDB` action of the gate described under "Replacing the
+  operational DB" below: it is refused while anything else runs and every
+  other action fails fast while it runs. The wizard state stays in the
+  admin store; after the sync the wizard reads it again, and the later
+  steps read their articles, proposals and labels from the new operational
+  DB. The host's
   `Options.Remote` provides the remote host, its key, the sync script and
   the Telegram client; never a panel field. With no remote or Telegram
   hooks the step says "Not available on this host" and only Skip moves on.

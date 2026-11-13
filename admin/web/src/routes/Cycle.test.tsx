@@ -31,10 +31,28 @@ vi.mock("./ReviewEntities", () => ({
   ReviewEntitiesScreen: ({ sessionId }: { sessionId?: string }) => <p>stub entity review for {sessionId}</p>,
 }));
 vi.mock("./ReviewEvents", () => ({
-  ReviewEventsScreen: ({ discoverAction, applyAction }: { discoverAction?: string; applyAction?: string }) => (
-    <p>
-      stub event review with {discoverAction} and {applyAction}
-    </p>
+  ReviewEventsScreen: ({
+    discoverAction,
+    applyAction,
+    onJobStart,
+    onJobEnd,
+  }: {
+    discoverAction?: string;
+    applyAction?: string;
+    onJobStart?(): void;
+    onJobEnd?(): void;
+  }) => (
+    <div>
+      <p>
+        stub event review with {discoverAction} and {applyAction}
+      </p>
+      <button type="button" onClick={() => onJobStart?.()}>
+        stub job start
+      </button>
+      <button type="button" onClick={() => onJobEnd?.()}>
+        stub job end
+      </button>
+    </div>
   ),
 }));
 
@@ -370,5 +388,75 @@ describe("Cycle", () => {
     await waitFor(() => expect(run).toHaveBeenCalledWith("cycle.next", { skip: false }, false));
     expect(await screen.findByText(/data\/audit\/cycle.json/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Start cycle" })).toBeTruthy();
+  });
+
+  it("offers Retry for a step left running by an earlier panel process, with Abandon reachable", async () => {
+    await open(state("roster_sync", { steps: { roster_sync: { status: "running" } } }), {
+      "cycle.roster_sync": () => ({ job: job("j6", "cycle.roster_sync") }),
+    });
+    expect(await screen.findByText(/left running by an earlier panel process/)).toBeTruthy();
+    expect(button("Next").disabled).toBe(true);
+    expect(button("Skip step").disabled).toBe(false);
+    expect(button("Abandon cycle").disabled).toBe(false);
+    events.mockImplementation(() => () => {});
+    fireEvent.click(button("Retry"));
+    await waitFor(() => expect(run).toHaveBeenCalledWith("cycle.roster_sync", {}, false));
+  });
+
+  it("is not stuck when reopened at event rules left running with no job", async () => {
+    await open(state("event_rules", { steps: { event_rules: { status: "running" } } }));
+    expect(await screen.findByText(/left running by an earlier panel process/)).toBeTruthy();
+    expect(button("Skip step").disabled).toBe(false);
+    expect(button("Abandon cycle").disabled).toBe(false);
+    expect(button("Finish event rules review").disabled).toBe(false);
+  });
+
+  it("follows an event rules job still running after a reopen and reloads the state when it ends", async () => {
+    jobs.mockResolvedValue([job("j7", "cycle.event_rules_apply", "running")]);
+    let end: (j: Job) => void = () => {};
+    events.mockImplementation((_id, _line, onEnd) => {
+      end = onEnd;
+      return () => {};
+    });
+    const s = await open(state("event_rules", { steps: { event_rules: { status: "running" } } }));
+    await waitFor(() => expect(events).toHaveBeenCalledWith("j7", expect.any(Function), expect.any(Function), expect.any(Function)));
+    expect(button("Abandon cycle").disabled).toBe(true);
+    expect(button("Finish event rules review").disabled).toBe(true);
+    s.set(state("event_rules", { steps: { event_rules: { status: "pending", result: { applied: 2 } } } }));
+    end(job("j7", "cycle.event_rules_apply", "succeeded", { result: { render: "object", summary: "PASS: 2 rule(s) applied" } }));
+    await waitFor(() => expect(calls("cycle.state").length).toBe(2));
+    await waitFor(() => expect(button("Finish event rules review").disabled).toBe(false));
+  });
+
+  it("disables Finish while the embedded event rule job runs and reloads the state when it ends", async () => {
+    await open(state("event_rules"));
+    fireEvent.click(await screen.findByRole("button", { name: "stub job start" }));
+    await waitFor(() => expect(button("Finish event rules review").disabled).toBe(true));
+    expect(button("Next").disabled).toBe(true);
+    fireEvent.click(button("stub job end"));
+    await waitFor(() => expect(calls("cycle.state").length).toBe(2));
+    expect(button("Finish event rules review").disabled).toBe(false);
+  });
+
+  it("shows a failed event rules apply", async () => {
+    await open(state("event_rules", { steps: { event_rules: { status: "failed", error: "event rules: clustering gate dataset not found" } } }));
+    expect(await within(panel()).findByText("event rules: clustering gate dataset not found")).toBeTruthy();
+    expect(button("Finish event rules review")).toBeTruthy();
+  });
+
+  it("hides Skip while the training winner waits and blocks a second decision while one is in flight", async () => {
+    const winner = { version: "v7", algorithm: "logreg", precision: 0.91, recall: 0.8, f1: 0.85, prauc: 0.9, dir: "d" };
+    let answer: (o: RunOutcome) => void = () => {};
+    await open(state("training", { steps: { training: { status: "pending", result: { candidates: 1, winner, promotion: "" } } } }), {
+      "cycle.promote": () => new Promise<RunOutcome>((r) => (answer = r)),
+    });
+    await screen.findByRole("button", { name: "Promote" });
+    expect(screen.queryByRole("button", { name: "Skip step" })).toBeNull();
+    fireEvent.click(button("Don't promote"));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Don't promote" }));
+    await waitFor(() => expect(calls("cycle.promote")).toHaveLength(1));
+    expect(button("Promote").disabled).toBe(true);
+    expect(button("Don't promote").disabled).toBe(true);
+    answer(obj({}));
   });
 });

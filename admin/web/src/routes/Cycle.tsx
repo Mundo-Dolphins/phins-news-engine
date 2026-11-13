@@ -90,13 +90,17 @@ const STEPS: Record<string, StepInfo> = {
 const labelOf = (step: string) => STEPS[step]?.label ?? step;
 const finished = (s?: StepState) => s?.status === "done" || s?.status === "skipped";
 
-/** Job steps whose running job the wizard follows after the page is reopened. */
-const FOLLOWED: Record<string, string> = {
-  sync: "cycle.sync",
-  telegram_import: "cycle.telegram_import",
-  roster_sync: "cycle.roster_sync",
-  entities: "cycle.entities_discover",
-  training: "cycle.train",
+/**
+ * The steps that can be left `running`, with the jobs that set it: the
+ * wizard follows such a job after the page is reopened.
+ */
+const FOLLOWED: Record<string, string[]> = {
+  sync: ["cycle.sync"],
+  telegram_import: ["cycle.telegram_import"],
+  roster_sync: ["cycle.roster_sync"],
+  entities: ["cycle.entities_discover"],
+  event_rules: ["cycle.event_rules_discover", "cycle.event_rules_apply"],
+  training: ["cycle.train"],
 };
 
 /** Notice is a message above the step panel. */
@@ -137,6 +141,8 @@ function CycleScreen() {
   const [keyedNotice, setKeyedNotice] = useState<(Notice & { key: string }) | null>(null);
   const [keyedJob, setKeyedJob] = useState<(StepJob & { key: string }) | null>(null);
   const [staleKey, setStaleKey] = useState("");
+  // Set while a job started by an embedded review screen runs.
+  const [embeddedKey, setEmbeddedKey] = useState("");
   const [moving, setMoving] = useState(false);
   const [abandoning, setAbandoning] = useState(false);
   const [report, setReport] = useState("");
@@ -176,6 +182,7 @@ function CycleScreen() {
   const notice = keyedNotice && keyedNotice.key === stepKey ? keyedNotice : null;
   const job = keyedJob && keyedJob.key === stepKey ? keyedJob : null;
   const stale = staleKey !== "" && staleKey === stepKey;
+  const embeddedRunning = embeddedKey !== "" && embeddedKey === stepKey;
   const setNotice = (n: Notice | null) => setKeyedNotice(n && { ...n, key: keyRef.current });
 
   /** follow shows a step job's log until it ends, then reloads the state. */
@@ -191,7 +198,7 @@ function CycleScreen() {
     } catch (e) {
       if (alive.current) setNotice({ kind: "error", text: "Lost track of job " + j.id + ": " + errorText(e) });
     }
-    // The step's outcome is in the state; after a sync, so is the new database.
+    // The step's outcome is in the wizard state (admin store), read again.
     await load();
   };
 
@@ -214,13 +221,13 @@ function CycleScreen() {
   // panel process: offer to run it again.
   const status = st?.status;
   useEffect(() => {
-    const name = FOLLOWED[step];
-    if (status !== "running" || !name || job) return;
+    const names = FOLLOWED[step];
+    if (status !== "running" || !names || job || embeddedRunning) return;
     let cancelled = false;
     listJobs()
       .then((all) => {
         if (cancelled) return;
-        const j = all.find((x) => x.action === name && activeJob(x.status));
+        const j = all.find((x) => names.includes(x.action) && activeJob(x.status));
         if (j) follow(j);
         else setStaleKey(keyRef.current);
       })
@@ -228,10 +235,24 @@ function CycleScreen() {
     return () => {
       cancelled = true;
     };
-  }, [cycle?.cycle_id, step, status]);
+  }, [cycle?.cycle_id, step, status, embeddedRunning]);
 
   const jobRunning = job !== null && activeJob(job.status);
-  const busy = jobRunning || (status === "running" && !stale) || moving;
+  // A job is known to run, or the wizard is still checking for one.
+  const working = jobRunning || embeddedRunning || moving;
+  const busy = working || (status === "running" && !stale && FOLLOWED[step] !== undefined);
+  // A training winner waiting for its decision is declined through its own confirmation, not skipped.
+  const winnerWaiting = step === "training" && !!st?.result?.winner && st.result.promotion === "";
+
+  const setEmbeddedJob = (running: boolean) => {
+    if (running) {
+      setStaleKey("");
+      setEmbeddedKey(keyRef.current);
+      return;
+    }
+    setEmbeddedKey("");
+    load();
+  };
 
   const next = async (skip: boolean) => {
     if (moving) return;
@@ -322,19 +343,20 @@ function CycleScreen() {
                 runStep={runStep}
                 reload={load}
                 setNotice={setNotice}
+                setEmbeddedJob={setEmbeddedJob}
               />
             </section>
             <div class="rules-zone-bar cycle-actions">
               <button type="button" class="btn primary" disabled={!finished(st) || busy} onClick={() => next(false)}>
                 {step === "summary" ? "Finish cycle" : "Next"}
               </button>
-              {view.skippable.includes(step) && !finished(st) && (
+              {view.skippable.includes(step) && !finished(st) && !winnerWaiting && (
                 <button type="button" class="btn" disabled={busy} onClick={() => next(true)}>
                   Skip step
                 </button>
               )}
               <span class="spacer" />
-              <button type="button" class="btn danger" disabled={busy} onClick={() => setAbandoning(true)}>
+              <button type="button" class="btn danger" disabled={working} onClick={() => setAbandoning(true)}>
                 Abandon cycle
               </button>
             </div>
@@ -440,6 +462,8 @@ interface PanelProps {
   runStep(name: string): Promise<void>;
   reload(): Promise<void>;
   setNotice(n: Notice | null): void;
+  /** setEmbeddedJob reports a job started by an embedded review screen starting or ending. */
+  setEmbeddedJob(running: boolean): void;
 }
 
 function StepPanel(p: PanelProps) {
@@ -495,7 +519,10 @@ function JobStep({ view, step, st, job, stale, busy, runStep }: PanelProps) {
       <JobBox job={job} stepError={st?.error} />
       {finished(st) && <StepResult st={st} />}
       {step === "sync" && st?.status === "done" && (
-        <p class="notice notice-info">The local database was replaced by the synced copy: everything the panel shows now comes from it.</p>
+        <p class="notice notice-info">
+          The local operational database was replaced by the synced copy: the articles, proposals and labels the next
+          steps show come from it. The cycle's own progress is kept in the admin state.
+        </p>
       )}
     </>
   );
@@ -670,7 +697,7 @@ function EntitiesStep(p: PanelProps) {
 }
 
 function EventRulesStep(p: PanelProps) {
-  const { view, st } = p;
+  const { view, st, job, stale, busy } = p;
   const [finishing, setFinishing] = useState(false);
   if (finished(st)) return <StepResult st={st} />;
   const reason = view.disabled.event_rules;
@@ -682,13 +709,24 @@ function EventRulesStep(p: PanelProps) {
           {st.error}
         </p>
       )}
-      <ReviewEventsScreen discoverAction="cycle.event_rules_discover" applyAction="cycle.event_rules_apply" />
+      {stale && (
+        <p class="notice notice-error" role="alert">
+          The step was left running by an earlier panel process: run Discover or Apply again below, or finish the step.
+        </p>
+      )}
+      <JobBox job={job} stepError={st?.error} />
+      <ReviewEventsScreen
+        discoverAction="cycle.event_rules_discover"
+        applyAction="cycle.event_rules_apply"
+        onJobStart={() => p.setEmbeddedJob(true)}
+        onJobEnd={() => p.setEmbeddedJob(false)}
+      />
       <div class="rules-zone-bar">
         <span class="spacer" />
         <button
           type="button"
           class="btn primary"
-          disabled={finishing}
+          disabled={finishing || busy}
           onClick={async () => {
             setFinishing(true);
             await finishStep(p, "cycle.event_rules_finish");
@@ -764,12 +802,14 @@ function TrainingStep(p: PanelProps) {
   const winner = (r?.winner as Winner | null | undefined) ?? null;
   const waiting = winner !== null && r?.promotion === "";
   const [asking, setAsking] = useState<"promote" | "decline" | null>(null);
+  const [deciding, setDeciding] = useState(false);
   const sent = useRef(false);
 
   const decide = async (promote: boolean) => {
     setAsking(null);
     if (sent.current) return;
     sent.current = true;
+    setDeciding(true);
     p.setNotice(null);
     try {
       const out = await call("cycle.promote", { promote }, true);
@@ -779,6 +819,7 @@ function TrainingStep(p: PanelProps) {
       sent.current = false;
     }
     await p.reload();
+    setDeciding(false);
   };
 
   return (
@@ -812,10 +853,10 @@ function TrainingStep(p: PanelProps) {
       )}
       {waiting && st?.status !== "done" && (
         <div class="rules-zone-bar">
-          <button type="button" class="btn danger" onClick={() => setAsking("promote")}>
+          <button type="button" class="btn danger" disabled={deciding} onClick={() => setAsking("promote")}>
             Promote
           </button>
-          <button type="button" class="btn" onClick={() => setAsking("decline")}>
+          <button type="button" class="btn" disabled={deciding} onClick={() => setAsking("decline")}>
             Don't promote
           </button>
         </div>

@@ -495,4 +495,23 @@ describe("ReviewEventsScreen in the editorial cycle", () => {
     expect(run).toHaveBeenCalledWith("cycle.event_rules_discover", {}, false);
     expect(run).toHaveBeenCalledWith("cycle.event_rules_apply", {}, false);
   });
+
+  it("reports the start and end of its jobs", async () => {
+    const { ReviewEventsScreen } = await import("./ReviewEvents");
+    serve({}, { "events.rules_discover": () => ({ job: job("c3", "events.rules_discover") }) });
+    const started = vi.fn();
+    const ended = vi.fn();
+    render(<ReviewEventsScreen onJobStart={started} onJobEnd={ended} />);
+    await waitFor(() => expect(calls("events.rules_queue").length).toBe(1));
+    let end: (j: Job) => void = () => {};
+    events.mockImplementation((_id, _line, onEnd) => {
+      end = onEnd;
+      return () => {};
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Discover phrases" }));
+    await waitFor(() => expect(started).toHaveBeenCalledTimes(1));
+    expect(ended).not.toHaveBeenCalled();
+    end(job("c3", "events.rules_discover", "succeeded", { render: "object", summary: "done", object: {} }));
+    await waitFor(() => expect(ended).toHaveBeenCalledTimes(1));
+  });
 });
