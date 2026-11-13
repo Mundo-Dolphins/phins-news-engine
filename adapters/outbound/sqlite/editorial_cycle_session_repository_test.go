@@ -235,3 +235,22 @@ func TestEditorialCycleSessionRepository_GetLatestCompleted_NoneCompleted(t *tes
 		t.Errorf("GetLatestCompleted() error = %v, want wrapped sql.ErrNoRows", err)
 	}
 }
+
+func TestEditorialCycleSessionRepository_GetByID(t *testing.T) {
+	db := newTestDB(t)
+	repo := sqliteadapter.NewEditorialCycleSessionRepository(db)
+	ctx := context.Background()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, id := range []string{"sess-a", "sess-b"} {
+		if err := repo.Create(ctx, out.EditorialCycleSession{ID: id, StartedAt: now, UpdatedAt: now, Status: "completed", CurrentStep: "review"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := repo.Get(ctx, "sess-a")
+	if err != nil || got.ID != "sess-a" || got.Status != "completed" {
+		t.Fatalf("Get() = %+v, %v; want sess-a completed", got, err)
+	}
+	if _, err := repo.Get(ctx, "missing"); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("Get(missing) error = %v, want wrapped sql.ErrNoRows", err)
+	}
+}

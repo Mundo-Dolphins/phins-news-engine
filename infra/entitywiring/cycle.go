@@ -37,6 +37,20 @@ func ValidateCycleVerification(v string) error {
 	return fmt.Errorf("--entities-verification must be local, full or none (got %q)", v)
 }
 
+// CycleStepDisabledReason returns why the editorial cycle's entity step
+// cannot run with cfg, or "" when it can.
+func CycleStepDisabledReason(cfg *config.Config) string {
+	switch {
+	case !cfg.EntityDiscovery.Enabled:
+		return "entity_discovery.enabled is false"
+	case cfg.Clustering.EntityCatalog.ManualPath == "" || cfg.Clustering.EntityCatalog.GeneratedPath == "":
+		return "clustering.entity_catalog paths are not configured"
+	case cfg.Dictionary.Path == "":
+		return "dictionary.path is empty"
+	}
+	return ""
+}
+
 // DiscoveryLLMFactory builds the discovery LLM from the effective discovery
 // config; log receives the client's own log lines.
 type DiscoveryLLMFactory func(dc config.EntityDiscoveryConfig, maxTokens int, disableThinking bool, log out.Logger) out.EntityDiscoveryLLM

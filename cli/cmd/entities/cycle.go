@@ -35,15 +35,7 @@ var NewCycleLLM = func(cmd *cobra.Command, cfg config.EntityDiscoveryConfig, max
 // CycleStepDisabledReason returns why the entity step cannot run with cfg, or ""
 // when it can.
 func CycleStepDisabledReason(cfg *config.Config) string {
-	switch {
-	case !cfg.EntityDiscovery.Enabled:
-		return "entity_discovery.enabled is false"
-	case cfg.Clustering.EntityCatalog.ManualPath == "" || cfg.Clustering.EntityCatalog.GeneratedPath == "":
-		return "clustering.entity_catalog paths are not configured"
-	case cfg.Dictionary.Path == "":
-		return "dictionary.path is empty"
-	}
-	return ""
+	return entitywiring.CycleStepDisabledReason(cfg)
 }
 
 // RunCycleStep runs the entity step of `editorial cycle` for one session.

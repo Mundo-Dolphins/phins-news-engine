@@ -589,6 +589,31 @@ func TestCatalogEventRuleActions(t *testing.T) {
 	}
 }
 
+// TestCatalogCycleActions pins the editorial cycle wizard's actions: all
+// local only.
+func TestCatalogCycleActions(t *testing.T) {
+	groups := admin.RegistryGroupsFor(action.ModeLocal)
+	var got []string
+	for name, g := range groups {
+		if g == "cycle" {
+			got = append(got, name)
+		}
+	}
+	slices.Sort(got)
+	want := []string{
+		"cycle.abandon", "cycle.next", "cycle.promote", "cycle.roster_sync", "cycle.start",
+		"cycle.state", "cycle.summary", "cycle.sync", "cycle.telegram_import", "cycle.train",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("local cycle actions = %v, want %v", got, want)
+	}
+	for name, g := range admin.RegistryGroupsFor(action.ModeProduction) {
+		if g == "cycle" {
+			t.Errorf("production mode offers %s", name)
+		}
+	}
+}
+
 // TestCatalogStep2Batch2 pins which step 2 batch 2 actions each mode offers.
 func TestCatalogStep2Batch2(t *testing.T) {
 	both := []string{

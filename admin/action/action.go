@@ -77,11 +77,19 @@ type StateStore interface {
 type Remote struct {
 	// Host is the remote host address; KeyPath the SSH key used to reach it.
 	Host, KeyPath string
+	// SyncScriptPath is the remote database sync script handed to NewSync;
+	// empty means DefaultSyncScriptPath. A host that changes the CLI's
+	// script sets the same path here.
+	SyncScriptPath string
 	// NewSync builds the remote sync for the given script and key.
 	NewSync func(scriptPath, keyPath string) out.RemoteSync
 	// NewTelegramClient builds the Telegram channel history client.
 	NewTelegramClient func(out.TelegramImportClientConfig) (out.TelegramChannelImporter, error)
 }
+
+// DefaultSyncScriptPath is the remote database sync script the editorial
+// cycle runs when the host sets no Remote.SyncScriptPath (the CLI's default).
+const DefaultSyncScriptPath = "scripts/sync-remote-sqlite.sh"
 
 // Action is one admin operation.
 type Action struct {

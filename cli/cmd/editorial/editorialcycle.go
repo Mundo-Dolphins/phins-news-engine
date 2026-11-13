@@ -684,12 +684,7 @@ func newCycleCommand() *cobra.Command {
 				}
 			}
 			if !skipTrain {
-				trustedSourceIDs := make(map[string]bool, len(cfg.Classification.TrustedSourceIDs))
-				for _, id := range cfg.Classification.TrustedSourceIDs {
-					trustedSourceIDs[id] = true
-				}
-				gateCfg := trainwiring.GateConfig(cfg)
-				trainCfg, err := trainwiring.TrainConfig(cfg, fmt.Sprintf("fs-%d", time.Now().UTC().UnixNano()))
+				trainingCfg, err := trainwiring.CycleTrainingConfig(cfg, excludedSourceIDs, fmt.Sprintf("fs-%d", time.Now().UTC().UnixNano()))
 				if err != nil {
 					err = fmt.Errorf("editorial cycle: training config: %w", err)
 					report.Error = err.Error()
@@ -697,15 +692,7 @@ func newCycleCommand() *cobra.Command {
 				}
 				trainResult, err := editorialcycle.RunTraining(cmd.Context(),
 					editorialcycle.TrainingDeps{Labels: labels, Registry: sqliteadapter.NewModelRegistryRepository(db)},
-					editorialcycle.TrainingConfig{
-						TrustedSourceIDs:  trustedSourceIDs,
-						ExcludedSourceIDs: excludedSourceIDs,
-						DatasetPath:       filepath.Join(filepath.Dir(cfg.SQLite.Path), "editorial_cycle_dataset.yml"),
-						OutDir:            filepath.Join(filepath.Dir(cfg.Model.Path), "candidates"),
-						TrainCfg:          trainCfg,
-						GateCfg:           gateCfg,
-						PromotedModelPath: cfg.Model.Path,
-					})
+					trainingCfg)
 				if err != nil {
 					err = fmt.Errorf("editorial cycle: training: %w", err)
 					report.Error = err.Error()
