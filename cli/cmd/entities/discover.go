@@ -123,24 +123,3 @@ func newDiscoverCommand() *cobra.Command {
 	addVerificationFlags(cmd, &vflags)
 	return cmd
 }
-
-// discoveryLogger is a minimal appout.Logger adapter over the command's
-// stderr writer: the entity commands have no existing logger dependency,
-// and the verification wiring requires one per component.
-type discoveryLogger struct {
-	out       interface{ Write([]byte) (int, error) }
-	component string
-}
-
-func (l discoveryLogger) Debug(string, ...any) {}
-func (l discoveryLogger) Info(msg string, kv ...any) {
-	fmt.Fprintf(l.out, "[%s] %s %v\n", l.component, msg, kv)
-}
-
-func (l discoveryLogger) Warn(msg string, kv ...any) {
-	fmt.Fprintf(l.out, "[%s] WARN %s %v\n", l.component, msg, kv)
-}
-
-func (l discoveryLogger) Error(msg string, err error, kv ...any) {
-	fmt.Fprintf(l.out, "[%s] ERROR %s: %v %v\n", l.component, msg, err, kv)
-}

@@ -7,6 +7,8 @@ import (
 
 	"github.com/Mundo-Dolphins/phins-news-engine/app/activelearning"
 	"github.com/Mundo-Dolphins/phins-news-engine/app/editorialcycle"
+	"github.com/Mundo-Dolphins/phins-news-engine/domain/article"
+	"github.com/Mundo-Dolphins/phins-news-engine/domain/source"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
 )
 
@@ -30,6 +32,12 @@ func TestAbandonCancelsSession(t *testing.T) {
 func TestSelectFreshMatchesCLI(t *testing.T) {
 	env := newTestEnv(t, "a1", "a2", "a3", "a4", "a5")
 	env.deps.ExcludedSourceIDs = map[string]bool{"rss:excluded": true}
+	// a0 sorts first in the pool, so only the exclusion keeps it out.
+	excludedSource, err := source.ParseID("rss:excluded")
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.articles.byID["a0"] = article.Article{ID: "a0", Title: "article a0", Source: source.Source{ID: excludedSource}}
 	cfg := &config.Config{}
 	cfg.EditorialCycle.SampleSize = 3
 	cfg.EditorialCycle.PoolLimit = 4
@@ -57,6 +65,11 @@ func TestSelectFreshMatchesCLI(t *testing.T) {
 		}
 		if !reflect.DeepEqual(got, want) || len(got) != resolved {
 			t.Fatalf("SelectFresh(%d) = %+v, want %+v", flag, got, want)
+		}
+		for _, c := range got {
+			if c.Article.ID == "a0" {
+				t.Fatalf("SelectFresh(%d) offered a0 from an excluded source", flag)
+			}
 		}
 	}
 }

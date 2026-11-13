@@ -82,7 +82,7 @@ func CycleDeps(ctx context.Context, cfg *config.Config, db *sql.DB, sessionID, v
 			return NewDiscoveryLLM(dc, maxTokens, disableThinking, log)
 		}
 	}
-	logs := Loggers(func(c string) out.Logger { return writerLogger{out: logOut, component: c} })
+	logs := Loggers(func(c string) out.Logger { return WriterLogger{Out: logOut, Component: c} })
 
 	discoveryCfg, maxTokens, disableThinking, err := DiscoveryConfig(cfg, LLMOverrides{})
 	if err != nil {
@@ -181,23 +181,29 @@ func sessionArticleIDs(decisions []out.ReviewDecision) []string {
 	return ids
 }
 
-// writerLogger is an out.Logger writing one tagged line per message to a
-// writer, in the entity commands' "[component] ..." format.
-type writerLogger struct {
-	out       io.Writer
-	component string
+// WriterLogger is an out.Logger writing one tagged line per message to Out,
+// in the entity commands' "[component] ..." format; Debug is dropped. The
+// entity commands have no logger dependency, and the verification wiring
+// requires one per component.
+type WriterLogger struct {
+	Out       io.Writer
+	Component string
 }
 
-func (l writerLogger) Debug(string, ...any) {}
+// Debug discards the message.
+func (l WriterLogger) Debug(string, ...any) {}
 
-func (l writerLogger) Info(msg string, kv ...any) {
-	fmt.Fprintf(l.out, "[%s] %s %v\n", l.component, msg, kv)
+// Info writes "[component] msg kv".
+func (l WriterLogger) Info(msg string, kv ...any) {
+	fmt.Fprintf(l.Out, "[%s] %s %v\n", l.Component, msg, kv)
 }
 
-func (l writerLogger) Warn(msg string, kv ...any) {
-	fmt.Fprintf(l.out, "[%s] WARN %s %v\n", l.component, msg, kv)
+// Warn writes "[component] WARN msg kv".
+func (l WriterLogger) Warn(msg string, kv ...any) {
+	fmt.Fprintf(l.Out, "[%s] WARN %s %v\n", l.Component, msg, kv)
 }
 
-func (l writerLogger) Error(msg string, err error, kv ...any) {
-	fmt.Fprintf(l.out, "[%s] ERROR %s: %v %v\n", l.component, msg, err, kv)
+// Error writes "[component] ERROR msg: err kv".
+func (l WriterLogger) Error(msg string, err error, kv ...any) {
+	fmt.Fprintf(l.Out, "[%s] ERROR %s: %v %v\n", l.Component, msg, err, kv)
 }

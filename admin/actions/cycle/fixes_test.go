@@ -287,3 +287,80 @@ func TestReviewOpenLogsSourcePolicyExclusions(t *testing.T) {
 		t.Errorf("log = %s", f.log.String())
 	}
 }
+
+type reviewOpenReplaced struct {
+	SessionID         string `json:"session_id"`
+	ReplacedSessionID string `json:"replaced_session_id"`
+}
+
+// F1: when the session's frozen set is gone (emptied between two opens), the
+// replacement session is reported instead of silently starting afresh.
+func TestReviewOpenReportsReplacedSession(t *testing.T) {
+	f := newFixture(t)
+	seedReview(t, f.db)
+	opened := f.openReview()
+	f.mustRun("cycle.review_pause", `{}`)
+	later := now.Add(time.Minute)
+	f.clock = func() time.Time { return later }
+	if _, err := f.db.Exec(`DELETE FROM editorial_cycle_session_candidates WHERE session_id = ?`, opened.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	reopened := decode[reviewOpenReplaced](t, f.mustRun("cycle.review_open", `{}`))
+	if reopened.ReplacedSessionID != opened.SessionID || reopened.SessionID == opened.SessionID {
+		t.Fatalf("reopened = %+v, want a new session replacing %s", reopened, opened.SessionID)
+	}
+	if !strings.Contains(f.log.String(), "session "+opened.SessionID+" lost its frozen candidate set") {
+		t.Errorf("log = %s", f.log.String())
+	}
+	if got := sessionStatus(t, f.db, opened.SessionID); got != "cancelled" {
+		t.Errorf("replaced session status = %s, want cancelled", got)
+	}
+	// A plain resume reports nothing replaced.
+	f.mustRun("cycle.review_pause", `{}`)
+	again := decode[reviewOpenReplaced](t, f.mustRun("cycle.review_open", `{}`))
+	if again.SessionID != reopened.SessionID || again.ReplacedSessionID != "" {
+		t.Errorf("again = %+v, want the same session, nothing replaced", again)
+	}
+}
+
+// F1: the same report when the replaced session is another resumable one (a
+// paused CLI session) rather than the cycle's own.
+func TestReviewOpenReportsReplacedLatestSession(t *testing.T) {
+	f := newFixture(t)
+	seedReview(t, f.db)
+	sessions := sqliteadapter.NewEditorialCycleSessionRepository(f.db)
+	if err := sessions.Create(context.Background(), out.EditorialCycleSession{
+		ID: "cli-paused", StartedAt: now, UpdatedAt: now, Status: "paused",
+		CurrentStep: "review", FlagsJSON: `{"sample_size":1}`, TotalCandidates: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.mustRun("cycle.start", `{"sample_size":3}`)
+	f.atStep("article_review")
+	opened := decode[reviewOpenReplaced](t, f.mustRun("cycle.review_open", `{}`))
+	if opened.ReplacedSessionID != "cli-paused" || opened.SessionID == "cli-paused" {
+		t.Fatalf("opened = %+v, want a new session replacing cli-paused", opened)
+	}
+	if got := sessionStatus(t, f.db, "cli-paused"); got != "cancelled" {
+		t.Errorf("cli-paused status = %s, want cancelled", got)
+	}
+}
+
+// F5: a Next sent for a step the cycle already left (a double click) is
+// refused instead of skipping the following step.
+func TestNextWithStepRefusesADoubleNext(t *testing.T) {
+	f := newFixture(t)
+	f.mustRun("cycle.start", `{}`)
+	if v := decode[view](t, f.mustRun("cycle.next", `{"skip":true,"step":"sync"}`)); v.Cycle.Step != "telegram_import" {
+		t.Fatalf("step = %s, want telegram_import", v.Cycle.Step)
+	}
+	_, err := f.run("cycle.next", `{"skip":true,"step":"sync"}`)
+	wantConflict(t, err, "the cycle is at step telegram_import")
+	if v := f.state(); v.Cycle.Step != "telegram_import" || v.Cycle.Steps["telegram_import"].Status == "skipped" {
+		t.Errorf("after a double next: step %s, telegram_import %+v", v.Cycle.Step, v.Cycle.Steps["telegram_import"])
+	}
+	// Without step, Next acts on the current step as before.
+	if v := decode[view](t, f.mustRun("cycle.next", `{"skip":true}`)); v.Cycle.Step != "roster_sync" {
+		t.Errorf("step = %s, want roster_sync", v.Cycle.Step)
+	}
+}

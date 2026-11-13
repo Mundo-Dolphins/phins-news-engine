@@ -25,12 +25,10 @@ func runEntitiesDiscover(ctx context.Context, env action.Env, _ any) (_ action.R
 		return action.Result{}, errNoConfig
 	}
 	cfg := env.Config
-	var prior entitiesResult
-	run, err := beginStep(ctx, env, StepEntities, func(s *StepState) error {
+	run, err := beginStep(ctx, env, StepEntities, func(*StepState) error {
 		if reason := entitywiring.CycleStepDisabledReason(cfg); reason != "" {
 			return action.Conflict(fmt.Errorf("entities: step disabled (%s)", reason))
 		}
-		decodeInto(s, &prior)
 		return nil
 	})
 	if err != nil {

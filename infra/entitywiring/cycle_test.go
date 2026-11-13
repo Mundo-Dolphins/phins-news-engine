@@ -2,7 +2,9 @@ package entitywiring
 
 import (
 	"context"
+	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -127,5 +129,20 @@ func TestCycleDeps_WiresTheSessionSample(t *testing.T) {
 	}
 	if deps.LLM != llm || deps.Verifier != nil || deps.Apply == nil || deps.Regenerate == nil || deps.Proposals == nil {
 		t.Fatalf("deps = %+v, want the injected LLM, no verifier (mode none), and approval/regeneration wired", deps)
+	}
+}
+
+// WriterLogger keeps the entity commands' "[component] ..." line format,
+// which the CLI prints and the panel's step log shows.
+func TestWriterLoggerFormat(t *testing.T) {
+	var b strings.Builder
+	var l out.Logger = WriterLogger{Out: &b, Component: "llm"}
+	l.Debug("hidden")
+	l.Info("started", "n", 2)
+	l.Warn("slow")
+	l.Error("failed", errors.New("boom"), "id", "a1")
+	want := "[llm] started [n 2]\n[llm] WARN slow []\n[llm] ERROR failed: boom [id a1]\n"
+	if b.String() != want {
+		t.Errorf("log = %q, want %q", b.String(), want)
 	}
 }

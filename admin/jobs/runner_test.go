@@ -588,3 +588,56 @@ func TestSwapDBIgnoredOutsideItsSwap(t *testing.T) {
 		t.Error("stale SwapDB took effect during a later swap")
 	}
 }
+
+// An action that never touches the operational DB runs during a swap, with
+// no DB handed to it, and does not block a swap either.
+func TestNoOperationalDBActionBypassesTheGate(t *testing.T) {
+	r, _ := newRunner(t)
+	r.UseDB(openDB(t, "op.db"))
+	release, started := make(chan struct{}), make(chan struct{})
+	swap := swapAct(func(context.Context, action.Env, any) (action.Result, error) {
+		close(started)
+		<-release
+		return action.Result{}, nil
+	})
+	if _, err := r.Start(swap, env(), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	ran := false
+	state := act(action.KindRead, func(_ context.Context, e action.Env, _ any) (action.Result, error) {
+		ran = true
+		if e.DB != nil || e.SwapDB != nil {
+			t.Error("NoOperationalDB action received a DB or SwapDB")
+		}
+		return action.Result{}, nil
+	})
+	state.Name, state.NoOperationalDB = "test.state", true
+	built := env()
+	built.DB = r.DB()
+	_, err := r.RunSync(context.Background(), state, built, nil, nil)
+	close(release)
+	r.Wait()
+	if err != nil || !ran {
+		t.Fatalf("during swap: err=%v ran=%v", err, ran)
+	}
+
+	// Running, it does not hold the gate: a swap may start meanwhile.
+	hold, holding := make(chan struct{}), make(chan struct{})
+	state.Run = func(context.Context, action.Env, any) (action.Result, error) {
+		close(holding)
+		<-hold
+		return action.Result{}, nil
+	}
+	if _, err := r.Start(state, env(), nil, nil); err != nil {
+		close(hold)
+		t.Fatal(err)
+	}
+	<-holding
+	quick := swapAct(func(context.Context, action.Env, any) (action.Result, error) { return action.Result{}, nil })
+	if _, err := r.RunSync(context.Background(), quick, env(), nil, nil); err != nil {
+		t.Errorf("swap while a NoOperationalDB job runs: %v", err)
+	}
+	close(hold)
+	r.Wait()
+}

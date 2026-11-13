@@ -259,7 +259,8 @@ function CycleScreen() {
     setMoving(true);
     setNotice(null);
     try {
-      const v = (await call("cycle.next", { skip })).object as CycleView;
+      // The step shown: a second click after the cycle moved on is refused, not applied to the next step.
+      const v = (await call("cycle.next", { skip, step })).object as CycleView;
       setView(v);
       if (v.audit_report) setReport(v.audit_report);
     } catch (e) {

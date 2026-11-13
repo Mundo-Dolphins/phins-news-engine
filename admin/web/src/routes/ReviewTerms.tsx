@@ -238,6 +238,8 @@ export function ReviewTermsScreen({ onDone }: ReviewTermsProps) {
   const [notice, setNotice] = useState<Notice | undefined>();
   const [goTo, setGoTo] = useState<{ key: string } | undefined>();
   const [picking, setPicking] = useState<Picking | null>(null);
+  // pickingRef is the open picker's request: it settles once, even for a second pick before the re-render.
+  const pickingRef = useRef<Picking | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [writing, setWriting] = useState(false);
   // sent guards a second Confirm before the re-render: the dictionary is written once.
@@ -309,7 +311,15 @@ export function ReviewTermsScreen({ onDone }: ReviewTermsProps) {
   };
 
   /** pick opens the category choice; it settles when a category is chosen (the decision) or the dialog closes. */
-  const pick = (t: MinedTermItem, action: Picking["action"]) => new Promise<Notice | void>((resolve) => setPicking({ t, action, settle: resolve }));
+  const pick = (t: MinedTermItem, action: Picking["action"]) =>
+    new Promise<Notice | void>((resolve) => {
+      const p: Picking = { t, action, settle: resolve };
+      pickingRef.current = p;
+      setPicking(p);
+    });
+
+  /** A rejected term is in the mining policy's ignored terms: it cannot be rejected or categorized again. */
+  const notRejected = (t: MinedTermItem) => t.decision?.status !== "rejected";
 
   const decisions: ReviewDecision<MinedTermItem>[] = [
     {
@@ -317,8 +327,8 @@ export function ReviewTermsScreen({ onDone }: ReviewTermsProps) {
       label: "Approve",
       onDecide: (t) => (categories.includes(t.category_guess) ? decide(t, "approve") : pick(t, "approve")),
     },
-    { key: "r", label: "Reject", onDecide: (t) => decide(t, "reject") },
-    { key: "c", label: "Categorize", onDecide: (t) => pick(t, "categorize") },
+    { key: "r", label: "Reject", offered: notRejected, onDecide: (t) => decide(t, "reject") },
+    { key: "c", label: "Categorize", offered: notRejected, onDecide: (t) => pick(t, "categorize") },
   ];
 
   /** skip leaves the term undecided and moves to the next one. */
@@ -329,14 +339,18 @@ export function ReviewTermsScreen({ onDone }: ReviewTermsProps) {
   };
 
   const chosen = (category: string) => {
-    if (!picking) return;
+    const p = pickingRef.current;
+    if (!p) return;
+    pickingRef.current = null;
     setPicking(null);
-    picking.settle(decide(picking.t, picking.action, category));
+    p.settle(decide(p.t, p.action, category));
   };
   const closePicker = () => {
-    if (!picking) return;
+    const p = pickingRef.current;
+    if (!p) return;
+    pickingRef.current = null;
     setPicking(null);
-    picking.settle();
+    p.settle();
   };
 
   const finish = async () => {

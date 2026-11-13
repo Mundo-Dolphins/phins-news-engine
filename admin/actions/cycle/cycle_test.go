@@ -43,6 +43,9 @@ type fixture struct {
 	remote    action.Remote
 	swapped   []*sql.DB
 	log       *bytes.Buffer
+	// clock, when set, replaces the fixed now (a test needing distinct
+	// session ids advances it).
+	clock func() time.Time
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -78,8 +81,12 @@ func (f *fixture) openStore() {
 }
 
 func (f *fixture) env() action.Env {
+	clock := f.clock
+	if clock == nil {
+		clock = func() time.Time { return now }
+	}
 	return action.Env{
-		DB: f.db, Config: f.cfg, Mode: action.ModeLocal, Now: func() time.Time { return now },
+		DB: f.db, Config: f.cfg, Mode: action.ModeLocal, Now: clock,
 		Log: slog.New(slog.NewTextHandler(f.log, nil)), Actor: "user:ana", State: f.st, Remote: f.remote,
 		SwapDB: func(db *sql.DB) {
 			f.swapped = append(f.swapped, db)
@@ -213,24 +220,24 @@ func wantConflict(t *testing.T, err error, contains string) {
 func TestMetadata(t *testing.T) {
 	want := map[string]struct {
 		kind                         action.Kind
-		long, exclusive, swaps, read bool
+		long, exclusive, swaps, noDB bool
 	}{
-		"cycle.state":                {kind: action.KindRead},
+		"cycle.state":                {kind: action.KindRead, noDB: true},
 		"cycle.start":                {kind: action.KindWrite},
 		"cycle.next":                 {kind: action.KindWrite},
 		"cycle.abandon":              {kind: action.KindDestructive},
 		"cycle.sync":                 {kind: action.KindWrite, long: true, exclusive: true, swaps: true},
-		"cycle.telegram_import":      {kind: action.KindWrite, long: true},
+		"cycle.telegram_import":      {kind: action.KindWrite, long: true, exclusive: true},
 		"cycle.roster_sync":          {kind: action.KindWrite, long: true},
 		"cycle.train":                {kind: action.KindWrite, long: true, exclusive: true},
-		"cycle.promote":              {kind: action.KindDestructive},
+		"cycle.promote":              {kind: action.KindDestructive, exclusive: true},
 		"cycle.summary":              {kind: action.KindRead},
 		"cycle.review_open":          {kind: action.KindWrite},
 		"cycle.review_queue":         {kind: action.KindRead},
 		"cycle.review_decide":        {kind: action.KindWrite},
 		"cycle.review_finish":        {kind: action.KindWrite},
 		"cycle.review_pause":         {kind: action.KindWrite},
-		"cycle.entities_discover":    {kind: action.KindWrite, long: true},
+		"cycle.entities_discover":    {kind: action.KindWrite, long: true, exclusive: true},
 		"cycle.entities_finish":      {kind: action.KindWrite},
 		"cycle.event_rules_discover": {kind: action.KindWrite, long: true, exclusive: true},
 		"cycle.event_rules_apply":    {kind: action.KindWrite, long: true, exclusive: true},
@@ -248,8 +255,8 @@ func TestMetadata(t *testing.T) {
 			continue
 		}
 		got[a.Name] = true
-		if a.Group != "cycle" || a.Kind != w.kind || a.LongRunning != w.long || a.Exclusive != w.exclusive || a.SwapsDB != w.swaps {
-			t.Errorf("%s: group=%s kind=%s long=%v exclusive=%v swaps=%v", a.Name, a.Group, a.Kind, a.LongRunning, a.Exclusive, a.SwapsDB)
+		if a.Group != "cycle" || a.Kind != w.kind || a.LongRunning != w.long || a.Exclusive != w.exclusive || a.SwapsDB != w.swaps || a.NoOperationalDB != w.noDB {
+			t.Errorf("%s: group=%s kind=%s long=%v exclusive=%v swaps=%v noDB=%v", a.Name, a.Group, a.Kind, a.LongRunning, a.Exclusive, a.SwapsDB, a.NoOperationalDB)
 		}
 		if len(a.Modes) != 1 || a.Modes[0] != action.ModeLocal {
 			t.Errorf("%s: modes = %v, want local only", a.Name, a.Modes)

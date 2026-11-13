@@ -33,8 +33,13 @@ type dbGate struct {
 
 // enter takes the gate for a and points env at the current DB (when one is
 // set), so an env built before a swap never keeps a stale handle. The
-// returned leave releases it.
+// returned leave releases it. An action with NoOperationalDB bypasses the
+// gate: it gets no DB and neither waits for nor blocks a swap.
 func (g *dbGate) enter(a action.Action, env *action.Env) (leave func(), err error) {
+	if a.NoOperationalDB {
+		env.DB, env.SwapDB = nil, nil
+		return func() {}, nil
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.swapping {

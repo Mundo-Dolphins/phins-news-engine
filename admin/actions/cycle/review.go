@@ -142,6 +142,9 @@ type reviewOpenResult struct {
 	SessionID string `json:"session_id"`
 	Total     int    `json:"total"`
 	Decided   int    `json:"decided"`
+	// ReplacedSessionID is the session this open cancelled because its
+	// frozen candidate set was gone (empty when nothing was replaced).
+	ReplacedSessionID string `json:"replaced_session_id,omitempty"`
 }
 
 func runReviewOpen(ctx context.Context, env action.Env, _ any) (action.Result, error) {
@@ -155,7 +158,7 @@ func runReviewOpen(ctx context.Context, env action.Env, _ any) (action.Result, e
 		return action.Result{}, err
 	}
 	deps := reviewDeps(env)
-	session, summary, err := openSession(ctx, env, deps, w)
+	session, replaced, summary, err := openSession(ctx, env, deps, w)
 	if err != nil {
 		return action.Result{}, err
 	}
@@ -176,7 +179,10 @@ func runReviewOpen(ctx context.Context, env action.Env, _ any) (action.Result, e
 	if err != nil {
 		return action.Result{}, err
 	}
-	result := reviewOpenResult{SessionID: session.ID, Total: len(set.candidates), Decided: len(set.candidates) - set.undecided()}
+	result := reviewOpenResult{
+		SessionID: session.ID, Total: len(set.candidates), Decided: len(set.candidates) - set.undecided(),
+		ReplacedSessionID: replaced,
+	}
 	return action.Result{Render: "object", Object: result, Summary: summary}, nil
 }
 
@@ -185,20 +191,31 @@ func runReviewOpen(ctx context.Context, env action.Env, _ any) (action.Result, e
 // the latest paused, failed or running session (a paused CLI session too),
 // is resumed with its frozen set; with none a new session freezes a fresh
 // selection. A session this cycle already completed (its finish not
-// recorded) is returned as it is.
-func openSession(ctx context.Context, env action.Env, deps editorialcycle.Deps, w *Wizard) (out.EditorialCycleSession, string, error) {
-	var own *out.EditorialCycleSession
+// recorded) is returned as it is. When the resumed session's frozen set is
+// gone, editorialcycle cancels it and starts a new one: its id is returned
+// as replaced (and logged) so the operator is told.
+func openSession(ctx context.Context, env action.Env, deps editorialcycle.Deps, w *Wizard) (session out.EditorialCycleSession, replaced, summary string, err error) {
+	var resumable *out.EditorialCycleSession
 	if w.SessionID != "" {
 		s, err := sqliteadapter.NewEditorialCycleSessionRepository(env.DB).Get(ctx, w.SessionID)
 		switch {
 		case err != nil && !errors.Is(err, sql.ErrNoRows):
-			return out.EditorialCycleSession{}, "", err
+			return out.EditorialCycleSession{}, "", "", err
 		case err != nil:
 			// gone: start or resume as for a new cycle
 		case s.Status == sessionCompleted:
-			return s, "session " + s.ID + " is already complete; finish the review", nil
+			return s, "", "session " + s.ID + " is already complete; finish the review", nil
 		case s.Status == sessionRunning || s.Status == "paused" || s.Status == "failed":
-			own = &s
+			resumable = &s
+		}
+	}
+	if resumable == nil {
+		latest, err := deps.Sessions.GetLatestResumable(ctx)
+		switch {
+		case err == nil:
+			resumable = &latest
+		case !errors.Is(err, sql.ErrNoRows):
+			return out.EditorialCycleSession{}, "", "", fmt.Errorf("editorialcycle: get latest resumable session: %w", err)
 		}
 	}
 	sampleSize := w.SampleSize
@@ -207,36 +224,37 @@ func openSession(ctx context.Context, env action.Env, deps editorialcycle.Deps, 
 	}
 	fresh, err := editorialcycle.SelectFresh(ctx, deps, env.Config, sampleSize)
 	if err != nil {
-		return out.EditorialCycleSession{}, "", err
+		return out.EditorialCycleSession{}, "", "", err
 	}
 	flags := editorialcycle.Flags{SampleSize: sampleSize}
-	var (
-		session             out.EditorialCycleSession
-		resumed, backfilled bool
-	)
-	if own != nil {
-		session, resumed, backfilled, err = editorialcycle.Resume(ctx, deps, flags, *own, fresh)
+	var resumed, backfilled bool
+	if resumable != nil {
+		session, resumed, backfilled, err = editorialcycle.Resume(ctx, deps, flags, *resumable, fresh)
 	} else {
 		session, resumed, backfilled, err = editorialcycle.StartOrResume(ctx, deps, flags, fresh)
 	}
 	if err != nil {
-		return out.EditorialCycleSession{}, "", err
+		return out.EditorialCycleSession{}, "", "", err
+	}
+	if resumable != nil && session.ID != resumable.ID {
+		replaced = resumable.ID
+		env.Log.Warn(fmt.Sprintf("session %s lost its frozen candidate set; cancelled it and started session %s", replaced, session.ID))
 	}
 	if backfilled {
 		env.Log.Warn(fmt.Sprintf("legacy session %s: no recorded candidate set — recomputed from the current corpus; membership may differ from the original run", session.ID))
 	}
 	if !resumed {
-		return session, "started session " + session.ID, nil
+		return session, replaced, "started session " + session.ID, nil
 	}
 	resolvable, err := deps.Candidates.CountResolvable(ctx, session.ID)
 	if err != nil {
-		return out.EditorialCycleSession{}, "", fmt.Errorf("editorial cycle: count resolvable candidates: %w", err)
+		return out.EditorialCycleSession{}, "", "", fmt.Errorf("editorial cycle: count resolvable candidates: %w", err)
 	}
 	if resolvable < session.TotalCandidates {
 		env.Log.Warn(fmt.Sprintf("warning: %d of %d originally-frozen candidate(s) are no longer in the corpus",
 			session.TotalCandidates-resolvable, session.TotalCandidates))
 	}
-	return session, "resuming session " + session.ID, nil
+	return session, "", "resuming session " + session.ID, nil
 }
 
 // Review card shapes (cycle.review_queue).

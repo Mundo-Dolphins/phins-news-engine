@@ -100,6 +100,11 @@ type Action struct {
 	// SwapsDB marks an action that may replace the operational DB (through
 	// Env.SwapDB); it runs only when no other action or job is running.
 	SwapsDB bool
+	// NoOperationalDB marks an action that never touches the operational DB
+	// (it reads only the admin store): it bypasses the DB gate, so it runs
+	// even while a SwapsDB action replaces the DB and never blocks one. Its
+	// Env.DB and Env.SwapDB are nil.
+	NoOperationalDB bool
 	// Params is the zero value of the params struct, used for the schema.
 	// It may be nil for actions without parameters.
 	Params any
@@ -114,7 +119,7 @@ type Registry struct {
 }
 
 // Add registers actions. It panics on an empty name, no modes, a nil Run,
-// a duplicate name or an invalid Params struct.
+// SwapsDB with NoOperationalDB, a duplicate name or an invalid Params struct.
 func (r *Registry) Add(as ...Action) {
 	for _, a := range as {
 		switch {
@@ -124,6 +129,8 @@ func (r *Registry) Add(as ...Action) {
 			panic(fmt.Sprintf("action %q: no modes", a.Name))
 		case a.Run == nil:
 			panic(fmt.Sprintf("action %q: nil Run", a.Name))
+		case a.SwapsDB && a.NoOperationalDB:
+			panic(fmt.Sprintf("action %q: SwapsDB and NoOperationalDB", a.Name))
 		}
 		if _, dup := r.byName[a.Name]; dup {
 			panic(fmt.Sprintf("action %q: duplicate", a.Name))

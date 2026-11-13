@@ -196,14 +196,14 @@ describe("Cycle", () => {
     await waitFor(() => expect(button("Next").disabled).toBe(false));
     expect(within(panel()).getByText("1234")).toBeTruthy();
     fireEvent.click(button("Next"));
-    await waitFor(() => expect(run).toHaveBeenCalledWith("cycle.next", { skip: false }, false));
+    await waitFor(() => expect(run).toHaveBeenCalledWith("cycle.next", { skip: false, step: "roster_sync" }, false));
     expect(await screen.findByText("stub article review")).toBeTruthy();
   });
 
   it("offers Skip only on skippable steps", async () => {
     const s = await open(state("article_review"), {
       "cycle.next": (p) => {
-        expect(p).toEqual({ skip: true });
+        expect(p).toEqual({ skip: true, step: "entities" });
         s.set(state("event_rules"));
         return state("event_rules");
       },
@@ -215,7 +215,7 @@ describe("Cycle", () => {
     // onDone reloads the state: the cycle is now at a skippable step.
     expect(await screen.findByRole("button", { name: "Skip step" })).toBeTruthy();
     fireEvent.click(button("Skip step"));
-    await waitFor(() => expect(run).toHaveBeenCalledWith("cycle.next", { skip: true }, false));
+    await waitFor(() => expect(run).toHaveBeenCalledWith("cycle.next", { skip: true, step: "entities" }, false));
   });
 
   it("shows a failed Telegram import's terminal-login message as is, and retries it", async () => {
@@ -385,7 +385,7 @@ describe("Cycle", () => {
     expect(screen.getByText(/Deploy from the terminal/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Skip step" })).toBeNull();
     fireEvent.click(button("Finish cycle"));
-    await waitFor(() => expect(run).toHaveBeenCalledWith("cycle.next", { skip: false }, false));
+    await waitFor(() => expect(run).toHaveBeenCalledWith("cycle.next", { skip: false, step: "summary" }, false));
     expect(await screen.findByText(/data\/audit\/cycle.json/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Start cycle" })).toBeTruthy();
   });

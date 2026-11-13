@@ -310,7 +310,7 @@ func Actions() []action.Action {
 		{
 			Name: "cycle.state", Group: group, Title: "Editorial cycle state",
 			Description: "The editorial cycle in progress (null when none) with each step's status and result, what this host offers (sync, Telegram) and why steps are disabled.",
-			Kind:        action.KindRead, Modes: localOnly, Run: runState,
+			Kind:        action.KindRead, Modes: localOnly, NoOperationalDB: true, Run: runState,
 		},
 		{
 			Name: "cycle.start", Group: group, Title: "Start editorial cycle",
@@ -319,7 +319,7 @@ func Actions() []action.Action {
 		},
 		{
 			Name: "cycle.next", Group: group, Title: "Next cycle step",
-			Description: "Moves to the next step once the current one is finished, or skips it (skippable steps only). On the summary step it finishes the cycle and writes the audit report.",
+			Description: "Moves to the next step once the current one is finished, or skips it (skippable steps only). With step, refused unless the cycle is at that step. On the summary step it finishes the cycle and writes the audit report.",
 			Kind:        action.KindWrite, Modes: localOnly, Params: nextParams{}, Run: runNext,
 		},
 		{
@@ -335,7 +335,7 @@ func Actions() []action.Action {
 		{
 			Name: "cycle.telegram_import", Group: group, Title: "Import Telegram history",
 			Description: "Imports the channel's message history with the stored Telegram session; never prompts (log in from the terminal when the session has expired).",
-			Kind:        action.KindWrite, Modes: localOnly, LongRunning: true, Run: runTelegram,
+			Kind:        action.KindWrite, Modes: localOnly, LongRunning: true, Exclusive: true, Run: runTelegram,
 		},
 		{
 			Name: "cycle.roster_sync", Group: group, Title: "Sync league roster",
@@ -350,7 +350,7 @@ func Actions() []action.Action {
 		{
 			Name: "cycle.promote", Group: group, Title: "Promote winner",
 			Description: "Promotes the training winner to the production model path, or records that it was declined. Decided once per cycle.",
-			Kind:        action.KindDestructive, Modes: localOnly, Params: promoteParams{}, Run: runPromote,
+			Kind:        action.KindDestructive, Modes: localOnly, Exclusive: true, Params: promoteParams{}, Run: runPromote,
 		},
 		{
 			Name: "cycle.review_open", Group: group, Title: "Open article review",
@@ -380,7 +380,7 @@ func Actions() []action.Action {
 		{
 			Name: "cycle.entities_discover", Group: group, Title: "Discover entities in the session",
 			Description: "Runs entity discovery over the articles published or rejected in the review session; the proposals are then reviewed with entities.review_queue (session_id) and entities.approve/reject.",
-			Kind:        action.KindWrite, Modes: localOnly, LongRunning: true, Run: runEntitiesDiscover,
+			Kind:        action.KindWrite, Modes: localOnly, LongRunning: true, Exclusive: true, Run: runEntitiesDiscover,
 		},
 		{
 			Name: "cycle.entities_finish", Group: group, Title: "Finish entity review",
@@ -437,6 +437,10 @@ type startParams struct {
 
 type nextParams struct {
 	Skip bool `json:"skip" help:"skip the current step instead of requiring it to be finished"`
+	// Step, when set, must be the current step: a Next meant for a step the
+	// cycle already left (a repeated click) is refused, not applied to the
+	// following one.
+	Step string `json:"step" help:"the step this Next is for; refused when the cycle is at another step"`
 }
 
 type availability struct {
@@ -576,6 +580,9 @@ func runNext(ctx context.Context, env action.Env, params any) (action.Result, er
 	}
 	if w == nil {
 		return action.Result{}, errNoCycle
+	}
+	if p.Step != "" && p.Step != w.Step {
+		return action.Result{}, action.Conflict(fmt.Errorf("the cycle is at step %s", w.Step))
 	}
 	if inflight[w.Step] {
 		return action.Result{}, action.Conflict(fmt.Errorf("step %s is running; wait for it to finish", w.Step))

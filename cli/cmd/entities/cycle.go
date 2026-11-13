@@ -29,7 +29,7 @@ func ValidateCycleVerification(v string) error { return entitywiring.ValidateCyc
 
 // NewCycleLLM builds the discovery LLM; a variable so tests can substitute it.
 var NewCycleLLM = func(cmd *cobra.Command, cfg config.EntityDiscoveryConfig, maxTokens int, disableThinking bool) appout.EntityDiscoveryLLM {
-	return entitywiring.NewDiscoveryLLM(cfg, maxTokens, disableThinking, discoveryLogger{out: cmd.OutOrStderr(), component: "llm"})
+	return entitywiring.NewDiscoveryLLM(cfg, maxTokens, disableThinking, entitywiring.WriterLogger{Out: cmd.OutOrStderr(), Component: "llm"})
 }
 
 // CycleStepDisabledReason returns why the entity step cannot run with cfg, or ""

@@ -17,6 +17,9 @@ import (
 // database's rows, never unioned.
 var localOwnedTables = []string{
 	"editorial_cycle_sessions",
+	// A session's frozen review candidate set (migration 0024): without it
+	// a sync leaves a paused session with nothing to resume.
+	"editorial_cycle_session_candidates",
 	"editorial_review_decisions",
 	"human_labels",
 	"editorial_examples",

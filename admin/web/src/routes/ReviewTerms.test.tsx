@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/preact";
+import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/preact";
 import { ApiError, getSession, runAction, type RunOutcome } from "../api";
 import { ReviewTerms } from "./ReviewTerms";
 
@@ -184,6 +184,34 @@ describe("ReviewTerms", () => {
     fireEvent.keyDown(window, { key: "a" });
     expect(await screen.findByText(/already rejected/)).toBeTruthy();
     expect(within(card()).getByRole("heading", { name: "leads" })).toBeTruthy();
+  });
+
+  it("does not offer Reject or Categorize on a rejected term", async () => {
+    await open([term("leads", { decision: { status: "rejected", category: "" } })]);
+    const c = card();
+    expect(within(c).getByRole("heading", { name: "leads" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Reject/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Categorize/ })).toBeNull();
+    fireEvent.keyDown(window, { key: "r" });
+    fireEvent.keyDown(window, { key: "c" });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(calls("cycle.terms_decide").length).toBe(0);
+  });
+
+  it("decides once when a category is picked twice before the picker closes", async () => {
+    await open([term("Ezo Quarrington")]);
+    fireEvent.keyDown(window, { key: "c" });
+    const dialog = await screen.findByRole("dialog", { name: /Choose a category/ });
+    const field = within(dialog).getByRole("combobox");
+    // Both presses land before the picker re-renders closed.
+    act(() => {
+      fireEvent.keyDown(field, { key: "Enter" });
+      fireEvent.keyDown(field, { key: "Enter" });
+    });
+    await waitFor(() => expect(calls("cycle.terms_decide").length).toBe(1));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(calls("cycle.terms_decide").length).toBe(1);
   });
 
   it("keeps Finish disabled while undecided; the confirmed finish posts once and calls onDone", async () => {

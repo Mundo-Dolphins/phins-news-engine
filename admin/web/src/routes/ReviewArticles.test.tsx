@@ -236,6 +236,32 @@ describe("ReviewArticles", () => {
     expect(calls("cycle.review_pause").length).toBe(0);
   });
 
+  it("pauses exactly once when it is left while the review is still opening", async () => {
+    let resolveOpen!: (o: RunOutcome) => void;
+    serve([article("k1", 1)], {
+      "cycle.review_open": () => new Promise<RunOutcome>((r) => (resolveOpen = r)),
+    });
+    const utils = render(<ReviewArticles />);
+    await waitFor(() => expect(calls("cycle.review_open").length).toBe(1));
+    utils.unmount();
+    // Let the unmount's effect cleanup run before the open answers.
+    await new Promise((r) => setTimeout(r, 200));
+    expect(calls("cycle.review_pause").length).toBe(0);
+    resolveOpen(obj({ session_id: "sess-1", total: 1, decided: 0 }));
+    await waitFor(() => expect(calls("cycle.review_pause").length).toBe(1));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(calls("cycle.review_pause").length).toBe(1);
+    expect(calls("cycle.review_queue").length).toBe(0);
+  });
+
+  it("says so when the review session was replaced because its article set was gone", async () => {
+    await open([article("k1", 1)], {
+      "cycle.review_open": () => obj({ session_id: "sess-2", total: 1, decided: 0, replaced_session_id: "sess-1" }),
+    });
+    expect(await screen.findByText(/sess-1 had lost its frozen article set/)).toBeTruthy();
+    expect(screen.getByText(/sess-1 had lost its frozen article set/).textContent).toContain("sess-2");
+  });
+
   it("says the review is finished when the step is already done", async () => {
     serve([], {}, () => cycleState("article_review", "done"));
     render(<ReviewArticles />);

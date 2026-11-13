@@ -246,9 +246,16 @@ export function ReviewArticlesScreen({ onDone }: ReviewArticlesProps) {
       opened.current = true;
       // Left while the session was opening: pause it straight away.
       if (!alive.current) return pause();
-      const o = out.result.object as { session_id?: string } | undefined;
+      const o = out.result.object as { session_id?: string; replaced_session_id?: string } | undefined;
       setPhase({ kind: "open", sessionId: o?.session_id ?? "" });
-      await load(true);
+      const loaded = await load(true);
+      // The resumed session's frozen set was gone (e.g. emptied by a sync): it was cancelled and replaced.
+      if (loaded && o?.replaced_session_id && alive.current) {
+        setNotice({
+          kind: "info",
+          text: `Review session ${o.replaced_session_id} had lost its frozen article set and was cancelled; a new session ${o.session_id ?? ""} started with a fresh selection.`,
+        });
+      }
     } catch (e) {
       if (alive.current) setPhase({ kind: "error", text: errorText(e) });
     }

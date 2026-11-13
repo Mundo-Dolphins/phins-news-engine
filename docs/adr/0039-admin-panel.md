@@ -229,7 +229,9 @@ run them, without the panel ever endangering the running bot.
   blocked. One cycle at a time; "Start cycle" takes the sample size and the
   entity verification depth (local, full, none); "Abandon cycle", after the
   typed confirmation, cancels the cycle and its review session. `cycle.next`
-  refuses a step that is not finished; `skip` works on every step but the
+  refuses a step that is not finished, and with `step` (the panel always
+  sends the step it shows) refuses when the cycle is at another step, so a
+  repeated click never moves past the next step; `skip` works on every step but the
   article review and the summary, and records why. The screen shows a rail
   of the nine steps with their status, the current step's panel, and Next,
   Skip (skippable steps only; not while a training winner waits for its
@@ -240,7 +242,11 @@ run them, without the panel ever endangering the running bot.
   step failed with its error shown as is, and it can be retried. The sync is
   the `SwapsDB` action of the gate described under "Replacing the
   operational DB" below: it is refused while anything else runs and every
-  other action fails fast while it runs. The wizard state stays in the
+  other action fails fast while it runs — except `cycle.state`, which reads
+  only the admin store (`NoOperationalDB`), so the wizard follows the
+  running sync. `cycle.telegram_import`, the entity discovery, `cycle.train`,
+  `cycle.promote` and the event rule discover and apply are `Exclusive`, as
+  their CLI-side actions are. The wizard state stays in the
   admin store; after the sync the wizard reads it again, and the later
   steps read their articles, proposals and labels from the new operational
   DB. The host's
@@ -254,7 +260,11 @@ run them, without the panel ever endangering the running bot.
   `review_finish`, `review_pause`; the frozen review set of the session,
   `P` publish, `R` reject, `A` ambiguous, `D` duplicate, `S` same news,
   `U` update, `E` edit category, `K` skip, decided articles can be decided
-  again, and leaving the screen pauses the session), the entity review
+  again, and leaving the screen pauses the session; the session's frozen
+  set is one of the local tables a sync carries over, and a session whose
+  frozen set is gone anyway is cancelled and replaced, which
+  `cycle.review_open` reports as `replaced_session_id` and the screen
+  shows), the entity review
   limited to the session's articles (`entities.review_queue` with
   `session_id`) after `cycle.entities_discover`, finished with
   `cycle.entities_finish`, the event rule review with the cycle's own
@@ -309,6 +319,9 @@ actions are running; try again when they finish"), and any action requested
 while it runs fails fast (`409 conflict` "database sync in progress"), over
 REST and MCP alike. Each run reads `Env.DB` from the gate, so later actions
 use the new handle; the old one is closed once the swapping action returns.
+An action marked `NoOperationalDB` never touches the operational DB (its
+`Env.DB` is nil): it bypasses the gate, running during a swap and never
+blocking one.
 Host hooks for the remote host and Telegram arrive as `Options.Remote`
 (host, key, sync script and the Telegram client factory); the panel never
 takes them from a field, and a zero value means "not available on this
