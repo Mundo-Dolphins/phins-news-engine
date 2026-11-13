@@ -882,3 +882,172 @@ type editorialAudit struct {
 	EventRulesGateBlocked         bool
 	EventRulesGateNotExercised    bool
 }
+
+type panicTelegram struct{}
+
+func (panicTelegram) ExportChannelMessages(context.Context, out.TelegramImportRequest) ([]telegramimport.Message, error) {
+	panic("boom")
+}
+
+func validTelegram(t *testing.T, f *fixture) {
+	t.Helper()
+	f.cfg.Telegram.APIID, f.cfg.Telegram.APIHash, f.cfg.Telegram.Phone = 7, "hash", "+10000"
+	f.cfg.Telegram.ChannelID, f.cfg.Telegram.SessionPath = "@channel", filepath.Join(t.TempDir(), "tg.session")
+}
+
+func TestStepPanicFailsTheStep(t *testing.T) {
+	f := newFixture(t)
+	validTelegram(t, f)
+	f.remote = action.Remote{NewTelegramClient: func(out.TelegramImportClientConfig) (out.TelegramChannelImporter, error) {
+		return panicTelegram{}, nil
+	}}
+	f.mustRun("cycle.start", `{}`)
+	f.mustRun("cycle.next", `{"skip":true}`)
+	_, err := f.run("cycle.telegram_import", `{}`)
+	if err == nil || !strings.Contains(err.Error(), "panic: boom") {
+		t.Fatalf("err = %v, want the panic as an error", err)
+	}
+	if s := f.state().Cycle.Steps["telegram_import"]; s.Status != "failed" || !strings.Contains(s.Error, "panic: boom") {
+		t.Fatalf("step = %+v, want failed", s)
+	}
+	// The step can be retried.
+	f.remote.NewTelegramClient = func(out.TelegramImportClientConfig) (out.TelegramChannelImporter, error) {
+		return &fakeTelegram{}, nil
+	}
+	f.mustRun("cycle.telegram_import", `{}`)
+	if s := f.state().Cycle.Steps["telegram_import"]; s.Status != "done" {
+		t.Fatalf("retry = %+v", s)
+	}
+	// And nothing is left running: abandon works.
+	f.mustRun("cycle.abandon", `{}`)
+}
+
+func TestStepPanicThenAbandon(t *testing.T) {
+	f := newFixture(t)
+	validTelegram(t, f)
+	f.remote = action.Remote{NewTelegramClient: func(out.TelegramImportClientConfig) (out.TelegramChannelImporter, error) {
+		return panicTelegram{}, nil
+	}}
+	f.mustRun("cycle.start", `{}`)
+	f.mustRun("cycle.next", `{"skip":true}`)
+	if _, err := f.run("cycle.telegram_import", `{}`); err == nil {
+		t.Fatal("panicking step succeeded")
+	}
+	f.mustRun("cycle.abandon", `{}`)
+}
+
+type panicSync struct{}
+
+func (panicSync) Sync(context.Context, out.RemoteSyncRequest) (out.RemoteSyncResult, error) {
+	panic("transport exploded")
+}
+
+func TestSyncPanicAfterCloseInstallsHandle(t *testing.T) {
+	f := newFixture(t)
+	f.remote = action.Remote{Host: "box.example", NewSync: func(string, string) out.RemoteSync { return panicSync{} }}
+	f.mustRun("cycle.start", `{}`)
+	_, err := f.run("cycle.sync", `{}`)
+	if err == nil || !strings.Contains(err.Error(), "panic: transport exploded") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(f.swapped) != 1 {
+		t.Fatalf("SwapDB called %d times, want 1", len(f.swapped))
+	}
+	if err := f.swapped[0].Ping(); err != nil {
+		t.Fatalf("installed handle: %v", err)
+	}
+	if s := f.state().Cycle.Steps["sync"]; s.Status != "failed" {
+		t.Fatalf("sync = %+v", s)
+	}
+}
+
+// removingSync deletes the local database and fails, so the reopen has
+// nothing to open.
+type removingSync struct{ path string }
+
+func (s removingSync) Sync(context.Context, out.RemoteSyncRequest) (out.RemoteSyncResult, error) {
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		_ = os.Remove(s.path + suffix)
+	}
+	return out.RemoteSyncResult{}, errors.New("network down")
+}
+
+func TestSyncReopenRefusesMissingFile(t *testing.T) {
+	f := newFixture(t)
+	f.remote = action.Remote{Host: "box.example", NewSync: func(string, string) out.RemoteSync { return removingSync{f.cfg.SQLite.Path} }}
+	f.mustRun("cycle.start", `{}`)
+	_, err := f.run("cycle.sync", `{}`)
+	if err == nil || !strings.Contains(err.Error(), "restart the panel") {
+		t.Fatalf("err = %v, want a restart hint", err)
+	}
+	if _, statErr := os.Stat(f.cfg.SQLite.Path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Errorf("reopen created %s: %v", f.cfg.SQLite.Path, statErr)
+	}
+	if len(f.swapped) != 0 {
+		t.Errorf("SwapDB called %d times, want 0", len(f.swapped))
+	}
+	if s := f.state().Cycle.Steps["sync"]; s.Status != "failed" || !strings.Contains(s.Error, "restart the panel") {
+		t.Fatalf("sync = %+v", s)
+	}
+}
+
+func TestTelegramTransportErrorIsNotALoginError(t *testing.T) {
+	f := newFixture(t)
+	validTelegram(t, f)
+	f.remote = action.Remote{NewTelegramClient: func(out.TelegramImportClientConfig) (out.TelegramChannelImporter, error) {
+		return &fakeTelegram{err: errors.New("x509: certificate signed by unknown authority")}, nil
+	}}
+	f.mustRun("cycle.start", `{}`)
+	f.mustRun("cycle.next", `{"skip":true}`)
+	_, err := f.run("cycle.telegram_import", `{}`)
+	if err == nil || err.Error() != "telegram import: x509: certificate signed by unknown authority" {
+		t.Fatalf("err = %v", err)
+	}
+	for _, msg := range []string{"rpc error: AUTH_KEY_UNREGISTERED", "authentication failed", "SESSION_REVOKED"} {
+		f.remote.NewTelegramClient = func(out.TelegramImportClientConfig) (out.TelegramChannelImporter, error) {
+			return &fakeTelegram{err: errors.New(msg)}, nil
+		}
+		if _, err := f.run("cycle.telegram_import", `{}`); err == nil || !strings.HasPrefix(err.Error(), "log in to Telegram from the terminal first (") {
+			t.Errorf("%s: err = %v", msg, err)
+		}
+	}
+}
+
+func TestStepGuardBeforeAvailability(t *testing.T) {
+	f := newFixture(t)
+	_, err := f.run("cycle.sync", `{}`)
+	wantConflict(t, err, "no editorial cycle")
+	_, err = f.run("cycle.telegram_import", `{}`)
+	wantConflict(t, err, "no editorial cycle")
+	f.mustRun("cycle.start", `{}`)
+	f.atStep("roster_sync")
+	_, err = f.run("cycle.sync", `{}`)
+	wantConflict(t, err, "the cycle is at step roster_sync")
+	_, err = f.run("cycle.telegram_import", `{}`)
+	wantConflict(t, err, "the cycle is at step roster_sync")
+}
+
+func TestSkipSummaryRefused(t *testing.T) {
+	f := newFixture(t)
+	f.mustRun("cycle.start", `{}`)
+	f.atStep("summary")
+	_, err := f.run("cycle.next", `{"skip":true}`)
+	wantConflict(t, err, "summary cannot be skipped")
+	if v := f.state(); v.Cycle == nil {
+		t.Fatal("skip on summary finished the cycle")
+	}
+}
+
+func TestStepActionsWithoutConfig(t *testing.T) {
+	f := newFixture(t)
+	f.mustRun("cycle.start", `{}`)
+	f.cfg = nil
+	for name, params := range map[string]string{
+		"cycle.sync": `{}`, "cycle.telegram_import": `{}`, "cycle.roster_sync": `{}`, "cycle.train": `{}`,
+		"cycle.promote": `{"promote":true}`, "cycle.summary": `{}`,
+	} {
+		if _, err := f.run(name, params); err == nil || !strings.Contains(err.Error(), "no configuration loaded") {
+			t.Errorf("%s: err = %v", name, err)
+		}
+	}
+}

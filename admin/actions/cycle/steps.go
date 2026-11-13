@@ -2,9 +2,11 @@ package cycle
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -14,6 +16,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/app/editorialsync"
 	"github.com/Mundo-Dolphins/phins-news-engine/app/modelpromotion"
 	"github.com/Mundo-Dolphins/phins-news-engine/app/telegramimport"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/entitywiring"
 	infrasqlite "github.com/Mundo-Dolphins/phins-news-engine/infra/sqlite"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/trainwiring"
@@ -111,29 +114,51 @@ type (
 	}
 )
 
-func runSync(ctx context.Context, env action.Env, _ any) (action.Result, error) {
-	if !syncAvailable(env) {
-		return action.Result{}, action.Conflict(errors.New(msgSyncUnavailable))
-	}
-	if env.SwapDB == nil {
-		return action.Result{}, errors.New("cycle: sync must run through the admin job runner")
+func runSync(ctx context.Context, env action.Env, _ any) (res action.Result, err error) {
+	if env.Config == nil {
+		return action.Result{}, errNoConfig
 	}
 	cfg := env.Config
-	w, err := beginStep(ctx, env, StepSync, nil)
+	run, err := beginStep(ctx, env, StepSync, func(*StepState) error {
+		if !syncAvailable(env) {
+			return action.Conflict(errors.New(msgSyncUnavailable))
+		}
+		if env.SwapDB == nil {
+			return errors.New("cycle: sync must run through the admin job runner")
+		}
+		return nil
+	})
 	if err != nil {
 		return action.Result{}, err
 	}
+	// closed: the panel's handle is closed; handled: a new handle was
+	// installed or its reopen already failed.
+	closed, handled := false, false
+	defer func() {
+		panicked := recover()
+		if closed && !handled {
+			// A panic between closing the handle and the swap: install a
+			// working handle so the panel keeps running.
+			if db, rerr := reopenDB(cfg); rerr == nil {
+				env.SwapDB(db)
+			} else {
+				env.Log.Error("cycle: sync: reopen after a panic", "error", rerr)
+			}
+		}
+		run.finish(ctx, panicked, &err)
+	}()
 	// The snapshot replaces the database file under the panel's handle.
 	// Close that handle first: closing it later would checkpoint and delete
 	// the WAL file by name, which by then belongs to the new database.
 	if env.DB != nil {
 		_ = env.DB.Close()
 	}
+	closed = true
 	script := env.Remote.SyncScriptPath
 	if script == "" {
 		script = action.DefaultSyncScriptPath
 	}
-	synced, res, err := editorialsync.Run(ctx, editorialsync.Deps{Sync: env.Remote.NewSync(script, env.Remote.KeyPath)}, editorialsync.Request{
+	synced, sres, err := editorialsync.Run(ctx, editorialsync.Deps{Sync: env.Remote.NewSync(script, env.Remote.KeyPath)}, editorialsync.Request{
 		Host: env.Remote.Host, RemoteDBHint: cfg.Remote.SQLiteRemoteDBHint, LocalDBPath: cfg.SQLite.Path,
 		RetentionDays: cfg.Remote.RetentionDays, BusyTimeout: cfg.SQLite.BusyTimeout(), MigrationsFS: migrations.FS,
 	})
@@ -142,18 +167,19 @@ func runSync(ctx context.Context, env action.Env, _ any) (action.Result, error) 
 		_ = synced.Close()
 	}
 	// On failure the local file is untouched or rolled back: reopen it.
-	db, openErr := infrasqlite.OpenImmediate(cfg.SQLite.Path, cfg.SQLite.BusyTimeout())
+	db, openErr := reopenDB(cfg)
+	handled = true
 	if openErr != nil {
-		if err == nil {
-			err = openErr
+		if err != nil {
+			return action.Result{}, run.fail(ctx, nil, fmt.Errorf("sync: %w; %w", err, openErr))
 		}
-		return action.Result{}, failStep(ctx, env, w, StepSync, nil, fmt.Errorf("sync: reopen the database: %w", err))
+		return action.Result{}, run.fail(ctx, nil, fmt.Errorf("sync: %w", openErr))
 	}
 	env.SwapDB(db)
 	if err != nil {
-		return action.Result{}, failStep(ctx, env, w, StepSync, nil, fmt.Errorf("sync: %w", err))
+		return action.Result{}, run.fail(ctx, nil, fmt.Errorf("sync: %w", err))
 	}
-	warnings := res.FKWarnings
+	warnings := sres.FKWarnings
 	if warnings == nil {
 		warnings = []string{}
 	}
@@ -161,18 +187,32 @@ func runSync(ctx context.Context, env action.Env, _ any) (action.Result, error) 
 		env.Log.Warn("cycle: sync", "warning", wn)
 	}
 	result := syncResult{
-		Merged: res.Merged, Migrated: res.Migrated, SourceHost: res.SourceHost, SourcePath: res.SourcePath,
-		SnapshotCreatedAt: res.SnapshotCreatedAt, SizeBytes: res.IncomingSizeBytes, ChecksumSHA256: res.IncomingChecksumSHA256,
+		Merged: sres.Merged, Migrated: sres.Migrated, SourceHost: sres.SourceHost, SourcePath: sres.SourcePath,
+		SnapshotCreatedAt: sres.SnapshotCreatedAt, SizeBytes: sres.IncomingSizeBytes, ChecksumSHA256: sres.IncomingChecksumSHA256,
 		FKWarnings: warnings,
 	}
-	if err := endStep(ctx, env, w.CycleID, StepSync, StatusDone, result, ""); err != nil {
+	if err := run.end(ctx, StatusDone, result, ""); err != nil {
 		return action.Result{}, err
 	}
 	// The CLI's "sync complete" line.
 	summary := fmt.Sprintf("sync complete (merged=%v migrated=%v, source=%s:%s @ %s, %d bytes, sha256=%s)",
-		res.Merged, res.Migrated, res.SourceHost, res.SourcePath, res.SnapshotCreatedAt.Format(time.RFC3339),
-		res.IncomingSizeBytes, res.IncomingChecksumSHA256)
+		sres.Merged, sres.Migrated, sres.SourceHost, sres.SourcePath, sres.SnapshotCreatedAt.Format(time.RFC3339),
+		sres.IncomingSizeBytes, sres.IncomingChecksumSHA256)
 	return action.Result{Render: "object", Object: result, Summary: summary}, nil
+}
+
+// reopenDB opens the operational database file the way the panel does. It
+// refuses a missing file rather than creating an empty, unmigrated one.
+func reopenDB(cfg *config.Config) (*sql.DB, error) {
+	path := cfg.SQLite.Path
+	if _, err := os.Stat(path); err != nil {
+		return nil, fmt.Errorf("the database file %s cannot be reopened (%w); restart the panel", path, err)
+	}
+	db, err := infrasqlite.OpenImmediate(path, cfg.SQLite.BusyTimeout())
+	if err != nil {
+		return nil, fmt.Errorf("reopen the database %s: %w; restart the panel", path, err)
+	}
+	return db, nil
 }
 
 // isTelegramAuthError reports whether err comes from the Telegram login:
@@ -180,7 +220,7 @@ func runSync(ctx context.Context, env action.Env, _ any) (action.Result, error) 
 // rejected.
 func isTelegramAuthError(err error) bool {
 	msg := strings.ToLower(err.Error())
-	for _, s := range []string{"non-interactive", "auth", "session_revoked", "session_expired", "unauthorized"} {
+	for _, s := range []string{"authentication failed", "auth_key", "non-interactive", "session_revoked", "session_expired", "unauthorized"} {
 		if strings.Contains(msg, s) {
 			return true
 		}
@@ -195,17 +235,23 @@ func telegramError(stage string, err error) error {
 	return fmt.Errorf("%s: %w", stage, err)
 }
 
-func runTelegram(ctx context.Context, env action.Env, _ any) (action.Result, error) {
-	if env.Remote.NewTelegramClient == nil {
-		return action.Result{}, action.Conflict(errors.New(msgTelegramUnavailable))
+func runTelegram(ctx context.Context, env action.Env, _ any) (_ action.Result, err error) {
+	if env.Config == nil {
+		return action.Result{}, errNoConfig
 	}
 	cfg := env.Config
-	w, err := beginStep(ctx, env, StepTelegram, nil)
+	run, err := beginStep(ctx, env, StepTelegram, func(*StepState) error {
+		if env.Remote.NewTelegramClient == nil {
+			return action.Conflict(errors.New(msgTelegramUnavailable))
+		}
+		return nil
+	})
 	if err != nil {
 		return action.Result{}, err
 	}
+	defer func() { run.finish(ctx, recover(), &err) }()
 	if err := cfg.Telegram.ValidateImport(); err != nil {
-		return action.Result{}, failStep(ctx, env, w, StepTelegram, nil,
+		return action.Result{}, run.fail(ctx, nil,
 			fmt.Errorf("telegram import required: %w (skip the step to run without it)", err))
 	}
 	client, err := env.Remote.NewTelegramClient(out.TelegramImportClientConfig{
@@ -213,11 +259,11 @@ func runTelegram(ctx context.Context, env action.Env, _ any) (action.Result, err
 		SessionPath: cfg.Telegram.SessionPath, NonInteractive: true,
 	})
 	if err != nil {
-		return action.Result{}, failStep(ctx, env, w, StepTelegram, nil, telegramError("telegram client", err))
+		return action.Result{}, run.fail(ctx, nil, telegramError("telegram client", err))
 	}
 	messages, err := client.ExportChannelMessages(ctx, out.TelegramImportRequest{ChannelRef: cfg.Telegram.ChannelID, Limit: 1000})
 	if err != nil {
-		return action.Result{}, failStep(ctx, env, w, StepTelegram, nil, telegramError("telegram import", err))
+		return action.Result{}, run.fail(ctx, nil, telegramError("telegram import", err))
 	}
 	urlCfg, resolvers := cfg.Normalization.URL.Policy()
 	res, err := telegramimport.Import(ctx, telegramimport.Deps{
@@ -228,9 +274,9 @@ func runTelegram(ctx context.Context, env action.Env, _ any) (action.Result, err
 		Unmatched: res.Unmatched, Skipped: res.Skipped, Failed: res.Failed,
 	}
 	if err != nil {
-		return action.Result{}, failStep(ctx, env, w, StepTelegram, result, fmt.Errorf("telegram import: %w", err))
+		return action.Result{}, run.fail(ctx, result, fmt.Errorf("telegram import: %w", err))
 	}
-	if err := endStep(ctx, env, w.CycleID, StepTelegram, StatusDone, result, ""); err != nil {
+	if err := run.end(ctx, StatusDone, result, ""); err != nil {
 		return action.Result{}, err
 	}
 	summary := fmt.Sprintf("telegram import: processed=%d imported=%d already_known=%d unmatched=%d skipped=%d failed=%d",
@@ -238,15 +284,19 @@ func runTelegram(ctx context.Context, env action.Env, _ any) (action.Result, err
 	return action.Result{Render: "object", Object: result, Summary: summary}, nil
 }
 
-func runRoster(ctx context.Context, env action.Env, _ any) (action.Result, error) {
+func runRoster(ctx context.Context, env action.Env, _ any) (_ action.Result, err error) {
+	if env.Config == nil {
+		return action.Result{}, errNoConfig
+	}
 	cfg := env.Config
-	w, err := beginStep(ctx, env, StepRoster, nil)
+	run, err := beginStep(ctx, env, StepRoster, nil)
 	if err != nil {
 		return action.Result{}, err
 	}
+	defer func() { run.finish(ctx, recover(), &err) }()
 	if entitywiring.CycleStepDisabledReason(cfg) != "" || !cfg.EntityDiscovery.Roster.Enabled {
 		result := rosterResult{SkipReason: msgRosterOff}
-		if err := endStep(ctx, env, w.CycleID, StepRoster, StatusSkipped, result, ""); err != nil {
+		if err := run.end(ctx, StatusSkipped, result, ""); err != nil {
 			return action.Result{}, err
 		}
 		return action.Result{Render: "object", Object: result, Summary: "roster sync skipped: " + msgRosterOff}, nil
@@ -257,10 +307,10 @@ func runRoster(ctx context.Context, env action.Env, _ any) (action.Result, error
 		return entitywiring.SyncRoster(ctx, cfg.EntityDiscovery.Roster, "", "", env.Now())
 	}()
 	if err != nil {
-		return action.Result{}, failStep(ctx, env, w, StepRoster, nil, fmt.Errorf("roster sync: %w (skip the step to continue with the existing roster)", err))
+		return action.Result{}, run.fail(ctx, nil, fmt.Errorf("roster sync: %w (skip the step to continue with the existing roster)", err))
 	}
 	result := rosterResult{Players: players, Path: dest}
-	if err := endStep(ctx, env, w.CycleID, StepRoster, StatusDone, result, ""); err != nil {
+	if err := run.end(ctx, StatusDone, result, ""); err != nil {
 		return action.Result{}, err
 	}
 	return action.Result{Render: "object", Object: result, Summary: fmt.Sprintf("roster sync: %d players written to %s", players, dest)}, nil
@@ -277,9 +327,12 @@ func decodeTrain(s *StepState) (trainResult, error) {
 	return r, nil
 }
 
-func runTrain(ctx context.Context, env action.Env, _ any) (action.Result, error) {
+func runTrain(ctx context.Context, env action.Env, _ any) (_ action.Result, err error) {
+	if env.Config == nil {
+		return action.Result{}, errNoConfig
+	}
 	cfg := env.Config
-	w, err := beginStep(ctx, env, StepTraining, func(s *StepState) error {
+	run, err := beginStep(ctx, env, StepTraining, func(s *StepState) error {
 		r, err := decodeTrain(s)
 		if err != nil {
 			return err
@@ -292,15 +345,16 @@ func runTrain(ctx context.Context, env action.Env, _ any) (action.Result, error)
 	if err != nil {
 		return action.Result{}, err
 	}
+	defer func() { run.finish(ctx, recover(), &err) }()
 	trainingCfg, err := trainwiring.CycleTrainingConfig(cfg, editorialcycle.ExcludedSourceIDs(cfg), fmt.Sprintf("fs-%d", env.Now().UTC().UnixNano()))
 	if err != nil {
-		return action.Result{}, failStep(ctx, env, w, StepTraining, nil, fmt.Errorf("training config: %w", err))
+		return action.Result{}, run.fail(ctx, nil, fmt.Errorf("training config: %w", err))
 	}
 	res, err := editorialcycle.RunTraining(ctx, editorialcycle.TrainingDeps{
 		Labels: sqliteadapter.NewHumanLabelRepository(env.DB), Registry: sqliteadapter.NewModelRegistryRepository(env.DB),
 	}, trainingCfg)
 	if err != nil {
-		return action.Result{}, failStep(ctx, env, w, StepTraining, nil, fmt.Errorf("training: %w", err))
+		return action.Result{}, run.fail(ctx, nil, fmt.Errorf("training: %w", err))
 	}
 	result := trainResult{Candidates: len(res.Results), NoWinner: !res.HasWinner}
 	status, summary := StatusDone, "no candidate passed gates"
@@ -317,7 +371,7 @@ func runTrain(ctx context.Context, env action.Env, _ any) (action.Result, error)
 		summary = fmt.Sprintf("winner: %s (version %s) precision=%.3f recall=%.3f f1=%.3f prauc=%.3f",
 			wr.Candidate.Model.Algorithm, wr.Version, rep.Overall.Precision(), rep.Overall.Recall(), rep.Overall.F1(), rep.PRAUC)
 	}
-	if err := endStep(ctx, env, w.CycleID, StepTraining, status, result, ""); err != nil {
+	if err := run.end(ctx, status, result, ""); err != nil {
 		return action.Result{}, err
 	}
 	return action.Result{Render: "object", Object: result, Summary: summary}, nil
@@ -331,6 +385,9 @@ func runPromote(ctx context.Context, env action.Env, params any) (action.Result,
 	p, ok := params.(*promoteParams)
 	if !ok {
 		return action.Result{}, errBadParams
+	}
+	if env.Config == nil {
+		return action.Result{}, errNoConfig
 	}
 	cfg := env.Config
 	mu.Lock()
@@ -394,6 +451,9 @@ type summaryView struct {
 }
 
 func runSummary(ctx context.Context, env action.Env, _ any) (action.Result, error) {
+	if env.Config == nil {
+		return action.Result{}, errNoConfig
+	}
 	w, err := loadCurrent(ctx, env, StepSummary)
 	if err != nil {
 		return action.Result{}, err

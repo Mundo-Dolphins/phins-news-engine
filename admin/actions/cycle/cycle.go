@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
 	"sync"
 	"time"
@@ -210,10 +211,20 @@ func loadCurrent(ctx context.Context, env action.Env, step string) (*Wizard, err
 	return w, nil
 }
 
+// stepRun is a step begun with beginStep. Its outcome is recorded once,
+// through end or fail; finish, deferred right after beginStep, covers a
+// panic or a return without an outcome.
+type stepRun struct {
+	env   action.Env
+	w     *Wizard
+	step  string
+	ended bool
+}
+
 // beginStep checks the cycle is at step and that the step can run (check
-// may refuse it further), then marks it running. The caller must call
-// endStep.
-func beginStep(ctx context.Context, env action.Env, step string, check func(*StepState) error) (*Wizard, error) {
+// may refuse it further), then marks it running. The caller must defer
+// finish on the returned run.
+func beginStep(ctx context.Context, env action.Env, step string, check func(*StepState) error) (*stepRun, error) {
 	mu.Lock()
 	defer mu.Unlock()
 	w, err := loadCurrent(ctx, env, step)
@@ -237,37 +248,59 @@ func beginStep(ctx context.Context, env action.Env, step string, check func(*Ste
 		return nil, err
 	}
 	inflight[step] = true
-	return w, nil
+	return &stepRun{env: env, w: w, step: step}, nil
 }
 
-// endStep records the outcome of a step begun with beginStep. When the cycle
-// was abandoned (or replaced) meanwhile the outcome is only logged.
-func endStep(ctx context.Context, env action.Env, cycleID, step, status string, result any, errMsg string) error {
+// end records the step's outcome. When the cycle was abandoned (or
+// replaced) meanwhile the outcome is only logged.
+func (r *stepRun) end(ctx context.Context, status string, result any, errMsg string) error {
+	r.ended = true
 	mu.Lock()
 	defer mu.Unlock()
-	delete(inflight, step)
+	delete(inflight, r.step)
 	ctx = context.WithoutCancel(ctx)
-	w, err := load(ctx, env)
+	w, err := load(ctx, r.env)
 	if err != nil {
 		return err
 	}
-	if w == nil || w.CycleID != cycleID {
-		env.Log.Warn("cycle: step finished after its cycle ended", "step", step, "status", status)
+	if w == nil || w.CycleID != r.w.CycleID {
+		r.env.Log.Warn("cycle: step finished after its cycle ended", "step", r.step, "status", status)
 		return nil
 	}
-	if err := w.set(step, status, result, errMsg, env.Now()); err != nil {
+	if err := w.set(r.step, status, result, errMsg, r.env.Now()); err != nil {
 		return err
 	}
-	return save(ctx, env, w)
+	return save(ctx, r.env, w)
 }
 
-// failStep records err as the step's error and returns it.
-func failStep(ctx context.Context, env action.Env, w *Wizard, step string, result any, err error) error {
-	if serr := endStep(ctx, env, w.CycleID, step, StatusFailed, result, err.Error()); serr != nil {
-		env.Log.Error("cycle: record step failure", "step", step, "error", serr)
+// fail records err as the step's error and returns it.
+func (r *stepRun) fail(ctx context.Context, result any, err error) error {
+	if serr := r.end(ctx, StatusFailed, result, err.Error()); serr != nil {
+		r.env.Log.Error("cycle: record step failure", "step", r.step, "error", serr)
 	}
 	return err
 }
+
+// finish is deferred right after beginStep with the value of recover(). A
+// panic becomes the action's error and, unless an outcome was already
+// recorded, the step's failure; a step that returned without recording an
+// outcome is marked failed too, so the step never stays running.
+func (r *stepRun) finish(ctx context.Context, panicked any, errp *error) {
+	if panicked != nil {
+		*errp = fmt.Errorf("panic: %v", panicked)
+		r.env.Log.Error("cycle: step panicked", "step", r.step, "panic", fmt.Sprint(panicked), "stack", string(debug.Stack()))
+	}
+	if r.ended {
+		return
+	}
+	if *errp == nil {
+		*errp = fmt.Errorf("step %s ended without an outcome", r.step)
+	}
+	_ = r.fail(ctx, nil, *errp)
+}
+
+// errNoConfig is returned by actions run without a loaded configuration.
+var errNoConfig = errors.New("cycle: no configuration loaded")
 
 // Actions returns the cycle.* actions.
 func Actions() []action.Action {
@@ -396,7 +429,7 @@ func view(env action.Env, w *Wizard) action.Result {
 
 func runState(ctx context.Context, env action.Env, _ any) (action.Result, error) {
 	if env.Config == nil {
-		return action.Result{}, errors.New("cycle: no configuration loaded")
+		return action.Result{}, errNoConfig
 	}
 	w, err := load(ctx, env)
 	if err != nil {
@@ -419,7 +452,7 @@ func runStart(ctx context.Context, env action.Env, params any) (action.Result, e
 		return action.Result{}, errBadParams
 	}
 	if env.Config == nil {
-		return action.Result{}, errors.New("cycle: no configuration loaded")
+		return action.Result{}, errNoConfig
 	}
 	if p.SampleSize < 0 {
 		return action.Result{}, invalid("sample_size must be 0 or more")
@@ -460,7 +493,7 @@ func runNext(ctx context.Context, env action.Env, params any) (action.Result, er
 		return action.Result{}, errBadParams
 	}
 	if env.Config == nil {
-		return action.Result{}, errors.New("cycle: no configuration loaded")
+		return action.Result{}, errNoConfig
 	}
 	mu.Lock()
 	defer mu.Unlock()
@@ -475,6 +508,9 @@ func runNext(ctx context.Context, env action.Env, params any) (action.Result, er
 		return action.Result{}, action.Conflict(fmt.Errorf("step %s is running; wait for it to finish", w.Step))
 	}
 	if w.Step == StepSummary {
+		if p.Skip {
+			return action.Result{}, action.Conflict(errors.New("summary cannot be skipped"))
+		}
 		return finish(ctx, env, w)
 	}
 	cur := w.step(w.Step)
