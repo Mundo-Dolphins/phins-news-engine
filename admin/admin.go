@@ -161,6 +161,8 @@ func Run(ctx context.Context, opts Options) error {
 		}
 	} else {
 		var lastReason string
+		// The guard reads the current handle outside the DB gate; that is safe
+		// because SwapsDB actions are local-only and this is production mode.
 		guard := newSchemaState(func() error {
 			err := schemaGuard(ctx, cfg.SQLite.Path, currentDB())
 			switch {

@@ -44,7 +44,7 @@ var (
 	// swapTo is the database file test.swap installs; swappedOut is the
 	// handle it replaced (TestActionsSeeNewDBAfterSwap).
 	swapTo     string
-	swappedOut *sql.DB
+	swappedOut = make(chan *sql.DB, 1)
 )
 
 func TestMain(m *testing.M) {
@@ -88,7 +88,7 @@ func TestMain(m *testing.M) {
 			if err != nil {
 				return action.Result{}, err
 			}
-			swappedOut = env.DB
+			swappedOut <- env.DB
 			env.SwapDB(db)
 			return action.Result{}, nil
 		},
@@ -808,7 +808,7 @@ func TestActionsSeeNewDBAfterSwap(t *testing.T) {
 	if code, body := postAction(t, c, base, "test.swap", `{}`); code != http.StatusOK {
 		t.Fatalf("test.swap = %d %s", code, body)
 	}
-	if err := swappedOut.Ping(); err == nil || !strings.Contains(err.Error(), "database is closed") {
+	if err := (<-swappedOut).Ping(); err == nil || !strings.Contains(err.Error(), "database is closed") {
 		t.Errorf("old handle Ping = %v, want closed", err)
 	}
 	if code, body := postAction(t, c, base, "test.dbfile", `{}`); code != http.StatusOK || !strings.Contains(body, "synced.db") {

@@ -548,3 +548,43 @@ func TestEnvDBReadAfterGate(t *testing.T) {
 		t.Error("env built before the swap still handed out the old DB")
 	}
 }
+
+func TestSwapDBIgnoredOutsideItsSwap(t *testing.T) {
+	r, _ := newRunner(t)
+	a, b, c := openDB(t, "a.db"), openDB(t, "b.db"), openDB(t, "c.db")
+	r.UseDB(a)
+	var kept func(*sql.DB)
+	swap := swapAct(func(_ context.Context, e action.Env, _ any) (action.Result, error) {
+		e.SwapDB(nil)
+		if r.DB() != a {
+			t.Error("SwapDB(nil) changed the DB")
+		}
+		// A→B→A→B: A is retired once and closed once.
+		e.SwapDB(b)
+		e.SwapDB(a)
+		e.SwapDB(b)
+		kept = e.SwapDB
+		return action.Result{}, nil
+	})
+	if _, err := r.RunSync(context.Background(), swap, env(), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if r.DB() != b || !isClosed(a) || isClosed(b) {
+		t.Fatalf("after swap: current is b=%v, a closed=%v, b closed=%v", r.DB() == b, isClosed(a), isClosed(b))
+	}
+	kept(c)
+	if r.DB() != b || isClosed(b) {
+		t.Error("SwapDB called after its action returned had an effect")
+	}
+	// Still inert while a later swap runs.
+	later := swapAct(func(context.Context, action.Env, any) (action.Result, error) {
+		kept(c)
+		return action.Result{}, nil
+	})
+	if _, err := r.RunSync(context.Background(), later, env(), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if r.DB() != b || isClosed(b) {
+		t.Error("stale SwapDB took effect during a later swap")
+	}
+}

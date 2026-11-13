@@ -3,6 +3,7 @@ package jobs
 import (
 	"database/sql"
 	"log/slog"
+	"slices"
 	"sync"
 
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/action"
@@ -22,7 +23,9 @@ type dbGate struct {
 	mu       sync.Mutex
 	shared   int
 	swapping bool
-	db       *sql.DB
+	// swapGen numbers swaps, so a SwapDB kept from an earlier swap is inert.
+	swapGen uint64
+	db      *sql.DB
 	// retired are the handles replaced during the current swap, closed once
 	// the swapping action returns.
 	retired []*sql.DB
@@ -49,7 +52,9 @@ func (g *dbGate) enter(a action.Action, env *action.Env) (leave func(), err erro
 		return nil, ErrActionsRunning
 	}
 	g.swapping = true
-	env.SwapDB = g.swap
+	g.swapGen++
+	gen := g.swapGen
+	env.SwapDB = func(db *sql.DB) { g.swap(gen, db) }
 	return g.leaveSwap, nil
 }
 
@@ -59,11 +64,16 @@ func (g *dbGate) leaveShared() {
 	g.mu.Unlock()
 }
 
-// swap installs db as the current handle; the replaced one is retired.
-func (g *dbGate) swap(db *sql.DB) {
+// swap installs db as the current handle; the replaced one is retired. It
+// has no effect for a nil db or once swap gen is over (the SwapDB was kept
+// past its action), so replaced handles are only closed by leaveSwap.
+func (g *dbGate) swap(gen uint64, db *sql.DB) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.db != nil && g.db != db {
+	if db == nil || !g.swapping || gen != g.swapGen {
+		return
+	}
+	if g.db != nil && g.db != db && !slices.Contains(g.retired, g.db) {
 		g.retired = append(g.retired, g.db)
 	}
 	g.db = db
