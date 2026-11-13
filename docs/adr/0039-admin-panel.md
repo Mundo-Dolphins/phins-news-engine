@@ -213,6 +213,55 @@ run them, without the panel ever endangering the running bot.
   diff, regression check) and "Apply to the dictionary", disabled until every
   proposal has a decision (skip counts), as in the command line; it runs after
   the typed confirmation and shows the versions, changes and diff written.
+- **Phase 2, part 6: editorial cycle wizard.** `editorial cycle` becomes
+  `/cycle` (local only; linked from the nav and the Review index), a wizard
+  over the `cycle.*` actions that runs the CLI's steps in the CLI's order —
+  sync with the remote host, Telegram import, roster sync, article review,
+  entities, event rules, mined terms, training, summary — and waits for
+  "Next" after each one; the deploy stays in the terminal and the summary
+  says so. The wizard state (`cycle.state`: the current step, each step's
+  status, result and error, the review session id and the start options)
+  lives in the admin state under one key, so it survives a sync and a panel
+  restart: reopening continues at the saved step without running earlier
+  steps again, and a step left `running` by an earlier process can be run
+  again. One cycle at a time; "Start cycle" takes the sample size and the
+  entity verification depth (local, full, none); "Abandon cycle", after the
+  typed confirmation, cancels the cycle and its review session. `cycle.next`
+  refuses a step that is not finished; `skip` works on every step but the
+  article review and the summary, and records why. The screen shows a rail
+  of the nine steps with their status, the current step's panel, and Next,
+  Skip (skippable steps only) and Retry (failed job steps).
+  **Job steps** (`cycle.sync`, `cycle.telegram_import`, `cycle.roster_sync`,
+  the entity discovery, the event rule discover and apply, `cycle.train`)
+  run as long-running jobs whose log the panel follows; a failure marks the
+  step failed with its error shown as is, and it can be retried. The sync is
+  the `SwapsDB` action of the gate above: it is refused while anything else
+  runs and every other action fails fast while it runs, and after it the
+  wizard reloads its state from the new database. The host's
+  `Options.Remote` provides the remote host, its key, the sync script and
+  the Telegram client; never a panel field. With no remote or Telegram
+  hooks the step says "Not available on this host" and only Skip moves on.
+  The Telegram client is built non-interactive: an unauthorised or expired
+  session fails the step with "log in to Telegram from the terminal first"
+  and never waits for a code. **Review steps** embed the review screens:
+  `/review/articles` (`cycle.review_open`, `review_queue`, `review_decide`,
+  `review_finish`, `review_pause`; the frozen review set of the session,
+  `P` publish, `R` reject, `A` ambiguous, `D` duplicate, `S` same news,
+  `U` update, `E` edit category, `K` skip, decided articles can be decided
+  again, and leaving the screen pauses the session), the entity review
+  limited to the session's articles (`entities.review_queue` with
+  `session_id`) after `cycle.entities_discover`, finished with
+  `cycle.entities_finish`, the event rule review with the cycle's own
+  discover and apply actions (`cycle.event_rules_discover`,
+  `cycle.event_rules_apply`, so the step counts them) finished with
+  `cycle.event_rules_finish`, and `/review/terms` after
+  `cycle.terms_prepare` (`A` approve, asking for a category when the guess
+  is not one, `R` reject into the mining policy's ignored terms, `C`
+  categorize; the dictionary is written once, by `cycle.terms_finish`, after
+  every term has a decision). **Training** shows the winner with its
+  metrics and asks before "Promote" (typed confirmation) or "Don't
+  promote"; a second decision is refused. **Summary** shows the CLI's
+  report; finishing the cycle writes its audit report as the CLI does.
 - **Production writes only operational state.** Reads everywhere, plus
   `claims.retry`, `claims.release`, `outbox.expire`, `outbox.repair` and the
   `label.*` writes. Training, promote and rollback are local-only and reach the Pi through the normal deploy; no CPU-heavy job runs
@@ -254,7 +303,10 @@ actions are running; try again when they finish"), and any action requested
 while it runs fails fast (`409 conflict` "database sync in progress"), over
 REST and MCP alike. Each run reads `Env.DB` from the gate, so later actions
 use the new handle; the old one is closed once the swapping action returns.
-Host hooks for the remote host and Telegram arrive as `Options.Remote`.
+Host hooks for the remote host and Telegram arrive as `Options.Remote`
+(host, key, sync script and the Telegram client factory); the panel never
+takes them from a field, and a zero value means "not available on this
+host".
 
 **Access.** Plain HTTP on the LAN. Clients must come from
 `ADMIN_ALLOWED_CIDRS`; the client address is `RemoteAddr`, and

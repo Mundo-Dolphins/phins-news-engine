@@ -225,3 +225,31 @@ kbd { font-family: ui-monospace, monospace; font-size: .75em; padding: 0 5px; bo
   .dataset-paths { grid-template-columns: 1fr; }
   .proposal-editor-fields { grid-template-columns: 1fr; }
 }
+.cycle-layout { display: grid; grid-template-columns: minmax(180px, 220px) minmax(0, 1fr); gap: 16px; align-items: start; }
+.cycle-main { min-width: 0; }
+.cycle-rail { list-style: none; margin: 0; padding: 0; background: var(--card); border: 1px solid var(--border); border-radius: 8px; position: sticky; top: 12px; counter-reset: cycle-step; }
+.cycle-rail li { counter-increment: cycle-step; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; padding: 8px 10px; border-left: 4px solid transparent; }
+.cycle-rail li + li { border-top: 1px solid var(--border); }
+.cycle-rail li::before { content: counter(cycle-step) "."; color: var(--muted); min-width: 1.4em; }
+.cycle-rail li.current { background: var(--selected-bg); border-left-color: var(--accent); font-weight: 600; }
+.cycle-rail .badge { margin-left: auto; font-weight: 400; }
+.status-done { color: var(--accent); border-color: var(--accent); }
+.status-skipped { color: var(--muted); }
+.status-running { color: var(--warn-fg); background: var(--warn-bg); }
+.cycle-panel { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; margin: 0 0 12px; min-width: 0; }
+.cycle-panel > h2 { margin: 0 0 4px; }
+.cycle-panel > h2 .badge { vertical-align: middle; }
+.cycle-actions { position: sticky; bottom: 0; background: var(--bg); padding: 8px 0; }
+.cycle-unavailable { padding: 10px 14px; border-radius: 8px; border: 1px dashed var(--border); }
+.cycle-unavailable p { margin: 0 0 4px; }
+.cycle-step-error { white-space: pre-wrap; word-break: break-word; }
+.cycle-job { margin: 0 0 12px; }
+.cycle-result { display: grid; gap: 8px; margin: 0 0 12px; }
+.cycle-result > p { margin: 0; }
+.cycle-winner p { margin: 0 0 4px; }
+.cycle-report { max-height: 60vh; }
+.cycle-start { margin-top: 8px; }
+@media (max-width: 720px) {
+  .cycle-layout { grid-template-columns: minmax(0, 1fr); }
+  .cycle-rail { position: static; }
+}

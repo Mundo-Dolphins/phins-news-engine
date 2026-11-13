@@ -26,6 +26,7 @@ export function Layout({ children }: { children: ComponentChildren }) {
           <a href="/jobs">Jobs</a>
           <a href="/audit">Audit</a>
           {mode === "local" && <a href="/review">Review</a>}
+          {mode === "local" && <a href="/cycle">Editorial cycle</a>}
         </nav>
         <span class="spacer" />
         {health && <span class={"badge mode-" + health.mode}>{health.mode}</span>}

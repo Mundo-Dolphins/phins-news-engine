@@ -460,3 +460,39 @@ describe("ReviewEvents", () => {
     }
   });
 });
+
+describe("ReviewEventsScreen in the editorial cycle", () => {
+  beforeEach(() => {
+    run.mockReset();
+    events.mockReset();
+  });
+
+  it("discovers and applies with the given actions and shows the apply summary", async () => {
+    const { ReviewEventsScreen } = await import("./ReviewEvents");
+    serve(
+      {},
+      {
+        "cycle.event_rules_discover": () => ({ job: job("c1", "cycle.event_rules_discover") }),
+        "cycle.event_rules_apply": () => ({ job: job("c2", "cycle.event_rules_apply") }),
+      },
+    );
+    render(<ReviewEventsScreen discoverAction="cycle.event_rules_discover" applyAction="cycle.event_rules_apply" />);
+    await waitFor(() => expect(calls("events.rules_queue").length).toBe(1));
+    events.mockImplementation((id, _line, onEnd) => {
+      onEnd(
+        id === "c1"
+          ? job("c1", "cycle.event_rules_discover", "succeeded", { render: "object", summary: "60 sampled, 2 calls (0 failed), 1 proposals created or updated", object: { sampled: 60, proposed: 1 } })
+          : job("c2", "cycle.event_rules_apply", "succeeded", { render: "object", summary: "PASS: 2 rule(s) applied to configs/generated.yml", object: { sampled: 60, applied: 2 } }),
+      );
+      return () => {};
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Discover phrases" }));
+    expect(await screen.findByText("60 sampled, 2 calls (0 failed), 1 proposals created or updated")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Run gate and apply" }));
+    expect(await screen.findByText("PASS: 2 rule(s) applied to configs/generated.yml")).toBeTruthy();
+    expect(calls("events.rules_discover")).toHaveLength(0);
+    expect(calls("events.rules_apply")).toHaveLength(0);
+    expect(run).toHaveBeenCalledWith("cycle.event_rules_discover", {}, false);
+    expect(run).toHaveBeenCalledWith("cycle.event_rules_apply", {}, false);
+  });
+});

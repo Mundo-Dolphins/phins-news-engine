@@ -23,6 +23,12 @@ describe("Review index", () => {
     expect(screen.getByRole("link", { name: /Event rule review/ }).getAttribute("href")).toBe("/review/events");
   });
 
+  it("links the editorial cycle wizard in local mode", async () => {
+    vi.mocked(getSession).mockResolvedValue({ username: "ana", mode: "local" });
+    render(<Review />);
+    expect((await screen.findByRole("link", { name: /Editorial cycle/ })).getAttribute("href")).toBe("/cycle");
+  });
+
   it("hides the dictionary update review when the host does not register it", async () => {
     vi.mocked(getSession).mockResolvedValue({ username: "ana", mode: "local" });
     // The catalog answers only when the test says so, after the index rendered.
