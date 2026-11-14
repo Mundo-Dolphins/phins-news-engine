@@ -1,4 +1,4 @@
-package seenitems
+package seenitemsbackfill
 
 import (
 	"context"
@@ -13,7 +13,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/ports/out"
 )
 
-func TestRunSeenItemsBackfill_BackfillsOneRowPerIdentityKeepingMostRecent(t *testing.T) {
+func TestRun_BackfillsOneRowPerIdentityKeepingMostRecent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "backfill.db")
 	db, err := infrasqlite.Open(path, 5*time.Second)
 	if err != nil {
@@ -41,9 +41,9 @@ func TestRunSeenItemsBackfill_BackfillsOneRowPerIdentityKeepingMostRecent(t *tes
 	// A distinct identity with no external_id — falls back to canonical_url.
 	insert("article-web", "", "https://example.com/website-story", "Website story", "published", now.Add(-2*time.Hour))
 
-	result, err := RunSeenItemsBackfill(context.Background(), db, now)
+	result, err := Run(context.Background(), db, now)
 	if err != nil {
-		t.Fatalf("RunSeenItemsBackfill() error = %v", err)
+		t.Fatalf("Run() error = %v", err)
 	}
 	if result.Candidates != 2 || result.Inserted != 2 || result.Skipped != 0 {
 		t.Fatalf("result = %+v, want Candidates=2 Inserted=2 Skipped=0", result)
@@ -63,9 +63,9 @@ func TestRunSeenItemsBackfill_BackfillsOneRowPerIdentityKeepingMostRecent(t *tes
 	}
 
 	// Re-running is a no-op (idempotent).
-	result2, err := RunSeenItemsBackfill(context.Background(), db, now)
+	result2, err := Run(context.Background(), db, now)
 	if err != nil {
-		t.Fatalf("second RunSeenItemsBackfill() error = %v", err)
+		t.Fatalf("second Run() error = %v", err)
 	}
 	if result2.Inserted != 0 || result2.Skipped != 2 {
 		t.Fatalf("result2 = %+v, want Inserted=0 Skipped=2 (already-backfilled identities must be no-ops)", result2)
