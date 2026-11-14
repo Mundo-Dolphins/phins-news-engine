@@ -564,6 +564,16 @@ func TestCatalogStep2Batch1(t *testing.T) {
 	}
 }
 
+// TestCatalogSeenItemsBackfill pins that seen_items.backfill is offered in
+// both modes.
+func TestCatalogSeenItemsBackfill(t *testing.T) {
+	for _, m := range []action.Mode{action.ModeLocal, action.ModeProduction} {
+		if !slices.Contains(admin.RegistryFor(m), "seen_items.backfill") {
+			t.Errorf("%s mode lacks seen_items.backfill", m)
+		}
+	}
+}
+
 // TestCatalogReviewActions pins that the review actions are local only.
 func TestCatalogReviewActions(t *testing.T) {
 	for _, n := range []string{"train.review_queue", "train.review_decide", "train.review_dataset_queue", "train.review_dataset_decide"} {

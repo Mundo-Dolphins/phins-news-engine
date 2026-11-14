@@ -30,6 +30,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/events"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/label"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/outbox"
+	seenitemsactions "github.com/Mundo-Dolphins/phins-news-engine/admin/actions/seenitems"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/sourcepolicy"
 	sqliteactions "github.com/Mundo-Dolphins/phins-news-engine/admin/actions/sqlite"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/stats"
@@ -66,6 +67,7 @@ func init() {
 	registry.Add(outbox.Actions()...)
 	registry.Add(stats.Actions()...)
 	registry.Add(sqliteactions.Actions()...)
+	registry.Add(seenitemsactions.Actions()...)
 	registry.Add(train.Actions()...)
 	registry.Add(entities.Actions()...)
 	registry.Add(classifierdictionary.Actions()...)

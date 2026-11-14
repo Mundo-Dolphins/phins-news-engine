@@ -37,6 +37,11 @@ run them, without the panel ever endangering the running bot.
   `outbox.expire` and `outbox.repair` are destructive and need `confirm`.
   Their logic lives in `app/pipelinestats`, `app/dbinspect`,
   `app/humanlabels` and `app/datasetaudit`, shared with the CLI.
+- **Seen items backfill.** `seen_items.backfill` mirrors `seenitemsbackfill`:
+  write, long-running and exclusive, offered in both modes. It takes no
+  params and returns the candidate, inserted and skipped counts; a second run
+  inserts nothing. The logic lives in `app/seenitemsbackfill`, shared with
+  the CLI.
 - **Step 2, batch 2.** 26 more actions in three groups: `entities.*` (list,
   show, extract, league_evaluate, approve, reject, generate, roster_sync,
   discover, proposals_verify, fallback_test, wikidata_evaluate),
