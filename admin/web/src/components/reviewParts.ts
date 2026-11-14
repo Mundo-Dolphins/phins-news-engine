@@ -1,4 +1,4 @@
-import { ApiError, getJob, jobEvents, type Job } from "../api";
+import { ApiError, getJob, jobEvents, runAction, type Job, type LogLine } from "../api";
 import type { RefObject } from "preact";
 import { useLayoutEffect, useRef } from "preact/hooks";
 
@@ -53,9 +53,10 @@ const POLL_MS = 2000;
  * untilJobEnd resolves with the job once it has finished, following its
  * event stream; when the stream fails it polls the job instead. The open
  * stream's closer is kept in `streams` until the job ends, so a page can
- * close it when it unmounts.
+ * close it when it unmounts. `onLine`, when given, receives each log line
+ * the stream delivers (none once it falls back to polling).
  */
-export function untilJobEnd(job: Job, streams: Set<() => void>): Promise<Job> {
+export function untilJobEnd(job: Job, streams: Set<() => void>, onLine?: (l: LogLine) => void): Promise<Job> {
   if (!activeJob(job.status)) return Promise.resolve(job);
   return new Promise<Job>((resolve, reject) => {
     // The end may arrive before jobEvents returns its closer.
@@ -78,7 +79,7 @@ export function untilJobEnd(job: Job, streams: Set<() => void>): Promise<Job> {
     };
     close = jobEvents(
       job.id,
-      () => {},
+      (l) => onLine?.(l),
       (j) => {
         finish();
         resolve(j);
@@ -90,4 +91,21 @@ export function untilJobEnd(job: Job, streams: Set<() => void>): Promise<Job> {
     );
     if (!ended) streams.add(close);
   });
+}
+
+/**
+ * CycleStepView is where the editorial cycle stands for one of its review
+ * steps: not there (no cycle, or the cycle is at another step), at the
+ * step and open, or at the step with the step already finished.
+ */
+export type CycleStepView = "elsewhere" | "open" | "finished";
+
+/** cycleStepView reads `cycle.state` and tells where the cycle stands for `step`. */
+export async function cycleStepView(step: string): Promise<CycleStepView> {
+  const out = await runAction("cycle.state", {}, false);
+  if ("job" in out) throw new Error("unexpected job for cycle.state");
+  const cycle = (out.result.object as { cycle?: { step: string; steps?: Record<string, { status: string }> } | null } | undefined)?.cycle;
+  if (!cycle || cycle.step !== step) return "elsewhere";
+  const status = cycle.steps?.[step]?.status;
+  return status === "done" || status === "skipped" ? "finished" : "open";
 }

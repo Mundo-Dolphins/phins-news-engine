@@ -22,7 +22,7 @@ func addVerificationFlags(cmd *cobra.Command, f *entitywiring.Stages) {
 
 // cliLoggers tags each wiring component's log lines on the command's stderr.
 func cliLoggers(cmd *cobra.Command) entitywiring.Loggers {
-	return func(c string) appout.Logger { return discoveryLogger{out: cmd.OutOrStderr(), component: c} }
+	return func(c string) appout.Logger { return entitywiring.WriterLogger{Out: cmd.OutOrStderr(), Component: c} }
 }
 
 // llmOverrides turns the --llm-* flag values into wiring overrides; the

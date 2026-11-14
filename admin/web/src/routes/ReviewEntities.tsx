@@ -271,7 +271,17 @@ interface Picking {
 /** alreadyDecided matches the conflict for a proposal that is no longer pending. */
 const alreadyDecided = (e: ApiError) => e.code === "conflict" && /^proposal \S+ is already /.test(e.message);
 
-function ReviewEntitiesScreen() {
+/** ReviewEntitiesProps configures the entity review screen. */
+export interface ReviewEntitiesProps {
+  /**
+   * sessionId limits the queue to the proposals sourced from the articles
+   * that editorial cycle session published or rejected (its entity step).
+   */
+  sessionId?: string;
+}
+
+/** ReviewEntitiesScreen is the entity review without the local-mode guard, for embedding. */
+export function ReviewEntitiesScreen({ sessionId }: ReviewEntitiesProps = {}) {
   const [items, setItems] = useState<EntityProposalItem[] | null>(null);
   // Skipped and decided proposals stay hidden for this page session, also
   // across refreshes that raced a decision.
@@ -281,7 +291,9 @@ function ReviewEntitiesScreen() {
 
   const load = useCallback(async () => {
     try {
-      const out = await runAction("entities.review_queue", { limit: QUEUE_LIMIT }, false);
+      const params: Record<string, unknown> = { limit: QUEUE_LIMIT };
+      if (sessionId) params.session_id = sessionId;
+      const out = await runAction("entities.review_queue", params, false);
       if ("job" in out) throw new Error("unexpected job for entities.review_queue");
       const obj = out.result.object as { items?: EntityProposalItem[] } | undefined;
       setItems(obj?.items ?? []);
@@ -289,7 +301,7 @@ function ReviewEntitiesScreen() {
     } catch (e) {
       setNotice({ kind: "error", text: "Could not load the entity review: " + errorText(e) });
     }
-  }, []);
+  }, [sessionId]);
 
   useEffect(() => {
     load();

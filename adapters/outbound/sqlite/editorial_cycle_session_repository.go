@@ -87,6 +87,19 @@ func (r *EditorialCycleSessionRepository) GetLatestResumable(ctx context.Context
 	return s, nil
 }
 
+// Get returns the session with id, or a wrapped sql.ErrNoRows if none exists.
+func (r *EditorialCycleSessionRepository) Get(ctx context.Context, id string) (appout.EditorialCycleSession, error) {
+	row := executor(ctx, r.db).QueryRowContext(ctx, `
+		SELECT id, started_at, updated_at, status, current_step, flags_json, total_candidates
+		FROM editorial_cycle_sessions WHERE id = ?
+	`, id)
+	var s appout.EditorialCycleSession
+	if err := scanEditorialCycleSession(row, &s); err != nil {
+		return appout.EditorialCycleSession{}, fmt.Errorf("sqlite: get editorial cycle session %s: %w", id, err)
+	}
+	return s, nil
+}
+
 func scanEditorialCycleSession(row rowScanner, s *appout.EditorialCycleSession) error {
 	var startedAt, updatedAt sqliteNullTime
 	if err := row.Scan(&s.ID, &startedAt, &updatedAt, &s.Status, &s.CurrentStep, &s.FlagsJSON, &s.TotalCandidates); err != nil {

@@ -293,3 +293,15 @@ describe("ReviewEntities", () => {
     expect(await screen.findByRole("heading", { name: "Ann Example" })).toBeTruthy();
   });
 });
+
+describe("ReviewEntitiesScreen in the editorial cycle", () => {
+  beforeEach(() => run.mockReset());
+
+  it("asks for the session's proposals only", async () => {
+    const { ReviewEntitiesScreen } = await import("./ReviewEntities");
+    run.mockResolvedValueOnce(queue([proposal()]));
+    render(<ReviewEntitiesScreen sessionId="sess-1" />);
+    expect(await screen.findByRole("heading", { name: "Ann Example" })).toBeTruthy();
+    expect(run).toHaveBeenCalledWith("entities.review_queue", { limit: 100, session_id: "sess-1" }, false);
+  });
+});

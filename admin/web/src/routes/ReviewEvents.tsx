@@ -221,6 +221,15 @@ function MetricsTable({ before, after }: { before: Metrics; after: Metrics }) {
 
 function ApplyOutcome({ result }: { result: Result }) {
   const r = result.object as ApplyResult | undefined;
+  // The editorial cycle's apply returns the step counters, not the gate's detail: show its summary.
+  if (r && !Array.isArray(r.applied)) {
+    const blocked = (result.summary ?? "").startsWith("BLOCKED");
+    return (
+      <p class={"notice " + (blocked ? "notice-error" : "notice-info")} role="status">
+        {result.summary}
+      </p>
+    );
+  }
   if (!r) return <p>{result.summary}</p>;
   if (r.nothing) return <p class="notice notice-info">Nothing to apply.</p>;
   return (
@@ -284,7 +293,31 @@ interface Editing {
   settle(outcome: Notice | void): void;
 }
 
-function ReviewEventsScreen() {
+/** ReviewEventsProps configures the event rule review screen. */
+export interface ReviewEventsProps {
+  /** discoverAction is the long-running action Discover runs (default `events.rules_discover`). */
+  discoverAction?: string;
+  /** applyAction is the long-running action Apply runs (default `events.rules_apply`). */
+  applyAction?: string;
+  /** onJobStart is called when Discover or Apply starts. */
+  onJobStart?(): void;
+  /** onJobEnd is called once that run has ended, whatever its outcome. */
+  onJobEnd?(): void;
+}
+
+/**
+ * ReviewEventsScreen is the event rule review without the local-mode guard,
+ * for embedding; the editorial cycle passes its own discover and apply
+ * actions so the step counts them.
+ */
+export function ReviewEventsScreen({
+  discoverAction = "events.rules_discover",
+  applyAction = "events.rules_apply",
+  onJobStart,
+  onJobEnd,
+}: ReviewEventsProps = {}) {
+  const jobHooks = useRef({ onJobStart, onJobEnd });
+  jobHooks.current = { onJobStart, onJobEnd };
   const [queue, setQueue] = useState<Queue | null>(null);
   const [loadError, setLoadError] = useState<string>("");
   // Decided and skipped proposals stay hidden for this page session, also
@@ -328,6 +361,7 @@ function ReviewEventsScreen() {
 
   /** startJob runs a long-running action and reports its end to set. */
   const startJob = async (name: string, set: (s: JobState) => void) => {
+    jobHooks.current.onJobStart?.();
     try {
       const out = await runAction(name, {}, false);
       let result: Result | undefined;
@@ -347,6 +381,7 @@ function ReviewEventsScreen() {
       set({ kind: "error", text: errorText(e) });
     } finally {
       load();
+      jobHooks.current.onJobEnd?.();
     }
   };
 
@@ -486,7 +521,7 @@ function ReviewEventsScreen() {
             disabled={busyJob}
             onClick={() => {
               setDiscover({ kind: "idle" });
-              startJob("events.rules_discover", setDiscover);
+              startJob(discoverAction, setDiscover);
             }}
           >
             {discover.kind === "running" ? "Discovering…" : "Discover phrases"}
@@ -608,7 +643,7 @@ function ReviewEventsScreen() {
             onClick={() => {
               setApply({ kind: "idle" });
               setApplyNotice(undefined);
-              startJob("events.rules_apply", setApply);
+              startJob(applyAction, setApply);
             }}
           >
             Run gate and apply

@@ -16,6 +16,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/article"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/entityproposal"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/source"
+	"github.com/Mundo-Dolphins/phins-news-engine/ports/out"
 )
 
 // queueItems decodes the items of an entities.review_queue result.
@@ -324,5 +325,66 @@ categories:
 		if f.status(pid) != entityproposal.StatusApproved {
 			t.Fatalf("proposal for %s not approved", tc.id)
 		}
+	}
+}
+
+// TestEntitiesQueueSessionFilter: with session_id the queue holds only the
+// pending proposals sourced from the articles published or rejected in that
+// review session (the editorial cycle's entity step).
+func TestEntitiesQueueSessionFilter(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	if err := sqliteadapter.NewEditorialCycleSessionRepository(f.db).Create(ctx, out.EditorialCycleSession{
+		ID: "sess-x", StartedAt: now, UpdatedAt: now, Status: "completed", CurrentStep: "review",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	src := source.Source{ID: testsupport.MustID(t, source.TypeWeb, "example-com"), Name: "Example", Type: source.TypeWeb}
+	for id, label := range map[string]string{"pub": "publish", "rej": "reject", "amb": ""} {
+		if err := sqliteadapter.NewArticleRepository(f.db).Save(ctx, article.Article{
+			ID: id, OriginalURL: "https://example.com/" + id, CanonicalURL: "https://example.com/" + id,
+			Source: src, Title: id, Summary: "s", FetchedAt: now, Status: article.StatusFetched,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		action := label
+		if action == "" {
+			action = "ambiguous"
+		}
+		if err := sqliteadapter.NewReviewDecisionRepository(f.db).Save(ctx, out.ReviewDecision{
+			SessionID: "sess-x", ArticleID: id, Action: action, Label: label, DecidedAt: now,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fromPub := f.seed(entityproposal.Proposal{CanonicalName: "Quill Farrowby", Occurrences: 1,
+		Sources: []entityproposal.Source{{ArticleID: "pub", ArticleTitle: "pub"}}})
+	fromBoth := f.seed(entityproposal.Proposal{CanonicalName: "Zeno Ashbury", Occurrences: 5,
+		Sources: []entityproposal.Source{{ArticleID: "other", ArticleTitle: "other"}, {ArticleID: "rej", ArticleTitle: "rej"}}})
+	f.seed(entityproposal.Proposal{CanonicalName: "Orrin Pellwick", Occurrences: 9,
+		Sources: []entityproposal.Source{{ArticleID: "amb", ArticleTitle: "amb"}}})
+	f.seed(entityproposal.Proposal{CanonicalName: "Marlo Venn", Occurrences: 9,
+		Sources: []entityproposal.Source{{ArticleID: "other", ArticleTitle: "other"}}})
+	f.seed(entityproposal.Proposal{CanonicalName: "Decided Already", Occurrences: 9, Status: entityproposal.StatusApproved,
+		Sources: []entityproposal.Source{{ArticleID: "pub", ArticleTitle: "pub"}}})
+
+	res, err := f.run("entities.review_queue", `{"session_id":"sess-x"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := queueItems(t, res)
+	if len(items) != 2 || items[0]["id"] != fromBoth || items[1]["id"] != fromPub {
+		t.Fatalf("items = %+v", items)
+	}
+	if res.Summary != "2 pending entity proposal(s)" {
+		t.Errorf("summary = %q", res.Summary)
+	}
+	all, err := f.run("entities.review_queue", `{}`)
+	if err != nil || len(queueItems(t, all)) != 4 {
+		t.Fatalf("unfiltered = %+v, %v", all.Object, err)
+	}
+	none, err := f.run("entities.review_queue", `{"session_id":"no-such-session"}`)
+	if err != nil || len(queueItems(t, none)) != 0 {
+		t.Fatalf("unknown session = %+v, %v", none.Object, err)
 	}
 }

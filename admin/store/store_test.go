@@ -227,3 +227,33 @@ func TestAppendLogUnknownJobFails(t *testing.T) {
 		t.Error("AppendLog for unknown job should error")
 	}
 }
+
+func TestStatePutGetRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "admin.db")
+	s, err := store.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := s.GetState(ctx, "wizard"); ok || err != nil {
+		t.Fatalf("missing key: ok=%v err=%v", ok, err)
+	}
+	if err := s.PutState(ctx, "wizard", []byte(`{"step":1}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutState(ctx, "wizard", []byte(`{"step":2}`)); err != nil {
+		t.Fatal(err)
+	}
+	if v, ok, err := s.GetState(ctx, "wizard"); !ok || err != nil || string(v) != `{"step":2}` {
+		t.Fatalf("GetState = %q ok=%v err=%v", v, ok, err)
+	}
+	_ = s.Close()
+	s, err = store.Open(ctx, path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer s.Close()
+	if v, ok, err := s.GetState(ctx, "wizard"); !ok || err != nil || string(v) != `{"step":2}` {
+		t.Fatalf("after reopen GetState = %q ok=%v err=%v", v, ok, err)
+	}
+}

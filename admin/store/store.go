@@ -1,5 +1,5 @@
 // Package store persists the admin panel's own state (sessions, jobs, job
-// logs and the audit trail) in admin.db, separate from the bot's
+// logs, the audit trail and a key/value state) in admin.db, separate from the bot's
 // operational database.
 package store
 
@@ -339,6 +339,38 @@ func (s *Store) DeleteSession(ctx context.Context, tokenHash string) error {
 func (s *Store) PurgeExpiredSessions(ctx context.Context, now time.Time) error {
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM admin_sessions WHERE expires_at <= ?`, ts(now)); err != nil {
 		return fmt.Errorf("admin store: purge sessions: %w", err)
+	}
+	return nil
+}
+
+// Store is the admin's [action.StateStore].
+var _ action.StateStore = (*Store)(nil)
+
+// GetState returns the value stored under key; ok is false when the key is
+// missing.
+func (s *Store) GetState(ctx context.Context, key string) ([]byte, bool, error) {
+	var v []byte
+	err := s.db.QueryRowContext(ctx, `SELECT value FROM admin_state WHERE key = ?`, key).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("admin store: get state %q: %w", key, err)
+	}
+	return v, true, nil
+}
+
+// PutState stores value under key, replacing any previous value.
+func (s *Store) PutState(ctx context.Context, key string, value []byte) error {
+	if value == nil {
+		value = []byte{}
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO admin_state (key, value, updated_at) VALUES (?, ?, ?)
+		ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+		key, value, ts(time.Now()))
+	if err != nil {
+		return fmt.Errorf("admin store: put state %q: %w", key, err)
 	}
 	return nil
 }

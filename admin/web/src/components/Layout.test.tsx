@@ -19,10 +19,17 @@ describe("Layout", () => {
     expect(await screen.findByRole("link", { name: "Review" })).toBeTruthy();
   });
 
+  it("links the editorial cycle in local mode only", async () => {
+    vi.mocked(getSession).mockResolvedValue({ username: "ana", mode: "local" });
+    render(<Layout>x</Layout>);
+    expect((await screen.findByRole("link", { name: "Editorial cycle" })).getAttribute("href")).toBe("/cycle");
+  });
+
   it("hides the Review nav in production mode", async () => {
     vi.mocked(getSession).mockResolvedValue({ username: "ana", mode: "production" });
     render(<Layout>x</Layout>);
     await screen.findByText(/Log out \(ana\)/);
     expect(screen.queryByRole("link", { name: "Review" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Editorial cycle" })).toBeNull();
   });
 });

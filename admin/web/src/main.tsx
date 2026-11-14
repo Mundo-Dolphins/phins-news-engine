@@ -14,6 +14,9 @@ import { ReviewDataset } from "./routes/ReviewDataset";
 import { ReviewEntities } from "./routes/ReviewEntities";
 import { ReviewEvents } from "./routes/ReviewEvents";
 import { ReviewDictionary } from "./routes/ReviewDictionary";
+import { ReviewArticles } from "./routes/ReviewArticles";
+import { ReviewTerms } from "./routes/ReviewTerms";
+import { Cycle } from "./routes/Cycle";
 import "./style.css";
 
 function NotFound() {
@@ -31,12 +34,15 @@ function App() {
       <Route path="/jobs" component={Jobs} />
       <Route path="/jobs/:id" component={JobDetail} />
       <Route path="/audit" component={Audit} />
+      <Route path="/cycle" component={Cycle} />
       <Route path="/review" component={Review} />
       <Route path="/review/train" component={ReviewTrain} />
       <Route path="/review/dataset" component={ReviewDataset} />
       <Route path="/review/entities" component={ReviewEntities} />
       <Route path="/review/events" component={ReviewEvents} />
       <Route path="/review/dictionary" component={ReviewDictionary} />
+      <Route path="/review/articles" component={ReviewArticles} />
+      <Route path="/review/terms" component={ReviewTerms} />
       <Route default component={NotFound} />
     </Router>
   );

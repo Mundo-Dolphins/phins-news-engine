@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -13,16 +13,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	sqliteadapter "github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqlite"
-	"github.com/Mundo-Dolphins/phins-news-engine/domain/dictionary"
-	"github.com/Mundo-Dolphins/phins-news-engine/infra/clock"
+	"github.com/Mundo-Dolphins/phins-news-engine/app/dictionarymining"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
-	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionaryfile"
-	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionaryminingfile"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/dictionarywiring"
 	infrasqlite "github.com/Mundo-Dolphins/phins-news-engine/infra/sqlite"
 	"github.com/Mundo-Dolphins/phins-news-engine/migrations"
-	"github.com/Mundo-Dolphins/phins-news-engine/ports/out"
 )
 
 func NewCommand() *cobra.Command {
@@ -124,11 +119,10 @@ func newMineCandidatesCommand() *cobra.Command {
 // paused signals quit or EOF before the review finished. A supplied scanner
 // preserves input buffered by the preceding article review.
 func RunUpdateFlow(cmd *cobra.Command, cfg *config.Config, db *sql.DB, sessionID string, dryRun bool, scanner *bufio.Scanner) (approvedCount int, paused bool, err error) {
-	candidatesRepo := sqliteadapter.NewDictionaryCandidateRepository(db)
-	realClock := clock.Real{}
+	deps := dictionarywiring.MinedTermReview(db, cfg, cmd.OutOrStderr())
 
-	sel, err := dictionarywiring.SelectMineCandidates(cmd.Context(), db, cfg, sessionID)
-	for _, w := range sel.Report.Warnings {
+	sel, err := deps.Mine(cmd.Context(), sessionID)
+	for _, w := range sel.Warnings {
 		cmd.Printf("%s\n", w)
 	}
 	if err != nil {
@@ -138,7 +132,7 @@ func RunUpdateFlow(cmd *cobra.Command, cfg *config.Config, db *sql.DB, sessionID
 		}
 		return 0, false, err
 	}
-	targetSession, mined, dict, filter := sel.Report.Session, sel.Report.Candidates, sel.Dictionary, sel.Filter
+	targetSession, mined := sel.Session, sel.Candidates
 
 	cmd.Printf("session %s: %d candidate term(s) mined\n", targetSession, len(mined))
 	for _, c := range mined {
@@ -150,36 +144,19 @@ func RunUpdateFlow(cmd *cobra.Command, cfg *config.Config, db *sql.DB, sessionID
 		return 0, false, nil
 	}
 
-	// On resume, only offer candidates still produced by the current extraction
-	// and catalog. Earlier runs may have persisted split name fragments.
-	currentTerms := make(map[string]bool, len(mined))
-	for _, c := range mined {
-		currentTerms[strings.ToLower(c.Term)] = true
-		if err := candidatesRepo.Save(cmd.Context(), out.DictionaryCandidate{
-			Term: c.Term, SessionID: targetSession, CategoryGuess: c.CategoryGuess,
-			SupportCount: c.SupportCount, FirstSeenArticle: c.FirstSeenArticleID, Status: "pending",
-		}); err != nil {
-			return 0, false, err
-		}
-	}
-
-	existing, err := candidatesRepo.ListBySession(cmd.Context(), targetSession)
+	prepared, err := dictionarymining.Offer(cmd.Context(), deps, sel)
 	if err != nil {
 		return 0, false, err
 	}
-
-	categoryNames := make(map[string]bool, len(dict.Categories))
-	for _, cat := range dict.Categories {
-		categoryNames[cat.Name] = true
+	categoryNames := make(map[string]bool, len(prepared.Categories))
+	for _, name := range prepared.Categories {
+		categoryNames[name] = true
 	}
 
 	if scanner == nil {
 		scanner = bufio.NewScanner(cmd.InOrStdin())
 	}
-	for _, c := range existing {
-		if c.Status != "pending" || !currentTerms[strings.ToLower(c.Term)] || !filter.Allows(c.Term, c.SupportCount) {
-			continue
-		}
+	for _, c := range prepared.Offered {
 		cmd.Printf("----------------------------------------------------------------\n")
 		cmd.Printf("Term:      %s\n", c.Term)
 		cmd.Printf("Support:   %d (first seen: %s)\n", c.SupportCount, c.FirstSeenArticle)
@@ -194,36 +171,29 @@ func RunUpdateFlow(cmd *cobra.Command, cfg *config.Config, db *sql.DB, sessionID
 		switch action {
 		case "q":
 			cmd.Println("progress saved — resume with `dictionary mine-candidates --session " + targetSession + "`")
-			approvedCount, err = writeDictionaryIfApproved(cmd, cfg.Dictionary.Path, candidatesRepo, targetSession, realClock)
+			approvedCount, err = writeDictionaryIfApproved(cmd, deps, targetSession)
 			return approvedCount, true, err
 		case "a":
 			category := c.CategoryGuess
 			if category == "" || !categoryNames[category] {
-				category, err = promptForCategory(cmd, scanner, categoryNames)
+				category, err = promptForCategory(cmd, scanner, prepared.Categories)
 				if err != nil {
 					return 0, false, err
 				}
 			}
-			if err := candidatesRepo.UpdateDecision(cmd.Context(), c.Term, "approved", category, realClock.Now()); err != nil {
+			if err := dictionarymining.Decide(cmd.Context(), deps, targetSession, c.Term, dictionarymining.ActionApprove, category); err != nil {
 				return 0, false, err
 			}
 		case "r":
-			if err := candidatesRepo.UpdateDecision(cmd.Context(), c.Term, "rejected", c.CategoryGuess, realClock.Now()); err != nil {
+			if err := dictionarymining.Decide(cmd.Context(), deps, targetSession, c.Term, dictionarymining.ActionReject, ""); err != nil {
 				return 0, false, err
 			}
-			// Also remember it in the mining policy file, which outlives the
-			// database and is shared between machines.
-			if added, addErr := dictionaryminingfile.AddIgnoredTerm(cfg.DictionaryMining.Path, c.Term); addErr != nil {
-				cmd.Printf("WARNING: rejected term not added to %s: %v\n", cfg.DictionaryMining.Path, addErr)
-			} else if added {
-				cmd.Printf("  added %q to ignored_terms in %s\n", strings.ToLower(c.Term), cfg.DictionaryMining.Path)
-			}
 		case "c":
-			category, err := promptForCategory(cmd, scanner, categoryNames)
+			category, err := promptForCategory(cmd, scanner, prepared.Categories)
 			if err != nil {
 				return 0, false, err
 			}
-			if err := candidatesRepo.UpdateDecision(cmd.Context(), c.Term, "approved", category, realClock.Now()); err != nil {
+			if err := dictionarymining.Decide(cmd.Context(), deps, targetSession, c.Term, dictionarymining.ActionCategorize, category); err != nil {
 				return 0, false, err
 			}
 		default:
@@ -234,18 +204,13 @@ func RunUpdateFlow(cmd *cobra.Command, cfg *config.Config, db *sql.DB, sessionID
 		return 0, false, fmt.Errorf("dictionary update: read input: %w", err)
 	}
 
-	approvedCount, err = writeDictionaryIfApproved(cmd, cfg.Dictionary.Path, candidatesRepo, targetSession, realClock)
+	approvedCount, err = writeDictionaryIfApproved(cmd, deps, targetSession)
 	return approvedCount, paused, err
 }
 
-// promptForCategory lists every category in stable order and accepts
-// either its number or its name, retrying invalid selections.
-func promptForCategory(cmd *cobra.Command, scanner *bufio.Scanner, categoryNames map[string]bool) (string, error) {
-	categories := make([]string, 0, len(categoryNames))
-	for name := range categoryNames {
-		categories = append(categories, name)
-	}
-	sort.Strings(categories)
+// promptForCategory lists every category (sorted) and accepts either its
+// number or its name, retrying invalid selections.
+func promptForCategory(cmd *cobra.Command, scanner *bufio.Scanner, categories []string) (string, error) {
 	cmd.Println("Categories:")
 	for i, name := range categories {
 		cmd.Printf("  %d. %s\n", i+1, name)
@@ -262,147 +227,31 @@ func promptForCategory(cmd *cobra.Command, scanner *bufio.Scanner, categoryNames
 		if number, err := strconv.Atoi(category); err == nil && number >= 1 && number <= len(categories) {
 			return categories[number-1], nil
 		}
-		if categoryNames[category] {
+		if slices.Contains(categories, category) {
 			return category, nil
 		}
 		cmd.Printf("unknown category %q — must be one of the dictionary's existing categories\n", category)
 	}
 }
 
-// entryTypeForCategory guesses an EntryType for a new entry landing in
-// categoryName — informational only (EntryType doesn't gate scoring;
-// Category.Weight/StrongOverride/RequiresAnyOf do), so an imperfect guess
-// here has no effect on classification behavior.
-func entryTypeForCategory(categoryName string) dictionary.EntryType {
-	switch categoryName {
-	case "coaching_staff":
-		return dictionary.EntryTypeCoach
-	case "owners":
-		return dictionary.EntryTypeOwner
-	case "front_office":
-		return dictionary.EntryTypeFrontOffice
-	case "rivals":
-		return dictionary.EntryTypeRival
-	case "venue":
-		return dictionary.EntryTypeVenue
-	case "hashtags":
-		return dictionary.EntryTypeHashtag
-	case "abbreviations":
-		return dictionary.EntryTypeAbbreviation
-	case "official_names":
-		return dictionary.EntryTypeOfficialName
-	case "url_patterns":
-		return dictionary.EntryTypeURLPattern
-	case "ambiguous_team_terms":
-		return dictionary.EntryTypeAmbiguous
-	case "alumni", "active_roster_core", "nfl_people_context":
-		return dictionary.EntryTypePerson
-	default:
-		if strings.HasPrefix(categoryName, "negative_") {
-			return dictionary.EntryTypeNegative
-		}
-		return dictionary.EntryTypeNFLContext
-	}
-}
-
-// writeDictionaryIfApproved reloads the current on-disk dictionary
-// (freshly, so it reflects anything written since RunE started loading
-// it), appends every dictionary_candidate_terms row with status
-// "approved" for sessionID as a new Entry in its recorded category, bumps
-// the patch version, validates the result, and writes it back — a no-op
-// if nothing was approved. It returns the number of candidates found with
-// status "approved" for sessionID (0 if none), regardless of whether any
-// of them were new enough to actually change the on-disk dictionary.
-func writeDictionaryIfApproved(
-	cmd *cobra.Command,
-	path string,
-	candidatesRepo *sqliteadapter.DictionaryCandidateRepository,
-	sessionID string,
-	clk out.Clock,
-) (int, error) {
-	decided, err := candidatesRepo.ListBySession(cmd.Context(), sessionID)
+// writeDictionaryIfApproved writes the session's approved terms to the
+// dictionary (dictionarymining.Write) and prints the outcome. It returns the
+// number of approved terms whether or not any was new to the dictionary.
+func writeDictionaryIfApproved(cmd *cobra.Command, deps dictionarymining.ReviewDeps, sessionID string) (int, error) {
+	res, err := dictionarymining.Write(cmd.Context(), deps, sessionID)
 	if err != nil {
-		return 0, err
+		return res.Approved, err
 	}
-
-	var approved []out.DictionaryCandidate
-	for _, c := range decided {
-		if c.Status == "approved" {
-			approved = append(approved, c)
-		}
-	}
-	if len(approved) == 0 {
+	switch {
+	case res.Approved == 0:
 		cmd.Println("no candidates approved — dictionary not modified")
-		return 0, nil
-	}
-
-	dict, err := dictionaryfile.Load(path)
-	if err != nil {
-		return len(approved), err
-	}
-	originalVersion := dict.Version
-
-	// A term approved in an earlier `dictionary update` invocation against
-	// this same session may already have been written to the dictionary
-	// file by that invocation's own write-back (each pass through the
-	// approval loop can trigger a write, on "q" as well as on completion).
-	// candidatesRepo has no "already written" status distinct from
-	// "approved" (see out.DictionaryCandidate — only pending/approved/
-	// rejected), so re-check against the freshly loaded file itself,
-	// using the same matcher-based existence check the mining heuristic
-	// already uses to skip terms it already covers, rather than
-	// unconditionally re-appending every approved row and risking a
-	// duplicate-entry validation failure on resume.
-	matcher, err := dictionary.Prepare(dict)
-	if err != nil {
-		return len(approved), fmt.Errorf("dictionary update: prepare matcher: %w", err)
-	}
-
-	added := 0
-	for _, c := range approved {
-		if len(matcher.Find(c.Term)) > 0 {
-			continue
-		}
-		for i := range dict.Categories {
-			if dict.Categories[i].Name != c.CategoryGuess {
-				continue
-			}
-			dict.Categories[i].Entries = append(dict.Categories[i].Entries, dictionary.Entry{
-				CanonicalName: c.Term, Type: entryTypeForCategory(c.CategoryGuess),
-				Source: "dictionary_update", UpdatedAt: clk.Now(), Confidence: 0.5,
-			})
-			added++
-		}
-	}
-	if added == 0 {
+	case res.Added == 0:
 		cmd.Println("no new candidates to write — dictionary not modified")
-		return len(approved), nil
+	default:
+		cmd.Printf("dictionary updated: %d entr%s added, version %s -> %s\n",
+			res.Added, pluralSuffix(res.Added), res.FromVersion, res.ToVersion)
 	}
-
-	newVersion, err := dictionary.BumpPatchVersion(dict.Version)
-	if err != nil {
-		return len(approved), fmt.Errorf("dictionary update: %w", err)
-	}
-	dict.Version = newVersion
-	dict.GeneratedAt = clk.Now()
-	if dict.SchemaVersion >= 2 {
-		dict.Checksum = dictionary.ContentHash(dict)
-	}
-
-	if issues := dictionary.Validate(dict); len(issues) > 0 {
-		for _, issue := range issues {
-			if issue.Severity == dictionary.SeverityError {
-				return len(approved), fmt.Errorf("dictionary update: modified dictionary fails validation: %s", issue.String())
-			}
-		}
-	}
-
-	if err := dictionaryfile.Save(path, dict); err != nil {
-		return len(approved), err
-	}
-	cmd.Printf("dictionary updated: %d entr%s added, version %s -> %s\n",
-		added, pluralSuffix(added), originalVersion, newVersion)
-	return len(approved), nil
+	return res.Approved, nil
 }
 
 func pluralSuffix(n int) string {

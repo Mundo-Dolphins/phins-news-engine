@@ -46,6 +46,7 @@ func TestRegistryDuplicatePanics(t *testing.T) {
 	mustPanic("empty name", Action{Modes: []Mode{ModeLocal}, Run: noop})
 	mustPanic("no modes", Action{Name: "a", Run: noop})
 	mustPanic("nil run", Action{Name: "a", Modes: []Mode{ModeLocal}})
+	mustPanic("swaps without DB", Action{Name: "a", Modes: []Mode{ModeLocal}, Run: noop, SwapsDB: true, NoOperationalDB: true})
 	mustPanic("bad params", Action{Name: "a", Modes: []Mode{ModeLocal}, Run: noop, Params: struct {
 		X map[string]string `json:"x"`
 	}{}})

@@ -78,7 +78,7 @@ mentions_only does in production), ignoring roster staleness; --roster and
 				}
 				cfg = c
 			}
-			rep, genWarnings, err := entitywiring.Extract(cfg, in, time.Now(), discoveryLogger{out: cmd.ErrOrStderr(), component: "extract"})
+			rep, genWarnings, err := entitywiring.Extract(cfg, in, time.Now(), entitywiring.WriterLogger{Out: cmd.ErrOrStderr(), Component: "extract"})
 			if err != nil {
 				return fmt.Errorf("entities extract: %w", err)
 			}

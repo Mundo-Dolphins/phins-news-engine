@@ -10,6 +10,7 @@ import (
 
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/fetcherwiring"
+	"github.com/Mundo-Dolphins/phins-news-engine/ports/out"
 )
 
 // Kind classifies the side effects of an action.
@@ -51,7 +52,44 @@ type Env struct {
 	// FetcherExtensions are the host's fetcher categories, as the CLI
 	// receives them, for actions that build the process fetcher.
 	FetcherExtensions fetcherwiring.Extensions
+	// SwapDB is non-nil only while an action with SwapsDB runs: it installs
+	// newDB as the operational DB for every later action (web and MCP) and
+	// closes the replaced handle once the swapping action returns.
+	SwapDB func(newDB *sql.DB)
+	// State is the admin's own key/value state; it lives in the admin store,
+	// so it survives a swap of the operational DB.
+	State StateStore
+	// Remote is the host's remote-sync and Telegram hooks; its zero value
+	// means they are not available on this host.
+	Remote Remote
 }
+
+// StateStore is a small persistent key/value store.
+type StateStore interface {
+	// GetState returns the value stored under key and whether it exists.
+	GetState(ctx context.Context, key string) ([]byte, bool, error)
+	// PutState stores value under key, replacing any previous value.
+	PutState(ctx context.Context, key string, value []byte) error
+}
+
+// Remote holds the host-provided hooks to reach the remote host and
+// Telegram. Host and KeyPath never come from a panel field.
+type Remote struct {
+	// Host is the remote host address; KeyPath the SSH key used to reach it.
+	Host, KeyPath string
+	// SyncScriptPath is the remote database sync script handed to NewSync;
+	// empty means DefaultSyncScriptPath. A host that changes the CLI's
+	// script sets the same path here.
+	SyncScriptPath string
+	// NewSync builds the remote sync for the given script and key.
+	NewSync func(scriptPath, keyPath string) out.RemoteSync
+	// NewTelegramClient builds the Telegram channel history client.
+	NewTelegramClient func(out.TelegramImportClientConfig) (out.TelegramChannelImporter, error)
+}
+
+// DefaultSyncScriptPath is the remote database sync script the editorial
+// cycle runs when the host sets no Remote.SyncScriptPath (the CLI's default).
+const DefaultSyncScriptPath = "scripts/sync-remote-sqlite.sh"
 
 // Action is one admin operation.
 type Action struct {
@@ -59,6 +97,14 @@ type Action struct {
 	Kind                            Kind
 	Modes                           []Mode
 	LongRunning, Exclusive          bool
+	// SwapsDB marks an action that may replace the operational DB (through
+	// Env.SwapDB); it runs only when no other action or job is running.
+	SwapsDB bool
+	// NoOperationalDB marks an action that never touches the operational DB
+	// (it reads only the admin store): it bypasses the DB gate, so it runs
+	// even while a SwapsDB action replaces the DB and never blocks one. Its
+	// Env.DB and Env.SwapDB are nil.
+	NoOperationalDB bool
 	// Params is the zero value of the params struct, used for the schema.
 	// It may be nil for actions without parameters.
 	Params any
@@ -73,7 +119,7 @@ type Registry struct {
 }
 
 // Add registers actions. It panics on an empty name, no modes, a nil Run,
-// a duplicate name or an invalid Params struct.
+// SwapsDB with NoOperationalDB, a duplicate name or an invalid Params struct.
 func (r *Registry) Add(as ...Action) {
 	for _, a := range as {
 		switch {
@@ -83,6 +129,8 @@ func (r *Registry) Add(as ...Action) {
 			panic(fmt.Sprintf("action %q: no modes", a.Name))
 		case a.Run == nil:
 			panic(fmt.Sprintf("action %q: nil Run", a.Name))
+		case a.SwapsDB && a.NoOperationalDB:
+			panic(fmt.Sprintf("action %q: SwapsDB and NoOperationalDB", a.Name))
 		}
 		if _, dup := r.byName[a.Name]; dup {
 			panic(fmt.Sprintf("action %q: duplicate", a.Name))

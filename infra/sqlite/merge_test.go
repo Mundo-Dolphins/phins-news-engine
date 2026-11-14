@@ -280,3 +280,69 @@ func TestMergeLocalOwnedTables_PreviousWithoutEventRuleProposalsTable(t *testing
 		t.Fatalf("MergeLocalOwnedTables() error = %v, want a pre-0045 local database to merge", err)
 	}
 }
+
+// A paused review session's frozen candidate set is local-only state: a
+// sync (the admin panel's first wizard step, or its restart sync) must
+// carry it forward, or resuming the session finds nothing to review.
+func TestMergeLocalOwnedTables_CarriesSessionCandidatesForward(t *testing.T) {
+	now := time.Now().UTC()
+	previous, previousPath := openMergeTestDB(t, "previous.db")
+	insertArticle(t, previous, "art-1")
+	if _, err := previous.Exec(
+		`INSERT INTO editorial_cycle_sessions (id, started_at, updated_at, status, current_step, flags_json) VALUES ('cycle-1', ?, ?, 'paused', 'review', '{}')`,
+		now, now,
+	); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+	if _, err := previous.Exec(
+		`INSERT INTO editorial_cycle_session_candidates (session_id, article_id, score, selected_at) VALUES ('cycle-1', 'art-1', 0.75, ?)`, now,
+	); err != nil {
+		t.Fatalf("seed candidates: %v", err)
+	}
+	previous.Close()
+
+	incoming, _ := openMergeTestDB(t, "incoming.db")
+	insertArticle(t, incoming, "art-1") // the snapshot still has the article
+	if _, err := incoming.Exec(
+		`INSERT INTO editorial_cycle_sessions (id, started_at, updated_at, status, current_step, flags_json) VALUES ('stale', ?, ?, 'paused', 'review', '{}')`,
+		now, now,
+	); err != nil {
+		t.Fatalf("seed incoming session: %v", err)
+	}
+	if _, err := incoming.Exec(
+		`INSERT INTO editorial_cycle_session_candidates (session_id, article_id, score, selected_at) VALUES ('stale', 'art-1', 0.1, ?)`, now,
+	); err != nil {
+		t.Fatalf("seed incoming candidates: %v", err)
+	}
+
+	warnings, err := sqlite.MergeLocalOwnedTables(context.Background(), incoming, previousPath)
+	if err != nil {
+		t.Fatalf("MergeLocalOwnedTables() error = %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Errorf("warnings = %v, want none (session and article both present)", warnings)
+	}
+	rows, err := incoming.Query(`SELECT session_id, article_id, score FROM editorial_cycle_session_candidates`)
+	if err != nil {
+		t.Fatalf("query candidates: %v", err)
+	}
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var session, article string
+		var score float64
+		if err := rows.Scan(&session, &article, &score); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		got = append(got, session+"/"+article)
+		if score != 0.75 {
+			t.Errorf("score = %v, want 0.75", score)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
+	}
+	if strings.Join(got, ",") != "cycle-1/art-1" {
+		t.Errorf("candidates = %v, want [cycle-1/art-1] (frozen set carried forward, incoming rows replaced)", got)
+	}
+}

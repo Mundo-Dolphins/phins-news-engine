@@ -35,6 +35,11 @@ export interface ReviewScreenProps<T> {
    * decided items stay in `items` uses it to move on after a decision.
    */
   goTo?: { key: string };
+  /**
+   * The skip shortcut, "s" when omitted. "k" frees S for a decision: K then
+   * skips and only the up arrow moves up.
+   */
+  skipKey?: string;
 }
 
 function inField(target: EventTarget | null): boolean {
@@ -66,7 +71,8 @@ const REFRESH_DEBOUNCE_MS = 500;
  * renderer marks its link to the original with that attribute.
  *
  * J, K, S and O are reserved and checked before `decisions[].key`, so a
- * decision must use another letter. A decision with `offered` shows its
+ * decision must use another letter. With `skipKey` "k" the skip moves to K
+ * and S is free for a decision (K no longer moves up; the up arrow does). A decision with `offered` shows its
  * button and answers its key only for the items it accepts. Auto-repeated
  * key presses (a held key) only move the selection; they never decide, skip
  * or open.
@@ -88,6 +94,8 @@ export function ReviewScreen<T>(props: ReviewScreenProps<T>) {
   const current = index >= 0 ? items[index] : undefined;
   const currentKey = current === undefined ? null : itemKey(current);
   const decisions = current === undefined ? [] : props.decisions.filter((d) => !d.offered || d.offered(current));
+  const skipKey = (props.skipKey ?? "s").toLowerCase();
+  const kMoves = skipKey !== "k";
 
   useEffect(() => {
     queue.current?.querySelector(".review-entry.selected")?.scrollIntoView?.({ block: "nearest" });
@@ -133,10 +141,10 @@ export function ReviewScreen<T>(props: ReviewScreenProps<T>) {
     if (e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented || inField(e.target)) return;
     const key = e.key.toLowerCase();
     if (key === "j" || key === "arrowdown") select(index + 1);
-    else if (key === "k" || key === "arrowup") select(index - 1);
+    else if (key === "arrowup" || (kMoves && key === "k")) select(index - 1);
     // A held key auto-repeats: only movement may repeat, never a decision.
     else if (e.repeat) return;
-    else if (key === "s") skip();
+    else if (key === skipKey) skip();
     else if (key === "o") panel.current?.querySelector<HTMLAnchorElement>("a[data-review-open]")?.click();
     else {
       const d = decisions.find((x) => x.key.toLowerCase() === key);
@@ -212,11 +220,11 @@ export function ReviewScreen<T>(props: ReviewScreenProps<T>) {
                 </button>
               ))}
               <button type="button" class="btn" disabled={busy} onClick={skip}>
-                Skip <kbd>S</kbd>
+                Skip <kbd>{skipKey.toUpperCase()}</kbd>
               </button>
               <span class="spacer" />
               <span class="muted review-keys">
-                <kbd>J</kbd>/<kbd>K</kbd> move · <kbd>O</kbd> open original · {index + 1} of {items.length}
+                <kbd>J</kbd>/<kbd>{kMoves ? "K" : "↑"}</kbd> move · <kbd>O</kbd> open original · {index + 1} of {items.length}
               </span>
             </div>
           </section>

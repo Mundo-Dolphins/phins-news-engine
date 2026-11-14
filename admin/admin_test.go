@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/Mundo-Dolphins/phins-news-engine/admin"
@@ -26,6 +27,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/fetcherwiring"
 	infrasqlite "github.com/Mundo-Dolphins/phins-news-engine/infra/sqlite"
 	"github.com/Mundo-Dolphins/phins-news-engine/migrations"
+	"github.com/Mundo-Dolphins/phins-news-engine/ports/out"
 	"github.com/Mundo-Dolphins/phins-news-engine/testsupport/repofs"
 )
 
@@ -39,6 +41,10 @@ var (
 	syncStarted = make(chan struct{}, 1)
 	jobFinished atomic.Bool
 	envSeen     = make(chan action.Env, 1)
+	// swapTo is the database file test.swap installs; swappedOut is the
+	// handle it replaced (TestActionsSeeNewDBAfterSwap).
+	swapTo     string
+	swappedOut = make(chan *sql.DB, 1)
 )
 
 func TestMain(m *testing.M) {
@@ -71,6 +77,33 @@ func TestMain(m *testing.M) {
 		Run: func(_ context.Context, env action.Env, _ any) (action.Result, error) {
 			envSeen <- env
 			return action.Result{}, nil
+		},
+	})
+	// Replaces the operational DB with the file at swapTo.
+	admin.Add(action.Action{
+		Name: "test.swap", Group: "test", Title: "Swap", Kind: action.KindWrite,
+		Modes: []action.Mode{action.ModeLocal}, SwapsDB: true,
+		Run: func(_ context.Context, env action.Env, _ any) (action.Result, error) {
+			db, err := infrasqlite.OpenImmediate(swapTo, 5*time.Second)
+			if err != nil {
+				return action.Result{}, err
+			}
+			swappedOut <- env.DB
+			env.SwapDB(db)
+			return action.Result{}, nil
+		},
+	})
+	// Reports the file behind env.DB.
+	admin.Add(action.Action{
+		Name: "test.dbfile", Group: "test", Title: "DB file", Kind: action.KindRead,
+		Modes: []action.Mode{action.ModeLocal},
+		Run: func(ctx context.Context, env action.Env, _ any) (action.Result, error) {
+			var seq int
+			var name, file string
+			if err := env.DB.QueryRowContext(ctx, `PRAGMA database_list`).Scan(&seq, &name, &file); err != nil {
+				return action.Result{}, err
+			}
+			return action.Result{Render: "text", Text: file}, nil
 		},
 	})
 	os.Exit(m.Run())
@@ -556,6 +589,34 @@ func TestCatalogEventRuleActions(t *testing.T) {
 	}
 }
 
+// TestCatalogCycleActions pins the editorial cycle wizard's actions: all
+// local only.
+func TestCatalogCycleActions(t *testing.T) {
+	groups := admin.RegistryGroupsFor(action.ModeLocal)
+	var got []string
+	for name, g := range groups {
+		if g == "cycle" {
+			got = append(got, name)
+		}
+	}
+	slices.Sort(got)
+	want := []string{
+		"cycle.abandon", "cycle.entities_discover", "cycle.entities_finish", "cycle.event_rules_apply", "cycle.event_rules_discover", "cycle.event_rules_finish",
+		"cycle.next", "cycle.promote", "cycle.review_decide", "cycle.review_finish", "cycle.review_open",
+		"cycle.review_pause", "cycle.review_queue", "cycle.roster_sync", "cycle.start",
+		"cycle.state", "cycle.summary", "cycle.sync", "cycle.telegram_import", "cycle.terms_decide",
+		"cycle.terms_finish", "cycle.terms_prepare", "cycle.terms_queue", "cycle.train",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("local cycle actions = %v, want %v", got, want)
+	}
+	for name, g := range admin.RegistryGroupsFor(action.ModeProduction) {
+		if g == "cycle" {
+			t.Errorf("production mode offers %s", name)
+		}
+	}
+}
+
 // TestCatalogStep2Batch2 pins which step 2 batch 2 actions each mode offers.
 func TestCatalogStep2Batch2(t *testing.T) {
 	both := []string{
@@ -713,6 +774,89 @@ func TestEnvCarriesHostHooks(t *testing.T) {
 	}
 	if env.FetcherExtensions.Categories == nil {
 		t.Error("FetcherExtensions.Categories is nil, want the host's map")
+	}
+	if err := h.stop(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRemoteCopiedIntoEnv(t *testing.T) {
+	h := newHarness(t, "local", 1)
+	h.opts.Remote = action.Remote{
+		Host: "box.example", KeyPath: "/keys/id",
+		NewSync: func(string, string) out.RemoteSync { return nil },
+		NewTelegramClient: func(out.TelegramImportClientConfig) (out.TelegramChannelImporter, error) {
+			return nil, nil
+		},
+	}
+	h.start()
+	c := loggedIn(t, h.bases[0])
+	if code, body := postAction(t, c, h.bases[0], "test.envhooks", `{}`); code != http.StatusOK {
+		t.Fatalf("test.envhooks = %d %s", code, body)
+	}
+	env := <-envSeen
+	if env.Remote.Host != "box.example" || env.Remote.KeyPath != "/keys/id" ||
+		env.Remote.NewSync == nil || env.Remote.NewTelegramClient == nil {
+		t.Errorf("Remote = %+v, want the host's hooks", env.Remote)
+	}
+	if env.State == nil {
+		t.Error("State is nil, want the admin store")
+	}
+	if err := h.stop(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// bearer adds the MCP token to every request.
+type bearer struct{ token string }
+
+func (b bearer) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	r.Header.Set("Authorization", "Bearer "+b.token)
+	return http.DefaultTransport.RoundTrip(r)
+}
+
+func TestActionsSeeNewDBAfterSwap(t *testing.T) {
+	h := newHarness(t, "local", 1)
+	swapTo = filepath.Join(t.TempDir(), "synced.db")
+	db, err := infrasqlite.Open(swapTo, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := infrasqlite.Migrate(context.Background(), db, migrations.FS); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+	h.start()
+	base := h.bases[0]
+	c := loggedIn(t, base)
+	if code, body := postAction(t, c, base, "test.dbfile", `{}`); code != http.StatusOK || !strings.Contains(body, filepath.Base(h.opPath)) {
+		t.Fatalf("before swap = %d %s", code, body)
+	}
+	if code, body := postAction(t, c, base, "test.swap", `{}`); code != http.StatusOK {
+		t.Fatalf("test.swap = %d %s", code, body)
+	}
+	if err := (<-swappedOut).Ping(); err == nil || !strings.Contains(err.Error(), "database is closed") {
+		t.Errorf("old handle Ping = %v, want closed", err)
+	}
+	if code, body := postAction(t, c, base, "test.dbfile", `{}`); code != http.StatusOK || !strings.Contains(body, "synced.db") {
+		t.Fatalf("REST after swap = %d %s", code, body)
+	}
+
+	ctx := context.Background()
+	tr := &mcp.StreamableClientTransport{Endpoint: base + "/mcp",
+		HTTPClient: &http.Client{Transport: bearer{token: strings.Repeat("t", 40)}}, DisableStandaloneSSE: true}
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test"}, nil).Connect(ctx, tr, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "test_dbfile", Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tc, ok := res.Content[0].(*mcp.TextContent); !ok || res.IsError || !strings.Contains(tc.Text, "synced.db") {
+		t.Fatalf("MCP after swap = %+v", res.Content[0])
 	}
 	if err := h.stop(); err != nil {
 		t.Fatal(err)

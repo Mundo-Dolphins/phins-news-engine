@@ -160,13 +160,7 @@ func newCycleCommand() *cobra.Command {
 
 			sessionCandidates := sqliteadapter.NewEditorialCycleSessionCandidateRepository(db)
 
-			excludedSourceIDs := make(map[string]bool, len(cfg.Editorial.ModelBypassSourceIDs)+len(cfg.Editorial.UnconditionalPublishSourceIDs))
-			for _, id := range cfg.Editorial.ModelBypassSourceIDs {
-				excludedSourceIDs[id] = true
-			}
-			for _, id := range cfg.Editorial.UnconditionalPublishSourceIDs {
-				excludedSourceIDs[id] = true
-			}
+			excludedSourceIDs := editorialcycle.ExcludedSourceIDs(cfg)
 			cycleDeps := editorialcycle.Deps{
 				Sessions: sessions, Candidates: sessionCandidates, ReviewDecisions: reviewDecisions,
 				Labels: labels, Articles: articles, Events: events, UOW: uow, Clock: realClock,
@@ -393,13 +387,7 @@ func newCycleCommand() *cobra.Command {
 			// session's frozen candidate set — which is what makes
 			// Complete's pending guard mean anything. It is ignored
 			// entirely when resuming (see StartOrResume).
-			alDeps := activelearning.Deps{Articles: articles, Labels: labels, Events: events, ReviewDecisions: reviewDecisions, Clock: realClock, ExcludedSourceIDs: excludedSourceIDs}
-			freshCandidates, err := activelearning.Select(cmd.Context(), alDeps, activelearning.Options{
-				Since:             realClock.Now().AddDate(0, 0, -30),
-				PoolLimit:         cfg.EditorialCycle.PoolLimit,
-				SampleSize:        resolvedSampleSize,
-				AmbiguousCooldown: cfg.EditorialCycle.AmbiguousCooldown(),
-			})
+			freshCandidates, err := editorialcycle.SelectFresh(cmd.Context(), cycleDeps, cfg, resolvedSampleSize)
 			if err != nil {
 				report.Error = err.Error()
 				return err
@@ -696,12 +684,7 @@ func newCycleCommand() *cobra.Command {
 				}
 			}
 			if !skipTrain {
-				trustedSourceIDs := make(map[string]bool, len(cfg.Classification.TrustedSourceIDs))
-				for _, id := range cfg.Classification.TrustedSourceIDs {
-					trustedSourceIDs[id] = true
-				}
-				gateCfg := trainwiring.GateConfig(cfg)
-				trainCfg, err := trainwiring.TrainConfig(cfg, fmt.Sprintf("fs-%d", time.Now().UTC().UnixNano()))
+				trainingCfg, err := trainwiring.CycleTrainingConfig(cfg, excludedSourceIDs, fmt.Sprintf("fs-%d", time.Now().UTC().UnixNano()))
 				if err != nil {
 					err = fmt.Errorf("editorial cycle: training config: %w", err)
 					report.Error = err.Error()
@@ -709,15 +692,7 @@ func newCycleCommand() *cobra.Command {
 				}
 				trainResult, err := editorialcycle.RunTraining(cmd.Context(),
 					editorialcycle.TrainingDeps{Labels: labels, Registry: sqliteadapter.NewModelRegistryRepository(db)},
-					editorialcycle.TrainingConfig{
-						TrustedSourceIDs:  trustedSourceIDs,
-						ExcludedSourceIDs: excludedSourceIDs,
-						DatasetPath:       filepath.Join(filepath.Dir(cfg.SQLite.Path), "editorial_cycle_dataset.yml"),
-						OutDir:            filepath.Join(filepath.Dir(cfg.Model.Path), "candidates"),
-						TrainCfg:          trainCfg,
-						GateCfg:           gateCfg,
-						PromotedModelPath: cfg.Model.Path,
-					})
+					trainingCfg)
 				if err != nil {
 					err = fmt.Errorf("editorial cycle: training: %w", err)
 					report.Error = err.Error()

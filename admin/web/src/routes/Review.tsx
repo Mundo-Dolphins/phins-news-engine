@@ -29,6 +29,14 @@ export function Review() {
       <h1>Review</h1>
       <p class="muted">Interactive reviews of queued decisions. Each decision is saved as soon as it is made.</p>
       <div class="review-index">
+        <a class="card review-card" href="/cycle">
+          <span class="review-card-title">Editorial cycle</span>
+          <span class="muted">
+            Run <code>editorial cycle</code> step by step: sync, Telegram import, roster, the article review (shortcuts
+            P, R, A, D, S, U, E, K), entities, event rules, the mined terms review (shortcuts A, R, C) and training,
+            then the summary. Deploy stays in the terminal.
+          </span>
+        </a>
         <a class="card review-card" href="/review/train">
           <span class="review-card-title">Train review</span>
           <span class="muted">Publish or discard the LLM teacher's proposals as human labels (shortcuts P, D, S).</span>
