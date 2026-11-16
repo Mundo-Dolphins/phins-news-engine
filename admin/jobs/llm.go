@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"errors"
 
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/action"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/llmservers"
@@ -33,19 +34,22 @@ func applyLLM(ctx context.Context, a action.Action, env *action.Env, params any)
 			return nil, nil
 		}
 	}
-	cfg, err := env.LLM.Apply(env.Config, sel)
+	if env.Config == nil {
+		return nil, errors.New("admin jobs: llm selection set but env.Config is nil")
+	}
+	eff := sel
+	if override != "" {
+		eff.Model = override
+	}
+	cfg, err := env.LLM.Apply(env.Config, eff)
 	if err != nil {
 		return nil, &action.Error{Code: action.CodeInvalidParams, Message: err.Error()}
 	}
 	env.Config = cfg
 	if a.UsesLLM {
-		check := sel
-		if override != "" {
-			check.Model = override
-		}
-		if err := env.LLM.Check(ctx, check); err != nil {
+		if err := env.LLM.Check(ctx, eff); err != nil {
 			return nil, &action.Error{Code: action.CodeInvalidParams, Message: err.Error()}
 		}
 	}
-	return &sel, nil
+	return &eff, nil
 }

@@ -3,7 +3,10 @@ package jobs_test
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -135,32 +138,97 @@ func TestApplyLLMBaseURLOverrideSkipsSelection(t *testing.T) {
 
 func TestApplyLLMModelOverride(t *testing.T) {
 	f := newFakeLLM(t)
-	f.sess = llmsession.New(f.sess.Servers(), func(_ context.Context, s config.LLMServerConfig) ([]string, error) {
-		f.calls.Add(1)
-		return []string{"m1", "m2"}, nil
-	})
-	f.selectA(t)
+	// The session first serves m1 and m2; afterwards only m2, so passing proves
+	// the override (not the selected m1) is what gets checked.
+	served := []string{"m1", "m2"}
+	sess := llmsession.New(f.sess.Servers(), func(context.Context, config.LLMServerConfig) ([]string, error) { return served, nil })
+	if err := sess.Select(context.Background(), llmservers.Selection{Server: "server-a", Model: "m1"}); err != nil {
+		t.Fatal(err)
+	}
+	served = []string{"m2"}
+	f.sess = sess
 	env := llmEnv(f)
 	sel, err := jobs.ApplyLLM(context.Background(), action.Action{UsesLLM: true}, env, &llmParams{Model: "m2"})
-	if err != nil || sel == nil || sel.Server != "server-a" || sel.Model != "m1" {
+	if err != nil || sel == nil || *sel != (llmservers.Selection{Server: "server-a", Model: "m2"}) {
 		t.Fatalf("sel=%v err=%v", sel, err)
 	}
-	if env.Config.OfflineTraining.LLM.BaseURL != "http://a/v1" {
-		t.Errorf("url = %q", env.Config.OfflineTraining.LLM.BaseURL)
+	if env.Config.OfflineTraining.LLM.BaseURL != "http://a/v1" || env.Config.OfflineTraining.LLM.Model != "m2" {
+		t.Errorf("cfg = %+v", env.Config.OfflineTraining.LLM)
 	}
 
-	// A model the server does not serve is invalid. The override must be what
-	// is checked, not the selected model (m1 is served).
-	f.sess = llmsession.New(f.sess.Servers(), func(context.Context, config.LLMServerConfig) ([]string, error) {
-		return []string{"m1"}, nil
-	})
+	// Without the override the selected m1 is no longer served.
+	_, err = jobs.ApplyLLM(context.Background(), action.Action{UsesLLM: true}, llmEnv(f), nil)
+	wantInvalid(t, err)
+
+	// An override the server does not serve is invalid.
+	_, err = jobs.ApplyLLM(context.Background(), action.Action{UsesLLM: true}, llmEnv(f), &llmParams{Model: "m3"})
+	wantInvalid(t, err)
+	if err == nil || !strings.Contains(err.Error(), "m3") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestApplyLLMNilConfigErrors(t *testing.T) {
+	f := newFakeLLM(t)
+	f.selectA(t)
+	env := llmEnv(f)
+	env.Config = nil
+	if _, err := jobs.ApplyLLM(context.Background(), action.Action{}, env, nil); err == nil {
+		t.Fatal("want error")
+	}
+}
+
+type captureHandler struct {
+	mu    *sync.Mutex
+	lines *[]string
+}
+
+func (h captureHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h captureHandler) Handle(_ context.Context, r slog.Record) error {
+	var b strings.Builder
+	b.WriteString(r.Message)
+	r.Attrs(func(a slog.Attr) bool { b.WriteString(" " + a.Key + "=" + a.Value.String()); return true })
+	h.mu.Lock()
+	*h.lines = append(*h.lines, b.String())
+	h.mu.Unlock()
+	return nil
+}
+func (h captureHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h captureHandler) WithGroup(string) slog.Handler      { return h }
+
+func TestRunSyncLLMLogsSelection(t *testing.T) {
+	r, _ := newRunner(t)
+	f := newFakeLLM(t)
+	f.selectA(t)
+	var lines []string
+	env := llmEnv(f)
+	env.Log = slog.New(captureHandler{mu: &sync.Mutex{}, lines: &lines})
+	a := act(action.KindRead, func(context.Context, action.Env, any) (action.Result, error) { return action.Result{}, nil })
+	if _, err := r.RunSync(context.Background(), a, *env, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(lines) != 1 || lines[0] != "llm server=server-a model=m1" {
+		t.Errorf("lines = %q", lines)
+	}
+}
+
+func TestStartLLMLogsOverrideModel(t *testing.T) {
+	r, s := newRunner(t)
+	f := newFakeLLM(t)
+	f.selectA(t)
+	f.sess = llmsession.New(f.sess.Servers(), func(context.Context, config.LLMServerConfig) ([]string, error) { return []string{"m1", "m2"}, nil })
 	if err := f.sess.Select(context.Background(), llmservers.Selection{Server: "server-a", Model: "m1"}); err != nil {
 		t.Fatal(err)
 	}
-	_, err = jobs.ApplyLLM(context.Background(), action.Action{UsesLLM: true}, llmEnv(f), &llmParams{Model: "m2"})
-	wantInvalid(t, err)
-	if err == nil || !strings.Contains(err.Error(), "m2") {
-		t.Errorf("err = %v", err)
+	a := act(action.KindRead, func(context.Context, action.Env, any) (action.Result, error) { return action.Result{}, nil })
+	j, err := r.Start(a, *llmEnv(f), &llmParams{Model: "m2"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Wait()
+	logs, _ := s.Logs(context.Background(), j.ID, 0)
+	if len(logs) == 0 || logs[0].Line != "llm server=server-a model=m2" {
+		t.Fatalf("logs = %+v", logs)
 	}
 }
 
@@ -191,10 +259,12 @@ func TestRunSyncLLMUnavailableFreesSlot(t *testing.T) {
 	f.down.Store(true)
 	a := act(action.KindRead, func(context.Context, action.Env, any) (action.Result, error) { return action.Result{}, nil })
 	a.UsesLLM, a.Exclusive = true, true
-	_, err := r.RunSync(context.Background(), a, *llmEnv(f), nil, nil)
+	e := llmEnv(f)
+	e.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
+	_, err := r.RunSync(context.Background(), a, *e, nil, nil)
 	wantInvalid(t, err)
 	f.down.Store(false)
-	if _, err := r.RunSync(context.Background(), a, *llmEnv(f), nil, nil); err != nil {
+	if _, err := r.RunSync(context.Background(), a, *e, nil, nil); err != nil {
 		t.Fatalf("second RunSync: %v", err)
 	}
 }
