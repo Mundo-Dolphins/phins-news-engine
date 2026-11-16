@@ -32,22 +32,22 @@ func Actions() []action.Action {
 		{
 			Name: "llm.status", Group: group, Title: "LLM server status",
 			Description: "Lists the configured LLM servers and the server and model currently selected, if any.",
-			Kind:        action.KindRead, Modes: localOnly, Run: runStatus,
+			Kind:        action.KindRead, Modes: localOnly, NoOperationalDB: true, Run: runStatus,
 		},
 		{
 			Name: "llm.models", Group: group, Title: "List LLM server models",
 			Description: "Lists the models a configured LLM server offers right now.",
-			Kind:        action.KindRead, Modes: localOnly, Params: modelsParams{}, Run: runModels,
+			Kind:        action.KindRead, Modes: localOnly, NoOperationalDB: true, Params: modelsParams{}, Run: runModels,
 		},
 		{
 			Name: "llm.select", Group: group, Title: "Select LLM server and model",
 			Description: "Makes every later action use the given server and model instead of the configured ones. The choice is kept in memory only.",
-			Kind:        action.KindWrite, Modes: localOnly, Params: selectParams{}, Run: runSelect,
+			Kind:        action.KindWrite, Modes: localOnly, NoOperationalDB: true, Params: selectParams{}, Run: runSelect,
 		},
 		{
 			Name: "llm.clear", Group: group, Title: "Clear LLM selection",
 			Description: "Drops the selected server and model so actions use the configured LLM again.",
-			Kind:        action.KindWrite, Modes: localOnly, Run: runClear,
+			Kind:        action.KindWrite, Modes: localOnly, NoOperationalDB: true, Run: runClear,
 		},
 	}
 }
@@ -76,11 +76,10 @@ func statusResult(s *llmsession.Session) action.Result {
 }
 
 func runStatus(_ context.Context, env action.Env, _ any) (action.Result, error) {
-	s, err := session(env)
-	if err != nil {
-		return action.Result{}, err
+	if env.LLM == nil {
+		return action.Result{Render: "object", Object: map[string]any{"servers": []map[string]string{}, "selection": nil}}, nil
 	}
-	return statusResult(s), nil
+	return statusResult(env.LLM), nil
 }
 
 func runModels(ctx context.Context, env action.Env, params any) (action.Result, error) {

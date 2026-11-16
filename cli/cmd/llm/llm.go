@@ -76,6 +76,9 @@ func newModelsCommand() *cobra.Command {
 					fmt.Fprintf(out, "  unavailable: %v\n", results[i].err)
 					continue
 				}
+				if len(results[i].models) == 0 {
+					fmt.Fprintln(out, "  (no models)")
+				}
 				for _, m := range results[i].models {
 					fmt.Fprintf(out, "  %s\n", m)
 				}

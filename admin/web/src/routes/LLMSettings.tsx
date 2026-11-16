@@ -69,8 +69,9 @@ function LLMSettingsScreen() {
           {error}
         </p>
       )}
-      {status && <p>{sel ? `Using ${sel.server} · ${sel.model}` : "Using settings.yml defaults"}</p>}
-      {status && (
+      {status && status.servers.length === 0 && <p class="muted">No llm_servers configured in settings.yml.</p>}
+      {status && status.servers.length > 0 && <p>{sel ? `Using ${sel.server} · ${sel.model}` : "Using settings.yml defaults"}</p>}
+      {status && status.servers.length > 0 && (
         <>
           <label>
             Server

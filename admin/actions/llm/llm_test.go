@@ -87,7 +87,7 @@ func TestMetadata(t *testing.T) {
 	reg.Add(as...)
 	kinds := map[string]action.Kind{"llm.status": action.KindRead, "llm.models": action.KindRead, "llm.select": action.KindWrite, "llm.clear": action.KindWrite}
 	for _, a := range as {
-		if a.Group != "llm" || a.Kind != kinds[a.Name] || len(a.Modes) != 1 || a.Modes[0] != action.ModeLocal || a.UsesLLM || a.Title == "" || a.Description == "" {
+		if a.Group != "llm" || a.Kind != kinds[a.Name] || len(a.Modes) != 1 || a.Modes[0] != action.ModeLocal || a.UsesLLM || !a.NoOperationalDB || a.Title == "" || a.Description == "" {
 			t.Errorf("%s metadata = %+v", a.Name, a)
 		}
 	}
@@ -168,9 +168,24 @@ func TestSelectErrors(t *testing.T) {
 	}
 }
 
+func TestStatusWithoutServersIsEmpty(t *testing.T) {
+	res, err := run(t, action.Env{Mode: action.ModeLocal}, "llm.status", `{}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	obj := object(t, res)
+	servers, ok := obj["servers"].([]map[string]string)
+	if !ok || len(servers) != 0 {
+		t.Fatalf("servers = %#v, want empty list", obj["servers"])
+	}
+	if sel, present := obj["selection"]; !present || sel != nil {
+		t.Fatalf("selection = %#v, want nil", sel)
+	}
+}
+
 func TestNoServersConfigured(t *testing.T) {
 	env := action.Env{Mode: action.ModeLocal}
-	for name, p := range map[string]string{"llm.status": `{}`, "llm.models": `{"server":"x"}`, "llm.select": `{"server":"x","model":"y"}`, "llm.clear": `{}`} {
+	for name, p := range map[string]string{"llm.models": `{"server":"x"}`, "llm.select": `{"server":"x","model":"y"}`, "llm.clear": `{}`} {
 		_, err := run(t, env, name, p)
 		wantCode(t, err, action.CodeInvalidParams)
 	}

@@ -10,14 +10,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	sqliteadapter "github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqlite"
 	"github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqliteeventruleproposal"
+	"github.com/Mundo-Dolphins/phins-news-engine/cli/cmd/events"
 	"github.com/Mundo-Dolphins/phins-news-engine/cli/cmd/testsupport"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/article"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventruleproposal"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/source"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
 	infrasqlite "github.com/Mundo-Dolphins/phins-news-engine/infra/sqlite"
+	appout "github.com/Mundo-Dolphins/phins-news-engine/ports/out"
 	"github.com/Mundo-Dolphins/phins-news-engine/testsupport/repofs"
 )
 
@@ -182,7 +187,8 @@ func seedProposals(t *testing.T, configPath string, ps ...eventruleproposal.Prop
 func TestEventsBrief_PrintsBriefForTypeProposal(t *testing.T) {
 	configPath := gateFixture(t, "")
 	seedGeneric(t, configPath, "Isotopes extend Ezo", "Dale gets new deal")
-	ids := seedProposals(t, configPath,
+	ids := seedProposals(
+		t, configPath,
 		eventruleproposal.Proposal{Kind: eventruleproposal.KindType, TypeName: "contract extension", Description: "Re-signings.", EvidenceIDs: []string{"g0", "g1", "missing"}, Status: eventruleproposal.StatusPending, PromptVersion: "v1"},
 		eventruleproposal.Proposal{Kind: eventruleproposal.KindPhrase, TargetKind: eventruleproposal.TargetAction, Target: "sign", Phrase: "inks a deal", EvidenceIDs: []string{"g0"}, Status: eventruleproposal.StatusPending, PromptVersion: "v1"},
 	)
@@ -232,7 +238,8 @@ func TestEventsImpact_ReportsTypedArticlesThatWouldChangeType(t *testing.T) {
 func TestEventsType_ListApproveReject(t *testing.T) {
 	configPath := gateFixture(t, "")
 	seedGeneric(t, configPath, "Isotopes extend Ezo")
-	ids := seedProposals(t, configPath,
+	ids := seedProposals(
+		t, configPath,
 		eventruleproposal.Proposal{Kind: eventruleproposal.KindType, TypeName: "contract extension", Description: "Re-signings.", EvidenceIDs: []string{"g0"}, Status: eventruleproposal.StatusPending, PromptVersion: "v1"},
 		eventruleproposal.Proposal{Kind: eventruleproposal.KindType, TypeName: "stadium works", Description: "Construction.", Status: eventruleproposal.StatusPending, PromptVersion: "v1"},
 		eventruleproposal.Proposal{Kind: eventruleproposal.KindPhrase, TargetKind: eventruleproposal.TargetAction, Target: "sign", Phrase: "inks a deal", EvidenceIDs: []string{"g0"}, Status: eventruleproposal.StatusPending, PromptVersion: "v1"},
@@ -283,5 +290,42 @@ func TestEventsType_ListApproveReject(t *testing.T) {
 	}
 	if out, err := testsupport.Execute(t, "--config", configPath, "events", "brief", ext); err != nil || !strings.Contains(out, "contract extension") {
 		t.Errorf("brief of an approved type proposal: %v\n%s", err, out)
+	}
+}
+
+type noopEventRuleLLM struct{}
+
+func (noopEventRuleLLM) DiscoverTopics(context.Context, []appout.EventRuleArticle) ([]appout.EventTopicProposal, error) {
+	return nil, nil
+}
+
+func (noopEventRuleLLM) DiscoverPhrases(context.Context, []appout.EventRuleArticle, []string, []string) ([]appout.EventPhraseProposal, error) {
+	return nil, nil
+}
+
+func TestEventsReview_RejectsUnlistedLLMModel(t *testing.T) {
+	testsupport.ExpectUnlistedLLMModel(t, gateFixture(t, ""), "events", "review")
+}
+
+func TestEventsReview_LLMServerReachesTheEventRuleLLM(t *testing.T) {
+	configPath := gateFixture(t, "")
+	testsupport.AppendLLMServers(t, configPath)
+	testsupport.StubLLMModels(t, "m1")
+
+	var gotURL, gotModel string
+	old := events.NewCycleLLM
+	events.NewCycleLLM = func(_ *cobra.Command, c config.OfflineTrainingLLMConfig) appout.EventRuleDiscoveryLLM {
+		gotURL, gotModel = c.BaseURL, c.Model
+		return noopEventRuleLLM{}
+	}
+	t.Cleanup(func() { events.NewCycleLLM = old })
+
+	out, err := testsupport.ExecuteWithStdin(t, "", "--config", configPath, "events", "review",
+		"--dataset", repoFile(t, "testdata/clustering_groups.yml"), "--llm-server", "server-a", "--llm-model", "m1")
+	if err != nil {
+		t.Fatalf("Execute() error = %v\n%s", err, out)
+	}
+	if gotURL != testsupport.LLMServerAURL || gotModel != "m1" {
+		t.Fatalf("event rule LLM built with %q %q, want %q m1\n%s", gotURL, gotModel, testsupport.LLMServerAURL, out)
 	}
 }

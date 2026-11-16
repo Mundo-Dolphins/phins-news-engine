@@ -6,7 +6,7 @@ const servers = [
   { name: "server-b", base_url: "http://b/v1" },
 ];
 
-type Status = { servers: typeof servers; selection: { server: string; model: string } | null };
+type Status = { servers: { name: string; base_url: string }[]; selection: { server: string; model: string } | null };
 
 let status: Status;
 let modelsFor: Record<string, string[] | string>;
@@ -60,6 +60,14 @@ describe("LLMSettings", () => {
     render(<LLMSettings />);
     expect(await screen.findByText("Using settings.yml defaults")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Reset to settings.yml" })).toBeNull();
+  });
+
+  it("explains that no servers are configured instead of showing the picker", async () => {
+    status = { servers: [], selection: null };
+    render(<LLMSettings />);
+    expect(await screen.findByText("No llm_servers configured in settings.yml.")).toBeTruthy();
+    expect(screen.queryByLabelText("Server")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
   });
 
   it("loads the models of the picked server", async () => {

@@ -95,3 +95,21 @@ func TestModels_NoServersConfigured(t *testing.T) {
 		t.Fatalf("error = %v, want no llm_servers configured", err)
 	}
 }
+
+func TestModels_ServerWithNoModelsSaysSo(t *testing.T) {
+	path := setup(t, twoServers, nil, nil)
+	shared.ListLLMModels = func(_ context.Context, s config.LLMServerConfig) ([]string, error) {
+		if s.Name == "server-a" {
+			return nil, nil
+		}
+		return []string{"m3"}, nil
+	}
+	got, err := testsupport.Execute(t, "--config", path, "llm", "models")
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	want := "server-a  http://server-a:8000/v1\n  (no models)\nserver-b  http://server-b:11434/v1\n  m3\n"
+	if got != want {
+		t.Fatalf("output = %q, want %q", got, want)
+	}
+}
