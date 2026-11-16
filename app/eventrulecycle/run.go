@@ -161,20 +161,28 @@ func discover(ctx context.Context, llm appout.EventRuleDiscoveryLLM, sample []ev
 func normalizePhrase(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
 
 // knownTarget reports whether the LLM's target exists in the closed lists.
+// A kind other than action or signal (small models often repeat the
+// target's name there) is taken from the one list the target is in; a
+// target in both lists is then ambiguous and not known.
 func knownTarget(kind, target string) (eventruleproposal.TargetKind, bool) {
+	isAction, isSignal := false, false
+	for _, a := range eventsignals.AllActions() {
+		isAction = isAction || string(a) == target
+	}
+	for _, s := range eventsignals.AllContentSignals() {
+		isSignal = isSignal || string(s) == target
+	}
 	switch eventruleproposal.TargetKind(kind) {
 	case eventruleproposal.TargetAction:
-		for _, a := range eventsignals.AllActions() {
-			if string(a) == target {
-				return eventruleproposal.TargetAction, true
-			}
-		}
+		return eventruleproposal.TargetAction, isAction
 	case eventruleproposal.TargetSignal:
-		for _, s := range eventsignals.AllContentSignals() {
-			if string(s) == target {
-				return eventruleproposal.TargetSignal, true
-			}
-		}
+		return eventruleproposal.TargetSignal, isSignal
+	}
+	switch {
+	case isAction && !isSignal:
+		return eventruleproposal.TargetAction, true
+	case isSignal && !isAction:
+		return eventruleproposal.TargetSignal, true
 	}
 	return "", false
 }

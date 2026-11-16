@@ -13,6 +13,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqliteeventruleproposal"
 	"github.com/Mundo-Dolphins/phins-news-engine/app/eventrulecycle"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventruleproposal"
+	appout "github.com/Mundo-Dolphins/phins-news-engine/ports/out"
 )
 
 // discovered runs Prepare and Discover on the harness and returns the
@@ -66,6 +67,45 @@ func TestDiscoverCountsAndStores(t *testing.T) {
 	}
 	if r.Sampled != 10 || r.Calls != 6 || r.Failed != 0 || r.Proposed != 4 || r.Unavailable || r.FirstErr != nil {
 		t.Fatalf("result %+v", r)
+	}
+}
+
+// Small models often put the target's name in target_kind ("result",
+// "rumor"); the kind is then taken from the closed list the target is in.
+func TestDiscoverInfersTargetKindFromTarget(t *testing.T) {
+	h := newHarness(t)
+	h.llm.topics = nil
+	h.llm.phrases = []appout.EventPhraseProposal{
+		{TargetKind: "sign", Target: "sign", Phrase: "inks a deal", ArticleIDs: []string{"a1"}},
+		{TargetKind: "report", Target: "injure", Phrase: "lands on the shelf", ArticleIDs: []string{"a2"}},
+		{TargetKind: "", Target: "rumor", Phrase: "with veteran", ArticleIDs: []string{"a1"}},
+		{TargetKind: "reaction", Target: "quote", Phrase: "ankle bad news", ArticleIDs: []string{"a2"}}, // in both lists: ambiguous
+		{TargetKind: "injure", Target: "injury", Phrase: "on the shelf", ArticleIDs: []string{"a2"}},    // unknown target
+	}
+	ctx := context.Background()
+	c, err := eventrulecycle.Prepare(ctx, h.deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := eventrulecycle.Discover(ctx, h.deps, c, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Proposed != 3 {
+		t.Fatalf("result %+v", r)
+	}
+	got := map[string]string{}
+	for phrase, p := range h.byPhrase(t) {
+		got[phrase] = string(p.TargetKind) + "/" + p.Target
+	}
+	want := map[string]string{"inks a deal": "action/sign", "lands on the shelf": "action/injure", "with veteran": "signal/rumor"}
+	if len(got) != len(want) {
+		t.Fatalf("stored %v, want %v", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%q stored as %q, want %q", k, got[k], v)
+		}
 	}
 }
 

@@ -152,7 +152,7 @@ func newHarness(t *testing.T) *harness {
 				{TargetKind: "action", Target: "injure", Phrase: "lands on the shelf", ArticleIDs: []string{"a2"}},
 				{TargetKind: "action", Target: "sign", Phrase: "inks", ArticleIDs: []string{"a1"}},            // fails Check
 				{TargetKind: "action", Target: "teleport", Phrase: "inks a deal", ArticleIDs: []string{"a1"}}, // unknown target
-				{TargetKind: "mood", Target: "sign", Phrase: "inks a deal", ArticleIDs: []string{"a1"}},       // unknown target kind
+				{TargetKind: "mood", Target: "quote", Phrase: "inks a deal", ArticleIDs: []string{"a1"}},      // unknown kind, target in both lists
 				{TargetKind: "signal", Target: "rumor", Phrase: "inks a deal", ArticleIDs: []string{"a3"}},    // not in cited article
 			},
 		},
