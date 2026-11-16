@@ -8,6 +8,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/Mundo-Dolphins/phins-news-engine/admin/llmsession"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/fetcherwiring"
 	"github.com/Mundo-Dolphins/phins-news-engine/ports/out"
@@ -62,6 +63,9 @@ type Env struct {
 	// Remote is the host's remote-sync and Telegram hooks; its zero value
 	// means they are not available on this host.
 	Remote Remote
+	// LLM is the admin's in-memory LLM server selection; nil disables
+	// selection (tests, CLI).
+	LLM *llmsession.Session
 }
 
 // StateStore is a small persistent key/value store.
@@ -105,11 +109,21 @@ type Action struct {
 	// even while a SwapsDB action replaces the DB and never blocks one. Its
 	// Env.DB and Env.SwapDB are nil.
 	NoOperationalDB bool
+	// UsesLLM marks an action whose Run builds an LLM client, so the job
+	// runner can apply the admin's LLM selection to its config.
+	UsesLLM bool
 	// Params is the zero value of the params struct, used for the schema.
 	// It may be nil for actions without parameters.
 	Params any
 	// Run executes the action; params is a pointer to a decoded copy.
 	Run func(ctx context.Context, env Env, params any) (Result, error)
+}
+
+// LLMOverrider is implemented by the params of an action with per-run LLM
+// overrides: it returns the base URL and model the caller set (empty means
+// the configured value).
+type LLMOverrider interface {
+	LLMOverride() (baseURL, model string)
 }
 
 // Registry holds actions in registration order.

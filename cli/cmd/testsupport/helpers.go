@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +21,7 @@ import (
 	sqliteadapter "github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqlite"
 	"github.com/Mundo-Dolphins/phins-news-engine/app/editorialtrain"
 	"github.com/Mundo-Dolphins/phins-news-engine/cli"
+	"github.com/Mundo-Dolphins/phins-news-engine/cli/cmd/shared"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/article"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/editorial"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/source"
@@ -349,6 +353,134 @@ func WriteFixture(t *testing.T) string {
 	return WriteFixtureWithDatabase(t, true)
 }
 
+// LLMServerAURL is the base URL of server-a in the config AppendLLMServers adds.
+const LLMServerAURL = "http://server-a:8000/v1"
+
+// AppendLLMServers adds two llm_servers (server-a, server-b) to the config at
+// path.
+func AppendLLMServers(t *testing.T, path string) {
+	t.Helper()
+	AppendToConfig(t, path, "\nllm_servers:\n  - name: server-a\n    base_url: "+LLMServerAURL+"\n  - name: server-b\n    base_url: http://server-b:11434/v1\n")
+}
+
+// FakeLLMServer is an OpenAI-compatible server: GET /v1/models lists the
+// models it was built with, and every chat completion is recorded and answered
+// with an empty but well-formed result.
+type FakeLLMServer struct {
+	// BaseURL is the server's /v1 base URL.
+	BaseURL string
+
+	mu     sync.Mutex
+	models []string
+}
+
+// NewFakeLLMServer starts a FakeLLMServer that lists models.
+func NewFakeLLMServer(t *testing.T, models ...string) *FakeLLMServer {
+	t.Helper()
+	f := &FakeLLMServer{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/models":
+			data := make([]map[string]string, 0, len(models))
+			for _, m := range models {
+				data = append(data, map[string]string{"id": m})
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/chat/completions"):
+			var body struct {
+				Model string `json:"model"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			f.mu.Lock()
+			f.models = append(f.models, body.Model)
+			f.mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{"choices": []map[string]any{{"message": map[string]any{
+				"content": `{"labels":[],"entities":[]}`,
+			}}}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	f.BaseURL = srv.URL + "/v1"
+	return f
+}
+
+// AppendServerA adds this server to the config at path as llm_servers
+// entry server-a.
+func (f *FakeLLMServer) AppendServerA(t *testing.T, path string) {
+	t.Helper()
+	AppendToConfig(t, path, "\nllm_servers:\n  - name: server-a\n    base_url: "+f.BaseURL+"\n")
+}
+
+// RequireModel fails unless the server received at least one chat completion
+// and every one of them asked for model.
+func (f *FakeLLMServer) RequireModel(t *testing.T, model string) {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.models) == 0 {
+		t.Fatal("the fake LLM server received no chat completion request")
+	}
+	for _, m := range f.models {
+		if m != model {
+			t.Fatalf("chat completion models = %q, want every request to use %q", f.models, model)
+		}
+	}
+}
+
+// SetOfflineLLMTimeout gives the fixture's offline_training.llm block the
+// timeout every real LLM call needs; the selected server supplies the rest.
+func SetOfflineLLMTimeout(t *testing.T, path string) {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const anchor = "offline_training:\n  llm:\n"
+	if !strings.Contains(string(raw), anchor) {
+		t.Fatal("fixture no longer has the offline_training.llm block this helper patches")
+	}
+	if err := os.WriteFile(path, []byte(strings.Replace(string(raw), anchor, anchor+"    timeout_seconds: 5\n", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// AppendToConfig appends extra to the config file at path.
+func AppendToConfig(t *testing.T, path, extra string) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString(extra); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// StubLLMModels makes every LLM server list exactly models, with no network.
+func StubLLMModels(t *testing.T, models ...string) {
+	t.Helper()
+	orig := shared.ListLLMModels
+	t.Cleanup(func() { shared.ListLLMModels = orig })
+	shared.ListLLMModels = func(context.Context, config.LLMServerConfig) ([]string, error) { return models, nil }
+}
+
+// ExpectUnlistedLLMModel runs args plus an --llm-server/--llm-model pair whose
+// model the server does not list, and fails unless the command rejects it.
+func ExpectUnlistedLLMModel(t *testing.T, configPath string, args ...string) {
+	t.Helper()
+	AppendLLMServers(t, configPath)
+	StubLLMModels(t, "m1")
+	full := append([]string{"--config", configPath}, args...)
+	full = append(full, "--llm-server", "server-a", "--llm-model", "nope")
+	out, err := Execute(t, full...)
+	if err == nil || !strings.Contains(err.Error(), `model "nope" is not available on server-a`) {
+		t.Fatalf("err = %v, want unlisted-model error\n%s", err, out)
+	}
+}
+
 func WriteFreshFixture(t *testing.T) string {
 	t.Helper()
 	return WriteFixtureWithDatabase(t, false)
@@ -499,6 +631,25 @@ func SeedArticleForLabeling(t *testing.T) (configPath, articleID string) {
 		t.Fatalf("seed article: %v", err)
 	}
 	return configPath, articleID
+}
+
+// SeedUnreviewedArticle stores one pending-publication, unlabeled article with a valid
+// source in the fixture config's database, so LLM commands have work to do.
+func SeedUnreviewedArticle(t *testing.T, configPath, id string) {
+	t.Helper()
+	db, err := infrasqlite.Open(filepath.Join(filepath.Dir(configPath), "operational.db"), 5000)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	at := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+	if err := sqliteadapter.NewArticleRepository(db).Save(context.Background(), article.Article{
+		ID: id, Title: "isotopes win big game article", OriginalURL: "https://example.com/" + id, CanonicalURL: "https://example.com/" + id,
+		Source: source.Source{ID: MustID(t, source.TypeRSS, "seed-source"), Name: "Seed Source", Type: source.TypeRSS}, Domain: "example.com",
+		FetchedAt: at, PublishedAt: at, Status: article.StatusPendingPublication,
+	}); err != nil {
+		t.Fatalf("seed article: %v", err)
+	}
 }
 
 func MustID(t testing.TB, platform source.Type, raw string) source.ID {

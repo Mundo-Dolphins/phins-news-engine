@@ -178,6 +178,7 @@ test fails if a new secret field is not covered.
 | Key | Meaning |
 |---|---|
 | `entity_extraction.fallback` | Service: optional LLM fallback for ambiguous entity mentions: `enabled`, `provider`, `base_url`, `model`, `temperature`, `timeout_seconds`, `max_tokens`, `min_confidence`, `max_candidates_per_article` |
+| `llm_servers` | Optional list of named OpenAI-compatible servers the admin can select; each has `name` (unique), `base_url` (http/https) and optional `api_key_env` (name of the env var holding the bearer key). Example: `- {name: server-a, base_url: "http://server-a:8000/v1", api_key_env: SERVER_A_KEY}` |
 | `entity_discovery.enabled`, `entity_discovery.extractor_version`, `entity_discovery.batch_size`, `entity_discovery.limit` | `entities discover` |
 | `entity_discovery.llm` | OpenAI-compatible endpoint for discovery |
 | `entity_discovery.wikidata` | Wikidata client: endpoint, language, limits, cache TTLs, `user_agent` (must contain a URL or e-mail), `properties`, `allow_private_hosts` |

@@ -121,5 +121,6 @@ func newDiscoverCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&verify, "verify", false, "allow bounded web-lookup verification for uncertain candidates (overrides catalog_maintenance.web_lookup.enabled for this run)")
 	cmd.Flags().Float64Var(&verifyMinConfidence, "verify-min-confidence", 0.85, "confidence threshold below which a candidate is sent through --verify")
 	addVerificationFlags(cmd, &vflags)
+	shared.AddLLMServerFlags(cmd)
 	return cmd
 }

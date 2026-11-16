@@ -175,8 +175,15 @@ func (r *Runner) RunSync(ctx context.Context, a action.Action, env action.Env, p
 		return action.Result{}, err
 	}
 	defer leave()
+	sel, err := applyLLM(ctx, a, &env, params)
+	if err != nil {
+		return action.Result{}, err
+	}
 	if env.Log == nil {
 		env.Log = slog.Default()
+	}
+	if sel != nil {
+		env.Log.Info("llm", "server", sel.Server, "model", sel.Model)
 	}
 	if env.Now == nil {
 		env.Now = r.now
@@ -194,6 +201,11 @@ func (r *Runner) RunSync(ctx context.Context, a action.Action, env action.Env, p
 func (r *Runner) Start(a action.Action, env action.Env, params any, rawParams json.RawMessage) (store.Job, error) {
 	leave, err := r.enter(a, &env)
 	if err != nil {
+		return store.Job{}, err
+	}
+	sel, err := applyLLM(r.base, a, &env, params)
+	if err != nil {
+		leave()
 		return store.Job{}, err
 	}
 	id, err := newID()
@@ -218,6 +230,9 @@ func (r *Runner) Start(a action.Action, env action.Env, params any, rawParams js
 		env.Now = r.now
 	}
 	env.Log = slog.New(newLogHandler(func(line string) { r.appendLog(rn, line) }))
+	if sel != nil {
+		env.Log.Info("llm", "server", sel.Server, "model", sel.Model)
+	}
 	r.wg.Add(1)
 	go r.finish(ctx, rn, job, a, env, params, rawParams, leave)
 	return job, nil

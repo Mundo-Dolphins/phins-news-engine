@@ -105,7 +105,7 @@ func Actions() []action.Action {
 			Name: "train.mine", Group: group, Title: "Mine hard examples",
 			Description: "Scans stored articles for strong NB/LLM disagreement (hard negatives and hard positives); calls the LLM.",
 			Kind:        action.KindWrite, Modes: localOnly, LongRunning: true, Exclusive: true,
-			Params: mineParams{}, Run: runMine,
+			Params: mineParams{}, UsesLLM: true, Run: runMine,
 		},
 		{
 			Name: "train.shadow_compare", Group: group, Title: "Shadow-compare candidate model",
@@ -117,7 +117,7 @@ func Actions() []action.Action {
 			Name: "train.run", Group: group, Title: "Run training pipeline",
 			Description: "Runs the full safe-promotion workflow end-to-end: build, analyze, evaluate and, when the gates pass, promote (destructive).",
 			Kind:        action.KindDestructive, Modes: localOnly, LongRunning: true, Exclusive: true,
-			Params: runParams{}, Run: runRun,
+			Params: runParams{}, UsesLLM: true, Run: runRun,
 		},
 		{
 			Name: "train.promote", Group: group, Title: "Promote candidate model",

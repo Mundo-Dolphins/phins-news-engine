@@ -380,7 +380,7 @@ func Actions() []action.Action {
 		{
 			Name: "cycle.entities_discover", Group: group, Title: "Discover entities in the session",
 			Description: "Runs entity discovery over the articles published or rejected in the review session; the proposals are then reviewed with entities.review_queue (session_id) and entities.approve/reject.",
-			Kind:        action.KindWrite, Modes: localOnly, LongRunning: true, Exclusive: true, Run: runEntitiesDiscover,
+			Kind:        action.KindWrite, Modes: localOnly, LongRunning: true, Exclusive: true, UsesLLM: true, Run: runEntitiesDiscover,
 		},
 		{
 			Name: "cycle.entities_finish", Group: group, Title: "Finish entity review",
@@ -390,7 +390,7 @@ func Actions() []action.Action {
 		{
 			Name: "cycle.event_rules_discover", Group: group, Title: "Discover event rule phrases",
 			Description: "Runs the event rule discovery of the cycle (as events.rules_discover) and records its counters; the proposals are then decided with events.rules_queue and events.rules_decide.",
-			Kind:        action.KindWrite, Modes: localOnly, LongRunning: true, Exclusive: true, Run: runEventRulesDiscover,
+			Kind:        action.KindWrite, Modes: localOnly, LongRunning: true, Exclusive: true, UsesLLM: true, Run: runEventRulesDiscover,
 		},
 		{
 			Name: "cycle.event_rules_apply", Group: group, Title: "Apply event rule phrases",

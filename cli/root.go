@@ -19,6 +19,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/cli/cmd/event"
 	"github.com/Mundo-Dolphins/phins-news-engine/cli/cmd/events"
 	"github.com/Mundo-Dolphins/phins-news-engine/cli/cmd/label"
+	"github.com/Mundo-Dolphins/phins-news-engine/cli/cmd/llm"
 	"github.com/Mundo-Dolphins/phins-news-engine/cli/cmd/model"
 	"github.com/Mundo-Dolphins/phins-news-engine/cli/cmd/seenitems"
 	"github.com/Mundo-Dolphins/phins-news-engine/cli/cmd/shared"
@@ -60,6 +61,7 @@ func init() {
 	root.AddCommand(seenitems.NewCommand())
 	root.AddCommand(backtest.NewCommand())
 	root.AddCommand(stats.NewCommand())
+	root.AddCommand(llm.NewCommand())
 }
 
 // SetProgramName renames the tools CLI: the root command's Use name, the

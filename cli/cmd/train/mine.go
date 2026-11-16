@@ -26,6 +26,9 @@ func newMineCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if cfg, err = shared.ApplyLLMServer(cmd, cfg); err != nil {
+				return err
+			}
 			db, err := infrasqlite.Open(cfg.SQLite.Path, cfg.SQLite.BusyTimeout())
 			if err != nil {
 				return err
@@ -49,5 +52,6 @@ func newMineCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().IntVar(&limitOverride, "limit", 0, "override offline_training.mining.batch_limit for this run")
+	shared.AddLLMServerFlags(cmd)
 	return cmd
 }

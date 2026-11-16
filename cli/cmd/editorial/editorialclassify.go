@@ -43,6 +43,9 @@ func newClassifyCommand() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("editorial classify: %w", err)
 			}
+			if cfg, err = shared.ApplyLLMServer(cmd, cfg); err != nil {
+				return fmt.Errorf("editorial classify: %w", err)
+			}
 			db, err := infrasqlite.Open(cfg.SQLite.Path, cfg.SQLite.BusyTimeout())
 			if err != nil {
 				return fmt.Errorf("editorial classify: %w", err)
@@ -124,5 +127,6 @@ func newClassifyCommand() *cobra.Command {
 	cmd.Flags().StringVar(&llmModel, "llm-model", "", "override offline_training.llm.model for this run")
 	cmd.Flags().IntVar(&llmMaxTokens, "llm-max-tokens", 0, "override offline_training.llm.max_tokens for this run (0 uses the provider default)")
 	cmd.Flags().BoolVar(&llmDisableThinking, "llm-disable-thinking", false, "override offline_training.llm.disable_thinking for this run")
+	shared.AddLLMServerFlags(cmd)
 	return cmd
 }

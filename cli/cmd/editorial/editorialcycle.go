@@ -72,6 +72,9 @@ func newCycleCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if cfg, err = shared.ApplyLLMServer(cmd, cfg); err != nil {
+				return fmt.Errorf("editorial cycle: %w", err)
+			}
 			if err := toolsentities.ValidateCycleVerification(entitiesVerification); err != nil {
 				return fmt.Errorf("editorial cycle: %w", err)
 			}
@@ -799,6 +802,7 @@ func newCycleCommand() *cobra.Command {
 	cycleCmd.Flags().BoolVar(&skipTrain, "skip-train", false, "skip training and promotion entirely")
 	cycleCmd.Flags().BoolVar(&skipTelegramImport, "skip-telegram-import", false, "explicitly run without importing Telegram channel history first (strict by default: missing telegram.api_id/api_hash/channel_id/phone-or-session otherwise fails before any database write). Prints a warning and is recorded in this run's audit report — publications reconstructed from this session will be missing this source")
 	cycleCmd.Flags().BoolVar(&force, "force", false, "skip the promotion confirmation prompt and auto-promote a gate-passing winner (also skips automatic rollback, once wired)")
+	shared.AddLLMServerFlags(cycleCmd)
 	return cycleCmd
 }
 

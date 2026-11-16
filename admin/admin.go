@@ -29,6 +29,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/evaluation"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/events"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/label"
+	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/llm"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/outbox"
 	seenitemsactions "github.com/Mundo-Dolphins/phins-news-engine/admin/actions/seenitems"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/sourcepolicy"
@@ -39,11 +40,13 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/auth"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/httpapi"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/jobs"
+	"github.com/Mundo-Dolphins/phins-news-engine/admin/llmsession"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/mcpserver"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/store"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/web"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/fetcherwiring"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/llmservers"
 	infrasqlite "github.com/Mundo-Dolphins/phins-news-engine/infra/sqlite"
 	"github.com/Mundo-Dolphins/phins-news-engine/migrations"
 )
@@ -78,6 +81,7 @@ func init() {
 	registry.Add(events.Actions()...)
 	registry.Add(evaluation.Actions()...)
 	registry.Add(cycle.Actions()...)
+	registry.Add(llm.Actions()...)
 }
 
 // Add registers host actions, like cli.Add does for commands. Call it before
@@ -210,11 +214,19 @@ func Run(ctx context.Context, opts Options) error {
 	if statsLogPath == "" {
 		statsLogPath = "data/logs/out.log"
 	}
+	// One in-memory LLM selection shared by every action; nil when the config
+	// lists no servers.
+	var llmSession *llmsession.Session
+	if len(cfg.LLMServers) > 0 {
+		llmSession = llmsession.New(cfg.LLMServers, llmservers.ListModels)
+	}
 	// The runner overrides DB with the gate's current handle when it runs
 	// the action.
 	envFor := func(actor string) action.Env {
-		return action.Env{DB: runner.DB(), State: st, Remote: opts.Remote, Config: cfg, Mode: mode, Now: now, Log: log, Actor: actor, StatsLogPath: statsLogPath,
-			ConfigPath: opts.ConfigPath, Profile: profile, FetcherExtensions: opts.FetcherExtensions}
+		return action.Env{
+			DB: runner.DB(), State: st, Remote: opts.Remote, Config: cfg, Mode: mode, Now: now, Log: log, Actor: actor, StatsLogPath: statsLogPath,
+			ConfigPath: opts.ConfigPath, Profile: profile, FetcherExtensions: opts.FetcherExtensions, LLM: llmSession,
+		}
 	}
 	streamsDone := make(chan struct{})
 	handler := httpapi.NewHandler(httpapi.Deps{

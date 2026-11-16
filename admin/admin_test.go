@@ -872,3 +872,24 @@ func TestActionsSeeNewDBAfterSwap(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestLLMActionsMarked pins the actions that build an LLM client: each Run
+// reaches trainwiring.Classify/ClassifyEval/Mine/RunDeps,
+// entitywiring.Discover/VerifyProposals, events.DiscoverRules or the cycle's
+// entity and event-rule discovery steps.
+func TestLLMActionsMarked(t *testing.T) {
+	want := []string{
+		"cycle.entities_discover",
+		"cycle.event_rules_discover",
+		"editorial.classify",
+		"editorial.classify_eval",
+		"entities.discover",
+		"entities.proposals_verify",
+		"events.rules_discover",
+		"train.mine",
+		"train.run",
+	}
+	if got := admin.RegistryLLMActions(); !slices.Equal(got, want) {
+		t.Fatalf("UsesLLM actions = %v, want %v", got, want)
+	}
+}

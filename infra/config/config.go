@@ -112,8 +112,35 @@ type Config struct {
 	Events             map[string]EventHandlerConfig `yaml:"events"`
 	Media              MediaConfig                   `yaml:"media"`
 	Alerts             AlertsConfig                  `yaml:"alerts"`
+	LLMServers         []LLMServerConfig             `yaml:"llm_servers"`
 	// Admin is filled from ADMIN_* environment variables only; see AdminConfig.
 	Admin AdminConfig `yaml:"-"`
+}
+
+// LLMServerConfig names one OpenAI-compatible server the admin can select.
+type LLMServerConfig struct {
+	Name      string `yaml:"name"`
+	BaseURL   string `yaml:"base_url"`
+	APIKeyEnv string `yaml:"api_key_env"` // optional env var holding a bearer key
+}
+
+// ValidateLLMServers checks names are present and unique and every base_url is
+// an absolute http(s) URL.
+func ValidateLLMServers(s []LLMServerConfig) error {
+	seen := make(map[string]struct{}, len(s))
+	for i, srv := range s {
+		if srv.Name == "" {
+			return fmt.Errorf("llm_servers[%d]: name is required", i)
+		}
+		if _, ok := seen[srv.Name]; ok {
+			return fmt.Errorf("llm_servers[%d]: duplicate name %q", i, srv.Name)
+		}
+		seen[srv.Name] = struct{}{}
+		if u, err := url.Parse(srv.BaseURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return fmt.Errorf("llm_servers[%d] %q: base_url must be an absolute http(s) URL", i, srv.Name)
+		}
+	}
+	return nil
 }
 
 // SQLiteConfig configures the operational SQLite database.
@@ -2982,6 +3009,7 @@ func (c Config) Validate() error {
 		{"events", c.validateEvents},
 		{"media", c.Media.Validate},
 		{"alerts", c.Alerts.Validate},
+		{"llm_servers", func() error { return ValidateLLMServers(c.LLMServers) }},
 	}
 	for _, s := range sections {
 		if err := s.fn(); err != nil {

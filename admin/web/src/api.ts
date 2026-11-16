@@ -149,3 +149,37 @@ export function jobEvents(
   }
   return () => es.close();
 }
+
+export interface LLMServer {
+  name: string;
+  base_url: string;
+}
+export interface LLMSelection {
+  server: string;
+  model: string;
+}
+export interface LLMStatus {
+  servers: LLMServer[];
+  selection: LLMSelection | null;
+}
+/** LLM_CHANGED is the window event fired after the selection is saved or cleared. */
+export const LLM_CHANGED = "llm-selection-changed";
+
+async function llmObject<T>(name: string, params: Record<string, unknown>): Promise<T> {
+  const out = await runAction(name, params, false);
+  if (!("result" in out)) throw new Error("unexpected response for " + name);
+  return out.result.object as T;
+}
+export const getLLMStatus = () => llmObject<LLMStatus>("llm.status", {});
+export const getLLMModels = async (server: string) =>
+  (await llmObject<{ server: string; models: string[] }>("llm.models", { server })).models;
+export const selectLLM = async (server: string, model: string) => {
+  const s = await llmObject<LLMStatus>("llm.select", { server, model });
+  window.dispatchEvent(new Event(LLM_CHANGED));
+  return s;
+};
+export const clearLLM = async () => {
+  const s = await llmObject<LLMStatus>("llm.clear", {});
+  window.dispatchEvent(new Event(LLM_CHANGED));
+  return s;
+};

@@ -6,6 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Mundo-Dolphins/phins-news-engine/cli/cmd/shared"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/entitywiring"
 )
 
@@ -83,5 +84,6 @@ func newProposalsVerifyCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&llmDisableThinking, "llm-disable-thinking", false, "ask compatible reasoning models (such as Ollama) not to generate thinking output")
 	cmd.Flags().StringVar(&provider, "provider", "", "verify with a single provider: wikidata (Wikidata only, no LLM/SearXNG fallback)")
 	addVerificationFlags(cmd, &vflags)
+	shared.AddLLMServerFlags(cmd)
 	return cmd
 }
