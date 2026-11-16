@@ -139,13 +139,13 @@ func Actions() []action.Action {
 			Name: "entities.discover", Group: group, Title: "Discover entities",
 			Description: "Mines unknown entities and aliases from stored news through the LLM, saving them as proposals.",
 			Kind:        action.KindWrite, Modes: localOnly, LongRunning: true, Exclusive: true,
-			Params: discoverParams{}, Run: runDiscover,
+			Params: discoverParams{}, UsesLLM: true, Run: runDiscover,
 		},
 		{
 			Name: "entities.proposals_verify", Group: group, Title: "Verify entity proposals",
 			Description: "Verifies the pending proposal backlog through Wikidata and the web fallback using stored sources (resumable, batched with limit).",
 			Kind:        action.KindWrite, Modes: localOnly, LongRunning: true, Exclusive: true,
-			Params: verifyParams{}, Run: runVerify,
+			Params: verifyParams{}, UsesLLM: true, Run: runVerify,
 		},
 		{
 			Name: "entities.extract", Group: group, Title: "Extract entities from text",

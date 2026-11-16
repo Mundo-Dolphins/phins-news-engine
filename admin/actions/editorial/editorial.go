@@ -116,13 +116,13 @@ func Actions() []action.Action {
 			Name: "editorial.classify", Group: group, Title: "Classify stored news",
 			Description: "Classifies stored news publish/discard/uncertain through the independent LLM teacher, saving label proposals and syncing the review queue.",
 			Kind:        action.KindWrite, Modes: localOnly, LongRunning: true, Exclusive: true,
-			Params: classifyParams{}, Run: runClassify,
+			Params: classifyParams{}, UsesLLM: true, Run: runClassify,
 		},
 		{
 			Name: "editorial.classify_eval", Group: group, Title: "Evaluate the classifier prompt",
 			Description: "Measures the LLM teacher prompt against human-reviewed dataset labels; writes nothing to the database (may write the misses CSV).",
 			Kind:        action.KindWrite, Modes: localOnly, LongRunning: true,
-			Params: classifyEvalParams{}, Run: runClassifyEval,
+			Params: classifyEvalParams{}, UsesLLM: true, Run: runClassifyEval,
 		},
 	}
 }
@@ -350,3 +350,9 @@ func runClassifyEval(ctx context.Context, env action.Env, params any) (action.Re
 	}
 	return action.Result{Render: "object", Object: rep, Summary: summary}, nil
 }
+
+// LLMOverride reports the per-run LLM base URL and model.
+func (p classifyParams) LLMOverride() (baseURL, model string) { return p.LLMBaseURL, p.LLMModel }
+
+// LLMOverride reports the per-run LLM base URL and model.
+func (p classifyEvalParams) LLMOverride() (baseURL, model string) { return p.LLMBaseURL, p.LLMModel }

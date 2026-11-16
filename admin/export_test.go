@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"slices"
 	"time"
 
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/action"
@@ -31,4 +32,19 @@ func RegistryGroupsFor(mode action.Mode) map[string]string {
 		groups[a.Name] = a.Group
 	}
 	return groups
+}
+
+// RegistryLLMActions lists the names of the registered actions marked
+// UsesLLM, in either mode.
+func RegistryLLMActions() []string {
+	var names []string
+	for _, mode := range []action.Mode{action.ModeLocal, action.ModeProduction} {
+		for _, a := range registry.For(mode) {
+			if a.UsesLLM && !slices.Contains(names, a.Name) {
+				names = append(names, a.Name)
+			}
+		}
+	}
+	slices.Sort(names)
+	return names
 }

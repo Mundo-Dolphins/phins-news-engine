@@ -152,3 +152,9 @@ func runVerify(ctx context.Context, env action.Env, params any) (action.Result, 
 	}
 	return action.Result{Render: "object", Object: rep, Summary: summary}, nil
 }
+
+// LLMOverride reports the per-run LLM base URL and model.
+func (p discoverParams) LLMOverride() (baseURL, model string) { return p.LLMBaseURL, p.LLMModel }
+
+// LLMOverride reports the per-run LLM base URL and model.
+func (p verifyParams) LLMOverride() (baseURL, model string) { return p.LLMBaseURL, p.LLMModel }

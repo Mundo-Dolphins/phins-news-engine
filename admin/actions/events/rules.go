@@ -55,7 +55,7 @@ func ruleActions() []action.Action {
 		{
 			Name: "events.rules_discover", Group: group, Title: "Discover event rule phrases",
 			Description: "Samples recent generic articles, asks the offline-training LLM for event rule phrases and stores them as pending proposals. Failed LLM calls are reported in the result, not as an error.",
-			Kind:        action.KindWrite, Modes: localOnly, LongRunning: true, Exclusive: true, Params: noParams{}, Run: runRulesDiscover,
+			Kind:        action.KindWrite, Modes: localOnly, LongRunning: true, Exclusive: true, Params: noParams{}, UsesLLM: true, Run: runRulesDiscover,
 		},
 		{
 			Name: "events.rules_queue", Group: group, Title: "Event rule review queue",
