@@ -278,6 +278,143 @@ function JobLine({ state, idle }: { state: JobState; idle?: string }) {
   return idle ? <p class="muted">{idle}</p> : null;
 }
 
+/** TypeProposal is one row of `events.type_list`: a proposed new event type. */
+interface TypeProposal {
+  id: string;
+  /** "pending" or "approved". */
+  status: string;
+  type: string;
+  description: string;
+  /** Comma-separated evidence article ids. */
+  evidence: string;
+}
+
+const evidenceCount = (t: TypeProposal) => (t.evidence ? t.evidence.split(",").filter((s) => s.trim()).length : 0);
+
+/**
+ * TypeProposals lists the new event type proposals discovery stores next to
+ * the phrases, for `events type approve|reject`. They are never applied
+ * here: an approved type is implemented through its brief. version reloads
+ * the list when it changes.
+ */
+function TypeProposals({ version }: { version: number }) {
+  const [types, setTypes] = useState<TypeProposal[] | null>(null);
+  const [loadError, setLoadError] = useState("");
+  const [notice, setNotice] = useState<Notice | undefined>();
+  const [briefs, setBriefs] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState<string>("");
+
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      try {
+        const out = await runAction("events.type_list", {}, false);
+        if ("job" in out) throw new Error("unexpected job for events.type_list");
+        if (!live) return;
+        setTypes((out.result.rows ?? []) as unknown as TypeProposal[]);
+        setLoadError("");
+      } catch (e) {
+        if (live) setLoadError("Could not load the event type proposals: " + errorText(e));
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [version]);
+
+  const decide = async (t: TypeProposal, approve: boolean) => {
+    setBusy(t.id);
+    setNotice(undefined);
+    try {
+      const out = await runAction(approve ? "events.type_approve" : "events.type_reject", { id: t.id }, false);
+      if ("job" in out) throw new Error("unexpected job for events.type_" + (approve ? "approve" : "reject"));
+      setTypes((ts) =>
+        (ts ?? []).flatMap((x) => (x.id !== t.id ? [x] : approve ? [{ ...x, status: "approved" }] : [])),
+      );
+      setNotice({ kind: "info", text: out.result.summary || `“${t.type}” ${approve ? "approved" : "rejected"}.` });
+    } catch (e) {
+      setNotice({ kind: "error", text: errorText(e) });
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const brief = async (t: TypeProposal) => {
+    if (briefs[t.id] !== undefined) {
+      setBriefs(({ [t.id]: _, ...rest }) => rest);
+      return;
+    }
+    setNotice(undefined);
+    try {
+      const out = await runAction("events.brief", { id: t.id }, false);
+      if ("job" in out) throw new Error("unexpected job for events.brief");
+      setBriefs((b) => ({ ...b, [t.id]: out.result.text ?? "" }));
+    } catch (e) {
+      setNotice({ kind: "error", text: errorText(e) });
+    }
+  };
+
+  const pending = (types ?? []).filter((t) => t.status === "pending").length;
+  return (
+    <section class="rules-zone" aria-labelledby="zone-types">
+      <h2 id="zone-types">
+        New event types
+        {types && <span class="muted zone-count"> · {pending} pending</span>}
+      </h2>
+      <p class="muted">
+        Kinds of event the LLM found that no current type covers. They are not phrases and are never applied from here:
+        approve the ones worth adding and implement them through their brief.
+      </p>
+      {notice && (
+        <p class={"notice notice-" + notice.kind} role={notice.kind === "error" ? "alert" : "status"}>
+          {notice.text}
+        </p>
+      )}
+      {types === null ? (
+        loadError ? (
+          <p class="error" role="alert">
+            {loadError}
+          </p>
+        ) : (
+          <p class="muted">Loading…</p>
+        )
+      ) : types.length === 0 ? (
+        <p class="muted">No event type proposal pending.</p>
+      ) : (
+        <ul class="rules-approved">
+          {types.map((t) => {
+            const n = evidenceCount(t);
+            return (
+              <li key={t.id}>
+                <span class="rules-approved-phrase">{t.type}</span>
+                <span class="muted">
+                  {" "}
+                  · {n} evidence article{n === 1 ? "" : "s"}
+                  {t.status === "approved" && " · approved · awaits a code change"}
+                </span>
+                <span class="spacer" />
+                {t.status === "pending" && (
+                  <button type="button" class="btn" disabled={busy !== ""} aria-label={"Approve " + t.type} onClick={() => decide(t, true)}>
+                    Approve
+                  </button>
+                )}
+                <button type="button" class="btn" disabled={busy !== ""} aria-label={"Reject " + t.type} onClick={() => decide(t, false)}>
+                  Reject
+                </button>
+                <button type="button" class="btn" aria-label={"Brief " + t.type} onClick={() => brief(t)}>
+                  Brief
+                </button>
+                <span class="type-description">{t.description}</span>
+                {briefs[t.id] !== undefined && <pre class="type-brief">{briefs[t.id]}</pre>}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 /** ReviewEvents is the web form of `events review`: discover, review and apply event rule phrases. */
 export function ReviewEvents() {
   return (
@@ -330,6 +467,8 @@ export function ReviewEventsScreen({
   const [discover, setDiscover] = useState<JobState>({ kind: "idle" });
   const [apply, setApply] = useState<JobState>({ kind: "idle" });
   const [applyNotice, setApplyNotice] = useState<Notice | undefined>();
+  // Bumped when a job ends so the type proposals reload with the queue.
+  const [typesVersion, setTypesVersion] = useState(0);
   const streams = useRef<Set<() => void>>(new Set());
 
   useEffect(() => () => streams.current.forEach((close) => close()), []);
@@ -381,6 +520,7 @@ export function ReviewEventsScreen({
       set({ kind: "error", text: errorText(e) });
     } finally {
       load();
+      setTypesVersion((v) => v + 1);
       jobHooks.current.onJobEnd?.();
     }
   };
@@ -604,6 +744,8 @@ export function ReviewEventsScreen({
           </details>
         )}
       </section>
+
+      <TypeProposals version={typesVersion} />
 
       <section class="rules-zone" aria-labelledby="zone-apply">
         <h2 id="zone-apply">
