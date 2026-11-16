@@ -13,6 +13,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/action"
+	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/llm"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/jobs"
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/store"
 )
@@ -44,28 +45,38 @@ func setupFn(t *testing.T, blocked func() error) *fixture {
 	reg := &action.Registry{}
 	local := []action.Mode{action.ModeLocal}
 	reg.Add(
-		action.Action{Name: "fake.echo", Group: "fake", Title: "Echo", Description: "Echoes text.", Kind: action.KindRead, Modes: local,
+		action.Action{
+			Name: "fake.echo", Group: "fake", Title: "Echo", Description: "Echoes text.", Kind: action.KindRead, Modes: local,
 			Params: echoParams{}, Run: func(_ context.Context, env action.Env, p any) (action.Result, error) {
 				ep, _ := p.(*echoParams)
 				return action.Result{Render: "text", Text: ep.Text + "|" + env.Actor}, nil
-			}},
-		action.Action{Name: "fake.wipe", Group: "fake", Title: "Wipe", Description: "Wipes.", Kind: action.KindDestructive, Modes: local,
+			},
+		},
+		action.Action{
+			Name: "fake.wipe", Group: "fake", Title: "Wipe", Description: "Wipes.", Kind: action.KindDestructive, Modes: local,
 			Params: wipeParams{}, Run: func(context.Context, action.Env, any) (action.Result, error) {
 				f.wiped.Add(1)
 				return action.Result{Render: "text", Text: "wiped"}, nil
-			}},
-		action.Action{Name: "fake.slow", Group: "fake", Title: "Slow", Description: "Long.", Kind: action.KindWrite, Modes: local, LongRunning: true,
+			},
+		},
+		action.Action{
+			Name: "fake.slow", Group: "fake", Title: "Slow", Description: "Long.", Kind: action.KindWrite, Modes: local, LongRunning: true,
 			Run: func(context.Context, action.Env, any) (action.Result, error) {
 				return action.Result{Render: "text", Text: "done"}, nil
-			}},
-		action.Action{Name: "fake.swap", Group: "fake", Title: "Swap", Kind: action.KindWrite, Modes: local, LongRunning: true, SwapsDB: true,
+			},
+		},
+		action.Action{
+			Name: "fake.swap", Group: "fake", Title: "Swap", Kind: action.KindWrite, Modes: local, LongRunning: true, SwapsDB: true,
 			Run: func(context.Context, action.Env, any) (action.Result, error) {
 				close(f.swapStarted)
 				<-f.swapRelease
 				return action.Result{}, nil
-			}},
-		action.Action{Name: "fake.prod", Group: "fake", Title: "Prod", Kind: action.KindRead, Modes: []action.Mode{action.ModeProduction},
-			Run: func(context.Context, action.Env, any) (action.Result, error) { return action.Result{}, nil }},
+			},
+		},
+		action.Action{
+			Name: "fake.prod", Group: "fake", Title: "Prod", Kind: action.KindRead, Modes: []action.Mode{action.ModeProduction},
+			Run: func(context.Context, action.Env, any) (action.Result, error) { return action.Result{}, nil },
+		},
 	)
 	ctx, cancel := context.WithCancel(context.Background())
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "admin.db"))
@@ -285,5 +296,45 @@ func TestActionDuringSwapIsConflict(t *testing.T) {
 	res := f.call(t, "fake_echo", map[string]any{"text": "hi"})
 	if !res.IsError || text(t, res) != "conflict: database sync in progress" {
 		t.Fatalf("echo during swap = %q", text(t, res))
+	}
+}
+
+func TestLLMToolsExist(t *testing.T) {
+	ctx := context.Background()
+	reg := &action.Registry{}
+	reg.Add(llm.Actions()...)
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "admin.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner, err := jobs.New(ctx, st, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { runner.Wait(); _ = st.Close() })
+	srv := newServer(reg, action.ModeLocal, runner, st, func(actor string) action.Env { return action.Env{Actor: actor} }, func() error { return nil })
+	ct, stt := mcp.NewInMemoryTransports()
+	ss, err := srv.Connect(ctx, stt, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ss.Close() })
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test"}, nil).Connect(ctx, ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cs.Close() })
+	res, err := cs.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, tl := range res.Tools {
+		got[tl.Name] = true
+	}
+	for _, n := range []string{"llm_status", "llm_models", "llm_select", "llm_clear"} {
+		if !got[n] {
+			t.Errorf("missing tool %s", n)
+		}
 	}
 }
