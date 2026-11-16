@@ -10,6 +10,7 @@ type Status = { servers: typeof servers; selection: { server: string; model: str
 
 let status: Status;
 let modelsFor: Record<string, string[] | string>;
+let gates: Record<string, Promise<void>>;
 let calls: { name: string; params: Record<string, unknown> }[];
 
 function ok(object: unknown) {
@@ -20,6 +21,7 @@ beforeEach(() => {
   status = { servers, selection: null };
   modelsFor = { "server-a": ["m1", "m2"] };
   calls = [];
+  gates = {};
   vi.stubGlobal(
     "fetch",
     vi.fn(async (path: string, init?: RequestInit) => {
@@ -29,6 +31,7 @@ beforeEach(() => {
       calls.push({ name, params });
       if (name === "llm.status") return ok(status);
       if (name === "llm.models") {
+        await gates[params.server as string];
         const m = modelsFor[params.server as string];
         if (typeof m === "string" || m === undefined) {
           return new Response(JSON.stringify({ error: { code: "internal", message: m ?? "unknown server" } }), {
@@ -64,6 +67,22 @@ describe("LLMSettings", () => {
     fireEvent.change(await screen.findByLabelText("Server"), { target: { value: "server-a" } });
     expect(await screen.findByLabelText("Model")).toBeTruthy();
     expect(screen.getByRole("option", { name: "m2" })).toBeTruthy();
+  });
+
+  it("drops a slower response for a server that is no longer picked", async () => {
+    let releaseA!: () => void;
+    gates["server-a"] = new Promise<void>((r) => (releaseA = r));
+    modelsFor["server-b"] = ["b1"];
+    render(<LLMSettings />);
+    const server = await screen.findByLabelText("Server");
+    fireEvent.change(server, { target: { value: "server-a" } });
+    fireEvent.change(server, { target: { value: "server-b" } });
+    expect(await screen.findByRole("option", { name: "b1" })).toBeTruthy();
+    releaseA();
+    await waitFor(() => expect(calls.filter((c) => c.name === "llm.models")).toHaveLength(2));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(screen.queryByRole("option", { name: "m1" })).toBeNull();
+    expect(screen.getByRole("option", { name: "b1" })).toBeTruthy();
   });
 
   it("shows the message and no model dropdown for an unavailable server", async () => {

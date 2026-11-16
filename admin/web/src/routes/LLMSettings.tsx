@@ -1,4 +1,4 @@
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import { clearLLM, getLLMModels, getLLMStatus, selectLLM, type LLMStatus } from "../api";
 import { LocalOnly } from "../components/LocalOnly";
 
@@ -22,13 +22,17 @@ function LLMSettingsScreen() {
   const [unavailable, setUnavailable] = useState("");
   const [model, setModel] = useState("");
   const [busy, setBusy] = useState(false);
+  // latest holds the most recently picked server; slower responses for an earlier pick are dropped.
+  const latest = useRef("");
 
   useEffect(() => {
     getLLMStatus().then(setStatus).catch((e) => setError(message(e)));
   }, []);
 
   const pickServer = async (name: string) => {
+    latest.current = name;
     setServer(name);
+    setLoading(false);
     setModels(null);
     setModel("");
     setUnavailable("");
@@ -36,11 +40,11 @@ function LLMSettingsScreen() {
     setLoading(true);
     try {
       const list = await getLLMModels(name);
-      setModels(list);
+      if (latest.current === name) setModels(list);
     } catch (e) {
-      setUnavailable(message(e));
+      if (latest.current === name) setUnavailable(message(e));
     } finally {
-      setLoading(false);
+      if (latest.current === name) setLoading(false);
     }
   };
 
@@ -99,7 +103,7 @@ function LLMSettingsScreen() {
             </label>
           )}
           <p>
-            <button class="btn" disabled={!server || !model || busy} onClick={() => apply(() => selectLLM(server, model))}>
+            <button class="btn" disabled={!server || !model || loading || busy} onClick={() => apply(() => selectLLM(server, model))}>
               Save
             </button>{" "}
             {sel && (
