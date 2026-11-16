@@ -71,23 +71,37 @@ const job = (id: string, action: string, status = "queued", result?: unknown): J
 
 type Handler = (params: Record<string, unknown>) => Promise<RunOutcome> | RunOutcome;
 
-/** serve answers runAction by action name; events.rules_queue returns the latest queue. */
-function serve(q: QueueShape, more: Record<string, Handler> = {}) {
+/** typeRow is one row of events.type_list. */
+function typeRow(over: Record<string, unknown> = {}) {
+  return { id: "t1", status: "pending", type: "kicking error", description: "The kicker missed a field goal.", evidence: "a1, a2", ...over };
+}
+
+const typeList = (rows: unknown[]): RunOutcome => ({
+  result: { render: "table", rows: rows as Record<string, unknown>[], summary: `${rows.length} event type proposal(s)` },
+});
+
+/**
+ * serve answers runAction by action name; events.rules_queue returns the
+ * latest queue and events.type_list the latest type proposals.
+ */
+function serve(q: QueueShape, more: Record<string, Handler> = {}, types: unknown[] = []) {
   let current = q;
+  let currentTypes = types;
   run.mockImplementation(async (name, params) => {
     if (name === "events.rules_queue") return queueResult(current);
     const h = more[name];
-    if (!h) throw new Error("unexpected action " + name);
-    return h(params);
+    if (h) return h(params);
+    if (name === "events.type_list") return typeList(currentTypes);
+    throw new Error("unexpected action " + name);
   });
-  return { setQueue: (next: QueueShape) => (current = next) };
+  return { setQueue: (next: QueueShape) => (current = next), setTypes: (next: unknown[]) => (currentTypes = next) };
 }
 
 const calls = (name: string) => run.mock.calls.filter(([n]) => n === name);
 const decideCalls = () => calls("events.rules_decide");
 
-async function open(q: QueueShape, more: Record<string, Handler> = {}) {
-  const s = serve(q, more);
+async function open(q: QueueShape, more: Record<string, Handler> = {}, types: unknown[] = []) {
+  const s = serve(q, more, types);
   render(<ReviewEvents />);
   await screen.findByRole("heading", { name: "Event rule review" });
   await waitFor(() => expect(calls("events.rules_queue").length).toBe(1));
@@ -331,6 +345,84 @@ describe("ReviewEvents", () => {
     expect(await screen.findByText("60 sampled, 3 calls (0 failed), 2 proposals created or updated")).toBeTruthy();
     await waitFor(() => expect(calls("events.rules_queue").length).toBe(2));
     expect(await screen.findByRole("heading", { name: /agrees to terms/ })).toBeTruthy();
+  });
+
+  it("lists the pending event type proposals that the phrase review does not show", async () => {
+    await open({}, {}, [typeRow(), typeRow({ id: "t2", type: "betting odds", description: "Point spread reports.", evidence: "a3" })]);
+    const zone = screen.getByRole("region", { name: /New event types/ });
+    expect(await within(zone).findByText("kicking error")).toBeTruthy();
+    expect(within(zone).getByText("The kicker missed a field goal.")).toBeTruthy();
+    expect(within(zone).getByText(/2 evidence articles/)).toBeTruthy();
+    expect(within(zone).getByText("betting odds")).toBeTruthy();
+    expect(within(zone).getByText(/1 evidence article\b/)).toBeTruthy();
+    expect(within(zone).getByText(/2 pending/)).toBeTruthy();
+  });
+
+  it("says when no event type proposal is pending", async () => {
+    await open({});
+    const zone = screen.getByRole("region", { name: /New event types/ });
+    expect(await within(zone).findByText("No event type proposal pending.")).toBeTruthy();
+  });
+
+  it("approves a type proposal and lists it as awaiting a code change", async () => {
+    await open({}, { "events.type_approve": () => obj({ id: "t1", type: "kicking error", status: "approved" }, "Event type proposal t1 (kicking error) approved.") }, [typeRow()]);
+    const zone = screen.getByRole("region", { name: /New event types/ });
+    await within(zone).findByText("kicking error");
+    fireEvent.click(within(zone).getByRole("button", { name: "Approve kicking error" }));
+    await waitFor(() => expect(run).toHaveBeenCalledWith("events.type_approve", { id: "t1" }, false));
+    expect(await within(zone).findByText("Event type proposal t1 (kicking error) approved.")).toBeTruthy();
+    expect(within(zone).getByText(/approved · awaits a code change/)).toBeTruthy();
+    expect(within(zone).queryByRole("button", { name: "Approve kicking error" })).toBeNull();
+    expect(within(zone).getByRole("button", { name: "Reject kicking error" })).toBeTruthy();
+  });
+
+  it("rejects a type proposal and removes it", async () => {
+    await open({}, { "events.type_reject": () => obj({ id: "t1", type: "kicking error", status: "rejected" }, "Event type proposal t1 (kicking error) rejected.") }, [typeRow()]);
+    const zone = screen.getByRole("region", { name: /New event types/ });
+    await within(zone).findByText("kicking error");
+    fireEvent.click(within(zone).getByRole("button", { name: "Reject kicking error" }));
+    await waitFor(() => expect(run).toHaveBeenCalledWith("events.type_reject", { id: "t1" }, false));
+    expect(await within(zone).findByText("Event type proposal t1 (kicking error) rejected.")).toBeTruthy();
+    expect(within(zone).queryByText("kicking error")).toBeNull();
+  });
+
+  it("shows why a type decision failed and keeps the proposal", async () => {
+    await open(
+      {},
+      {
+        "events.type_approve": () => {
+          throw new ApiError(409, "conflict", "event type proposal t1 is not pending");
+        },
+      },
+      [typeRow()],
+    );
+    const zone = screen.getByRole("region", { name: /New event types/ });
+    await within(zone).findByText("kicking error");
+    fireEvent.click(within(zone).getByRole("button", { name: "Approve kicking error" }));
+    expect(await within(zone).findByText(/is not pending/)).toBeTruthy();
+    expect(within(zone).getByText("kicking error")).toBeTruthy();
+  });
+
+  it("shows the implementation brief of a type proposal on demand", async () => {
+    await open({}, { "events.brief": () => ({ result: { render: "text", text: "Brief: add kicking error", summary: "" } }) }, [typeRow()]);
+    const zone = screen.getByRole("region", { name: /New event types/ });
+    await within(zone).findByText("kicking error");
+    fireEvent.click(within(zone).getByRole("button", { name: "Brief kicking error" }));
+    await waitFor(() => expect(run).toHaveBeenCalledWith("events.brief", { id: "t1" }, false));
+    expect(await within(zone).findByText("Brief: add kicking error")).toBeTruthy();
+  });
+
+  it("reloads the type proposals when discovery ends", async () => {
+    const s = await open({}, { "events.rules_discover": () => ({ job: job("j5", "events.rules_discover") }) });
+    const zone = screen.getByRole("region", { name: /New event types/ });
+    await within(zone).findByText("No event type proposal pending.");
+    events.mockImplementation((_id, _line, onEnd) => {
+      s.setTypes([typeRow()]);
+      onEnd(job("j5", "events.rules_discover", "succeeded", { render: "object", summary: "done", object: {} }));
+      return () => {};
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Discover phrases" }));
+    expect(await within(zone).findByText("kicking error")).toBeTruthy();
   });
 
   it("shows why discovery cannot start", async () => {
