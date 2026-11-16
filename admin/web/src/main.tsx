@@ -17,6 +17,7 @@ import { ReviewDictionary } from "./routes/ReviewDictionary";
 import { ReviewArticles } from "./routes/ReviewArticles";
 import { ReviewTerms } from "./routes/ReviewTerms";
 import { Cycle } from "./routes/Cycle";
+import { LLMSettings } from "./routes/LLMSettings";
 import "./style.css";
 
 function NotFound() {
@@ -35,6 +36,7 @@ function App() {
       <Route path="/jobs/:id" component={JobDetail} />
       <Route path="/audit" component={Audit} />
       <Route path="/cycle" component={Cycle} />
+      <Route path="/settings/llm" component={LLMSettings} />
       <Route path="/review" component={Review} />
       <Route path="/review/train" component={ReviewTrain} />
       <Route path="/review/dataset" component={ReviewDataset} />
