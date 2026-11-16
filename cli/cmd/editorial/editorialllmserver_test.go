@@ -1,6 +1,7 @@
 package editorial_test
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -48,4 +49,36 @@ func TestEditorialCycle_LLMServerReachesTheEventRuleLLM(t *testing.T) {
 	if gotURL != testsupport.LLMServerAURL || gotModel != "m1" {
 		t.Fatalf("event rule LLM built with %q %q, want %q m1\n%s", gotURL, gotModel, testsupport.LLMServerAURL, out)
 	}
+}
+
+func TestEditorialClassify_LLMServerReachesTheClassifier(t *testing.T) {
+	configPath := testsupport.WriteFixture(t)
+	testsupport.SeedUnreviewedArticle(t, configPath, "a1")
+	testsupport.SetOfflineLLMTimeout(t, configPath)
+	fake := testsupport.NewFakeLLMServer(t, "m1")
+	fake.AppendServerA(t, configPath)
+
+	out, err := testsupport.Execute(t, "--config", configPath, "editorial", "classify", "--all", "--llm-server", "server-a", "--llm-model", "m1")
+	if err != nil {
+		t.Fatalf("Execute() error = %v\n%s", err, out)
+	}
+	fake.RequireModel(t, "m1")
+}
+
+func TestEditorialClassifyEval_LLMServerReachesTheClassifier(t *testing.T) {
+	configPath := testsupport.WriteFixture(t)
+	testsupport.SetOfflineLLMTimeout(t, configPath)
+	fake := testsupport.NewFakeLLMServer(t, "m1")
+	fake.AppendServerA(t, configPath)
+	dataset := filepath.Join(t.TempDir(), "dataset.yml")
+	const examples = "examples:\n  - article_id: e1\n    title: Isotopes win big game\n    source_type: rss\n    domain: example.com\n    label: publish\n"
+	if err := os.WriteFile(dataset, []byte(examples), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := testsupport.Execute(t, "--config", configPath, "editorial", "classify-eval", "--dataset", dataset, "--fold", "all", "--llm-server", "server-a", "--llm-model", "m1")
+	if err != nil {
+		t.Fatalf("Execute() error = %v\n%s", err, out)
+	}
+	fake.RequireModel(t, "m1")
 }

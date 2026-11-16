@@ -52,7 +52,8 @@ func TestApplyLLMServer(t *testing.T) {
 		wantListed int
 	}{
 		{name: "no flags", args: nil, wantSame: true},
-		{name: "model alone", args: []string{"--llm-model", "m1"}, wantSame: true},
+		{name: "model alone on a command with its own --llm-model", predefine: true, args: []string{"--llm-model", "m1"}, wantSame: true},
+		{name: "model alone on a command whose --llm-model the helper added", args: []string{"--llm-model", "m1"}, wantErr: "--llm-model requires --llm-server"},
 		{name: "server without model", args: []string{"--llm-server", "server-a"}, wantErr: "--llm-server requires --llm-model"},
 		{name: "selected", args: []string{"--llm-server", "server-a", "--llm-model", "m1"}, wantURL: "http://server-a:8000/v1", wantModel: "m1", wantListed: 1},
 		{name: "selected predefined flags", predefine: true, args: []string{"--llm-server", "server-b", "--llm-model", "m1"}, wantURL: "http://server-b:11434/v1", wantModel: "m1", wantListed: 1},
