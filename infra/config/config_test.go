@@ -2977,3 +2977,60 @@ func TestSchedulerConfig_TimedEventDefaultsAndValidation(t *testing.T) {
 		t.Fatal("negative grace accepted")
 	}
 }
+
+func TestValidateLLMServers(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      []config.LLMServerConfig
+		wantErr string
+	}{
+		{"nil", nil, ""},
+		{"valid", []config.LLMServerConfig{
+			{Name: "server-a", BaseURL: "http://server-a:8000/v1"},
+			{Name: "local", BaseURL: "http://localhost:11434/v1"},
+		}, ""},
+		{"empty name", []config.LLMServerConfig{{BaseURL: "http://server-a:8000/v1"}}, "name is required"},
+		{"duplicate", []config.LLMServerConfig{
+			{Name: "server-a", BaseURL: "http://server-a:8000/v1"},
+			{Name: "server-a", BaseURL: "http://server-b:8000/v1"},
+		}, "duplicate"},
+		{"bad scheme", []config.LLMServerConfig{{Name: "server-a", BaseURL: "ftp://x"}}, "base_url"},
+		{"empty url", []config.LLMServerConfig{{Name: "server-a"}}, "base_url"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := config.ValidateLLMServers(tt.in)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("ValidateLLMServers() error = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("ValidateLLMServers() error = %v, want containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestLoad_ParsesLLMServers(t *testing.T) {
+	yml := validYAML + `
+llm_servers:
+  - name: server-a
+    base_url: http://server-a:8000/v1
+    api_key_env: SERVER_A_KEY
+  - name: local
+    base_url: http://localhost:11434/v1
+`
+	cfg, err := config.Load(writeFixture(t, yml))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	want := []config.LLMServerConfig{
+		{Name: "server-a", BaseURL: "http://server-a:8000/v1", APIKeyEnv: "SERVER_A_KEY"},
+		{Name: "local", BaseURL: "http://localhost:11434/v1"},
+	}
+	if !reflect.DeepEqual(cfg.LLMServers, want) {
+		t.Errorf("LLMServers = %+v, want %+v", cfg.LLMServers, want)
+	}
+}

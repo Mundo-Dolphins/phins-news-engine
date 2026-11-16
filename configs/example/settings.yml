@@ -237,6 +237,12 @@ alerts:
   chat_id: ""
   dedup_hours: 24
   disabled: false
+# Named OpenAI-compatible servers the admin can select; models are listed live.
+# api_key_env names an env var holding an optional bearer key.
+llm_servers:
+  - name: server-a
+    base_url: "http://server-a:8000/v1"
+    api_key_env: ""
 publication:
   max_attempts: 6
   base_backoff_seconds: 30
