@@ -38,6 +38,9 @@ func newRunCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if cfg, err = shared.ApplyLLMServer(cmd, cfg); err != nil {
+				return err
+			}
 			if cfg.Model.Path == "" {
 				return fmt.Errorf("train run: model.path is not configured")
 			}
@@ -115,5 +118,6 @@ func newRunCommand() *cobra.Command {
 	cmd.Flags().StringVar(&candidatesDir, "candidates", "models/editorial/candidates", "directory to write trained candidates to")
 	cmd.Flags().IntVar(&maxPerCluster, "max-per-cluster", 1, "maximum number of examples kept from any one event cluster")
 	cmd.Flags().StringSliceVar(&includeDB, "include-db", nil, "read-only SQLite snapshot whose human labels should be merged into Gold (repeatable)")
+	shared.AddLLMServerFlags(cmd)
 	return cmd
 }

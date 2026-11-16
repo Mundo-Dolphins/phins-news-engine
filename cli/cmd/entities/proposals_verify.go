@@ -6,6 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Mundo-Dolphins/phins-news-engine/cli/cmd/shared"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/entitywiring"
 )
 
@@ -79,6 +80,7 @@ func newProposalsVerifyCommand() *cobra.Command {
 	cmd.Flags().StringVar(&generatedPath, "generated", "configs/entity_catalog_generated.yml", "path to the generated entity catalog YAML file")
 	cmd.Flags().StringVar(&llmBaseURL, "llm-base-url", "", "override entity_discovery.llm.base_url for this run")
 	cmd.Flags().StringVar(&llmModel, "llm-model", "", "override entity_discovery.llm.model for this run")
+	shared.AddLLMServerFlags(cmd)
 	cmd.Flags().IntVar(&llmMaxTokens, "llm-max-tokens", 0, "maximum LLM response tokens for this run (0 uses the provider default)")
 	cmd.Flags().BoolVar(&llmDisableThinking, "llm-disable-thinking", false, "ask compatible reasoning models (such as Ollama) not to generate thinking output")
 	cmd.Flags().StringVar(&provider, "provider", "", "verify with a single provider: wikidata (Wikidata only, no LLM/SearXNG fallback)")

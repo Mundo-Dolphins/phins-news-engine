@@ -33,6 +33,9 @@ func newClassifyEvalCommand() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("editorial classify-eval: %w", err)
 			}
+			if cfg, err = shared.ApplyLLMServer(cmd, cfg); err != nil {
+				return fmt.Errorf("editorial classify-eval: %w", err)
+			}
 			rep, err := trainwiring.ClassifyEval(cmd.Context(), cfg, trainwiring.ClassifyEvalFlags{
 				DatasetPath: datasetPath, Fold: fold, PolicyFile: policyFile, MissesOut: missesOut,
 				BaseURL: llmBaseURL, Model: llmModel, Sample: sample, BatchSize: batchSize,
@@ -76,5 +79,6 @@ func newClassifyEvalCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&includeImported, "include-imported", false, "also evaluate telegramimport publish labels (posted to the channel, not human-reviewed)")
 	cmd.Flags().StringVar(&llmBaseURL, "llm-base-url", "", "override offline_training.llm.base_url for this run")
 	cmd.Flags().StringVar(&llmModel, "llm-model", "", "override offline_training.llm.model for this run")
+	shared.AddLLMServerFlags(cmd)
 	return cmd
 }

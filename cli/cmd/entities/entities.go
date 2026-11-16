@@ -43,6 +43,11 @@ func openDatabase(cmd *cobra.Command) (*sql.DB, *config.Config, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	// Reject a bad --llm-server before the database is touched. Commands
+	// without the flag get cfg back unchanged.
+	if cfg, err = shared.ApplyLLMServer(cmd, cfg); err != nil {
+		return nil, nil, err
+	}
 	db, err := infrasqlite.Open(cfg.SQLite.Path, cfg.SQLite.BusyTimeout())
 	if err != nil {
 		return nil, nil, err

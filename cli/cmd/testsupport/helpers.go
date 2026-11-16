@@ -18,6 +18,7 @@ import (
 	sqliteadapter "github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqlite"
 	"github.com/Mundo-Dolphins/phins-news-engine/app/editorialtrain"
 	"github.com/Mundo-Dolphins/phins-news-engine/cli"
+	"github.com/Mundo-Dolphins/phins-news-engine/cli/cmd/shared"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/article"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/editorial"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/source"
@@ -347,6 +348,45 @@ offline_training:
 func WriteFixture(t *testing.T) string {
 	t.Helper()
 	return WriteFixtureWithDatabase(t, true)
+}
+
+// LLMServerAURL is the base URL of server-a in the config AppendLLMServers adds.
+const LLMServerAURL = "http://server-a:8000/v1"
+
+// AppendLLMServers adds two llm_servers (server-a, server-b) to the config at
+// path.
+func AppendLLMServers(t *testing.T, path string) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString("\nllm_servers:\n  - name: server-a\n    base_url: " + LLMServerAURL + "\n  - name: server-b\n    base_url: http://server-b:11434/v1\n"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// StubLLMModels makes every LLM server list exactly models, with no network.
+func StubLLMModels(t *testing.T, models ...string) {
+	t.Helper()
+	orig := shared.ListLLMModels
+	t.Cleanup(func() { shared.ListLLMModels = orig })
+	shared.ListLLMModels = func(context.Context, config.LLMServerConfig) ([]string, error) { return models, nil }
+}
+
+// ExpectUnlistedLLMModel runs args plus an --llm-server/--llm-model pair whose
+// model the server does not list, and fails unless the command rejects it.
+func ExpectUnlistedLLMModel(t *testing.T, configPath string, args ...string) {
+	t.Helper()
+	AppendLLMServers(t, configPath)
+	StubLLMModels(t, "m1")
+	full := append([]string{"--config", configPath}, args...)
+	full = append(full, "--llm-server", "server-a", "--llm-model", "nope")
+	out, err := Execute(t, full...)
+	if err == nil || !strings.Contains(err.Error(), `model "nope" is not available on server-a`) {
+		t.Fatalf("err = %v, want unlisted-model error\n%s", err, out)
+	}
 }
 
 func WriteFreshFixture(t *testing.T) string {
