@@ -267,7 +267,7 @@ func TestRun_ApproveOneRejectOneAndApply(t *testing.T) {
 	if p := ps["inks"]; p.Status != eventruleproposal.StatusRejected {
 		t.Errorf("auto-rejected proposal %+v", p)
 	}
-	if p := ps["type:stadium renovation"]; p.Status != eventruleproposal.StatusPending || p.Kind != eventruleproposal.KindType {
+	if p := ps["type:stadium-renovation"]; p.Status != eventruleproposal.StatusPending || p.Kind != eventruleproposal.KindType {
 		t.Errorf("type proposal %+v", p)
 	}
 
@@ -279,7 +279,7 @@ func TestRun_ApproveOneRejectOneAndApply(t *testing.T) {
 		w[1].TargetKind != "action" || w[1].ProposalID != ps["lands on the shelf"].ID {
 		t.Errorf("written %+v", w)
 	}
-	for _, want := range []string{"1 generic → injury", "Ezo lands on the shelf with ankle", "phrase shorter than", "stadium renovation"} {
+	for _, want := range []string{"1 generic → injury", "Ezo lands on the shelf with ankle", "phrase shorter than", "stadium-renovation"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}
@@ -660,8 +660,8 @@ func TestRun_ListsOnlyThisRunsTypeProposals(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, out := h.run(t, "s\ns\n")
-	cur := h.byPhrase(t)["type:stadium renovation"]
-	if !strings.Contains(out, cur.ID) || !strings.Contains(out, "stadium renovation") {
+	cur := h.byPhrase(t)["type:stadium-renovation"]
+	if !strings.Contains(out, cur.ID) || !strings.Contains(out, "stadium-renovation") {
 		t.Errorf("this run's type proposal not listed with its id:\n%s", out)
 	}
 	if strings.Contains(out, "coaching search") || strings.Contains(out, old.ID) {

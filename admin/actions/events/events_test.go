@@ -153,15 +153,15 @@ func TestMetadata(t *testing.T) {
 
 func TestTypeListPendingThenApproved(t *testing.T) {
 	f := newFixture(t)
-	f.seed(typeProposal("approved one", eventruleproposal.StatusApproved))
-	f.seed(typeProposal("pending one", eventruleproposal.StatusPending))
+	f.seed(typeProposal("approved-one", eventruleproposal.StatusApproved))
+	f.seed(typeProposal("pending-one", eventruleproposal.StatusPending))
 	f.seed(phraseProposal())
 	f.seed(typeProposal("rejected one", eventruleproposal.StatusRejected))
 	res, err := f.runIn(action.ModeProduction, "events.type_list", `{}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Rows) != 2 || res.Rows[0]["type"] != "pending one" || res.Rows[1]["type"] != "approved one" {
+	if len(res.Rows) != 2 || res.Rows[0]["type"] != "pending-one" || res.Rows[1]["type"] != "approved-one" {
 		t.Fatalf("rows = %v", res.Rows)
 	}
 	if res.Rows[0]["evidence"] != "a1, a2" || res.Rows[0]["status"] != "pending" {

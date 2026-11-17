@@ -21,8 +21,9 @@ var ErrStatusChanged = errors.New("proposal status changed since it was read")
 // Repository persists event rule proposals.
 type Repository interface {
 	// Upsert stores p keyed by its logical rule (kind, target kind, target,
-	// phrase, type name; case-insensitive). A pending match has its evidence
-	// merged; a match in any other status is returned unchanged (a rejected
+	// phrase, type name; case-insensitive). A type proposal is keyed by the
+	// slug of its name alone. A pending match has its evidence merged (and a
+	// type's empty target filled from p); a match in any other status is returned unchanged (a rejected
 	// proposal is never resurrected). The returned proposal carries the
 	// stored ID.
 	Upsert(ctx context.Context, p eventruleproposal.Proposal) (eventruleproposal.Proposal, error)

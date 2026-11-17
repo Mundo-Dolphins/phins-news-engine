@@ -35,16 +35,25 @@ const selectColumns = `id, kind, target_kind, target, phrase, type_name, descrip
 	evidence_json, status, prompt_version, created_at, decided_at`
 
 // normalize returns p with phrase and type name trimmed and lowercased, so
-// every consumer (impact, checks, loader) sees identical strings.
+// every consumer (impact, checks, loader) sees identical strings. A type
+// proposal's name is reduced to its slug.
 func normalize(p eventruleproposal.Proposal) eventruleproposal.Proposal {
 	p.Phrase = strings.ToLower(strings.TrimSpace(p.Phrase))
 	p.TypeName = strings.ToLower(strings.TrimSpace(p.TypeName))
+	if p.Kind == eventruleproposal.KindType {
+		p.TypeName = eventruleproposal.Slug(p.TypeName)
+	}
 	p.Target = strings.TrimSpace(p.Target)
 	return p
 }
 
 // proposalID derives the stable ID from the normalized logical key.
+// A type proposal is keyed by its slug alone (kind and slug, no target kind
+// or target), so renamed targets do not split it.
 func proposalID(p eventruleproposal.Proposal) string {
+	if p.Kind == eventruleproposal.KindType {
+		p.TargetKind, p.Target, p.Phrase = "", "", ""
+	}
 	key := strings.Join([]string{string(p.Kind), string(p.TargetKind), p.Target, p.Phrase, p.TypeName}, "|")
 	sum := sha256.Sum256([]byte(key))
 	return "evr_" + hex.EncodeToString(sum[:])[:12]
@@ -143,10 +152,18 @@ func (r *Repository) Upsert(ctx context.Context, p eventruleproposal.Proposal) (
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	existing, err := scan(tx.QueryRowContext(ctx,
-		`SELECT `+selectColumns+` FROM event_rule_proposals
+	var row scanner
+	if p.Kind == eventruleproposal.KindType {
+		row = tx.QueryRowContext(ctx,
+			`SELECT `+selectColumns+` FROM event_rule_proposals WHERE kind = 'type' AND type_name = ?`,
+			p.TypeName)
+	} else {
+		row = tx.QueryRowContext(ctx,
+			`SELECT `+selectColumns+` FROM event_rule_proposals
 		 WHERE kind = ? AND target_kind = ? AND target = ? AND lower(phrase) = ? AND lower(type_name) = ?`,
-		string(p.Kind), string(p.TargetKind), p.Target, p.Phrase, p.TypeName))
+			string(p.Kind), string(p.TargetKind), p.Target, p.Phrase, p.TypeName)
+	}
+	existing, err := scan(row)
 	switch {
 	case err == nil:
 		if existing.Status != eventruleproposal.StatusPending {
@@ -157,8 +174,11 @@ func (r *Repository) Upsert(ctx context.Context, p eventruleproposal.Proposal) (
 		if merr != nil {
 			return eventruleproposal.Proposal{}, merr
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE event_rule_proposals SET evidence_json = ? WHERE id = ?`,
-			string(blob), existing.ID); err != nil {
+		if existing.Target == "" && p.Target != "" {
+			existing.Target = p.Target
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE event_rule_proposals SET evidence_json = ?, target = ? WHERE id = ?`,
+			string(blob), existing.Target, existing.ID); err != nil {
 			return eventruleproposal.Proposal{}, fmt.Errorf("sqliteeventruleproposal: merge evidence: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
@@ -171,11 +191,8 @@ func (r *Repository) Upsert(ctx context.Context, p eventruleproposal.Proposal) (
 		if merr != nil {
 			return eventruleproposal.Proposal{}, merr
 		}
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO event_rule_proposals (`+selectColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			p.ID, string(p.Kind), string(p.TargetKind), p.Target, p.Phrase, p.TypeName, p.Description,
-			string(blob), string(p.Status), p.PromptVersion, p.CreatedAt.UTC().Format(timeFormat), nullableTime(p.DecidedAt)); err != nil {
-			return eventruleproposal.Proposal{}, fmt.Errorf("sqliteeventruleproposal: insert: %w", err)
+		if err := insertProposal(ctx, tx, p, string(blob)); err != nil {
+			return eventruleproposal.Proposal{}, err
 		}
 		if err := tx.Commit(); err != nil {
 			return eventruleproposal.Proposal{}, fmt.Errorf("sqliteeventruleproposal: commit: %w", err)
@@ -185,6 +202,99 @@ func (r *Repository) Upsert(ctx context.Context, p eventruleproposal.Proposal) (
 	default:
 		return eventruleproposal.Proposal{}, fmt.Errorf("sqliteeventruleproposal: lookup: %w", err)
 	}
+}
+
+// insertProposal inserts an already normalized proposal with its ID and
+// JSON-encoded evidence set.
+func insertProposal(ctx context.Context, tx *sql.Tx, p eventruleproposal.Proposal, evidenceJSON string) error {
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO event_rule_proposals (`+selectColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.ID, string(p.Kind), string(p.TargetKind), p.Target, p.Phrase, p.TypeName, p.Description,
+		evidenceJSON, string(p.Status), p.PromptVersion, p.CreatedAt.UTC().Format(timeFormat), nullableTime(p.DecidedAt)); err != nil {
+		return fmt.Errorf("sqliteeventruleproposal: insert: %w", err)
+	}
+	return nil
+}
+
+// MergeTypes folds the type proposal srcID into dstID in one transaction: the
+// source becomes rejected (decided_at = now) and the destination gains the
+// source's evidence. Each write is guarded by the expected prior status
+// (srcFrom, dstFrom); if either guard misses nothing is written and the error
+// wraps eventruleproposalport.ErrStatusChanged. It returns the updated
+// destination.
+func (r *Repository) MergeTypes(ctx context.Context, srcID string, srcFrom eventruleproposal.Status, dstID string, dstFrom eventruleproposal.Status, now time.Time) (eventruleproposal.Proposal, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return eventruleproposal.Proposal{}, fmt.Errorf("sqliteeventruleproposal: begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	src, err := scan(tx.QueryRowContext(ctx, `SELECT `+selectColumns+` FROM event_rule_proposals WHERE id = ?`, srcID))
+	if err != nil {
+		return eventruleproposal.Proposal{}, fmt.Errorf("sqliteeventruleproposal: merge source %q: %w", srcID, err)
+	}
+	dst, err := scan(tx.QueryRowContext(ctx, `SELECT `+selectColumns+` FROM event_rule_proposals WHERE id = ?`, dstID))
+	if err != nil {
+		return eventruleproposal.Proposal{}, fmt.Errorf("sqliteeventruleproposal: merge destination %q: %w", dstID, err)
+	}
+	dst.EvidenceIDs = mergeEvidence(dst.EvidenceIDs, src.EvidenceIDs)
+	blob, err := json.Marshal(dst.EvidenceIDs)
+	if err != nil {
+		return eventruleproposal.Proposal{}, err
+	}
+
+	res, err := tx.ExecContext(ctx, `UPDATE event_rule_proposals SET status = ?, decided_at = ? WHERE id = ? AND status = ?`,
+		string(eventruleproposal.StatusRejected), nullableTime(now), srcID, string(srcFrom))
+	if err != nil {
+		return eventruleproposal.Proposal{}, fmt.Errorf("sqliteeventruleproposal: merge source: %w", err)
+	}
+	if n, err := res.RowsAffected(); err != nil || n == 0 {
+		return eventruleproposal.Proposal{}, fmt.Errorf("sqliteeventruleproposal: proposal %q is no longer %s: %w", srcID, srcFrom, eventruleproposalport.ErrStatusChanged)
+	}
+	res, err = tx.ExecContext(ctx, `UPDATE event_rule_proposals SET evidence_json = ? WHERE id = ? AND status = ?`,
+		string(blob), dstID, string(dstFrom))
+	if err != nil {
+		return eventruleproposal.Proposal{}, fmt.Errorf("sqliteeventruleproposal: merge destination: %w", err)
+	}
+	if n, err := res.RowsAffected(); err != nil || n == 0 {
+		return eventruleproposal.Proposal{}, fmt.Errorf("sqliteeventruleproposal: proposal %q is no longer %s: %w", dstID, dstFrom, eventruleproposalport.ErrStatusChanged)
+	}
+	if err := tx.Commit(); err != nil {
+		return eventruleproposal.Proposal{}, fmt.Errorf("sqliteeventruleproposal: commit: %w", err)
+	}
+	return dst, nil
+}
+
+// ReplaceTypes deletes the proposals deleteIDs and inserts the given ones in
+// one transaction. Each inserted proposal is normalized and gets the ID
+// Upsert would assign it.
+func (r *Repository) ReplaceTypes(ctx context.Context, deleteIDs []string, insert []eventruleproposal.Proposal) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("sqliteeventruleproposal: begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	for _, id := range deleteIDs {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM event_rule_proposals WHERE id = ?`, id); err != nil {
+			return fmt.Errorf("sqliteeventruleproposal: delete %q: %w", id, err)
+		}
+	}
+	for _, p := range insert {
+		p = normalize(p)
+		p.ID = proposalID(p)
+		blob, err := json.Marshal(mergeEvidence(nil, p.EvidenceIDs))
+		if err != nil {
+			return err
+		}
+		if err := insertProposal(ctx, tx, p, string(blob)); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sqliteeventruleproposal: commit: %w", err)
+	}
+	return nil
 }
 
 // ListByStatus implements eventruleproposalport.Repository.

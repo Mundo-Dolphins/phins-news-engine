@@ -82,7 +82,7 @@ const goldenReviewEditApply = "event rules: 10 generic articles sampled, 6 LLM c
 	"Clustering gate: gate not exercised (0 dataset articles affected)\n" +
 	"Clustering gate passed; 1 rule(s) applied to generated.yaml\n" +
 	"Event type proposals from this run (not applied automatically; decide with `events type approve|reject <id>`):\n" +
-	"  - <type:stadium renovation> stadium renovation: work on the stadium (evidence a3)\n"
+	"  - <type:stadium-renovation> stadium-renovation: work on the stadium (evidence a3)\n"
 
 const goldenGateBlockedThenCarriedOver = "event rules: 10 generic articles sampled, 6 LLM calls (0 failed)\n" +
 	"event rules: 4 proposals created or updated\n" +
@@ -108,7 +108,7 @@ const goldenGateBlockedThenCarriedOver = "event rules: 10 generic articles sampl
 	"  - <inks a deal> action sign \"inks a deal\"\n" +
 	"They stay approved; no rules file was written. Reject the offender in the next run.\n" +
 	"Event type proposals from this run (not applied automatically; decide with `events type approve|reject <id>`):\n" +
-	"  - <type:stadium renovation> stadium renovation: work on the stadium (evidence a3)\n" +
+	"  - <type:stadium-renovation> stadium-renovation: work on the stadium (evidence a3)\n" +
 	"=== second run ===\n" +
 	"event rules: 10 generic articles sampled, 6 LLM calls (0 failed)\n" +
 	"event rules: 0 proposals created or updated\n" +

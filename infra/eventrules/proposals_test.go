@@ -33,7 +33,7 @@ func TestListTypesPendingThenApprovedTypesOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 || got[0].TypeName != "pending one" || got[1].TypeName != "approved one" {
+	if len(got) != 2 || got[0].TypeName != "pending-one" || got[1].TypeName != "approved-one" {
 		t.Fatalf("ListTypes() = %+v, want pending then approved types only", got)
 	}
 }
@@ -103,7 +103,7 @@ func TestBriefQuotesEvidenceAndSkipsPruned(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"contract extension", "- Isotopes extend Ezo", "- Dale gets new deal"} {
+	for _, want := range []string{"contract-extension", "- Isotopes extend Ezo", "- Dale gets new deal"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("brief lacks %q:\n%s", want, got)
 		}

@@ -196,7 +196,7 @@ func TestEventsBrief_PrintsBriefForTypeProposal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute() error = %v\n%s", err, out)
 	}
-	for _, want := range []string{"contract extension", "- Isotopes extend Ezo", "- Dale gets new deal", "ActionContractExtension", "knownEventTypes"} {
+	for _, want := range []string{"contract-extension", "- Isotopes extend Ezo", "- Dale gets new deal", "ActionContractExtension", "knownEventTypes"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}
@@ -251,7 +251,7 @@ func TestEventsType_ListApproveReject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list: %v\n%s", err, out)
 	}
-	for _, want := range []string{ext, "contract extension", works, "stadium works"} {
+	for _, want := range []string{ext, "contract-extension", works, "stadium-works"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("list lacks %q:\n%s", want, out)
 		}
@@ -288,7 +288,7 @@ func TestEventsType_ListApproveReject(t *testing.T) {
 			t.Errorf("%s: status %s err %v, want %s", id, p.Status, err, want)
 		}
 	}
-	if out, err := testsupport.Execute(t, "--config", configPath, "events", "brief", ext); err != nil || !strings.Contains(out, "contract extension") {
+	if out, err := testsupport.Execute(t, "--config", configPath, "events", "brief", ext); err != nil || !strings.Contains(out, "contract-extension") {
 		t.Errorf("brief of an approved type proposal: %v\n%s", err, out)
 	}
 }
