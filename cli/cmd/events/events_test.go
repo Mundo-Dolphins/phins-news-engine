@@ -295,7 +295,7 @@ func TestEventsType_ListApproveReject(t *testing.T) {
 
 type noopEventRuleLLM struct{}
 
-func (noopEventRuleLLM) DiscoverTopics(context.Context, []appout.EventRuleArticle) ([]appout.EventTopicProposal, error) {
+func (noopEventRuleLLM) DiscoverTopics(context.Context, []appout.EventRuleArticle, []string) ([]appout.EventTopicProposal, error) {
 	return nil, nil
 }
 

@@ -16,7 +16,7 @@ import (
 
 type nopLLM struct{}
 
-func (nopLLM) DiscoverTopics(context.Context, []appout.EventRuleArticle) ([]appout.EventTopicProposal, error) {
+func (nopLLM) DiscoverTopics(context.Context, []appout.EventRuleArticle, []string) ([]appout.EventTopicProposal, error) {
 	return nil, nil
 }
 

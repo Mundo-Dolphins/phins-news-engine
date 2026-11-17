@@ -82,7 +82,7 @@ func list(t *testing.T, m map[string]any, key string) []any {
 
 type fakeLLM struct{ err error }
 
-func (l fakeLLM) DiscoverTopics(context.Context, []appout.EventRuleArticle) ([]appout.EventTopicProposal, error) {
+func (l fakeLLM) DiscoverTopics(context.Context, []appout.EventRuleArticle, []string) ([]appout.EventTopicProposal, error) {
 	return nil, l.err
 }
 

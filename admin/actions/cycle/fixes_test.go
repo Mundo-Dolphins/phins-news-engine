@@ -83,7 +83,7 @@ func TestNextRecordsEnteredAt(t *testing.T) {
 
 type fakeRuleLLM struct{ err error }
 
-func (l fakeRuleLLM) DiscoverTopics(context.Context, []out.EventRuleArticle) ([]out.EventTopicProposal, error) {
+func (l fakeRuleLLM) DiscoverTopics(context.Context, []out.EventRuleArticle, []string) ([]out.EventTopicProposal, error) {
 	return nil, l.err
 }
 

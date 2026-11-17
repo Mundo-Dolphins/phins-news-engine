@@ -147,11 +147,16 @@ func TestApplyMarkFailureSaysTheFileWasWritten(t *testing.T) {
 type listHookRepo struct {
 	*sqliteeventruleproposal.Repository
 	afterApproved func()
+	// skip is how many approved listings pass before the hook fires: the
+	// discovery step lists them once to collect the known type names.
+	skip int
 }
 
 func (r *listHookRepo) ListByStatus(ctx context.Context, s eventruleproposal.Status) ([]eventruleproposal.Proposal, error) {
 	ps, err := r.Repository.ListByStatus(ctx, s)
-	if s == eventruleproposal.StatusApproved && r.afterApproved != nil {
+	if s == eventruleproposal.StatusApproved && r.skip > 0 {
+		r.skip--
+	} else if s == eventruleproposal.StatusApproved && r.afterApproved != nil {
 		hook := r.afterApproved
 		r.afterApproved = nil
 		hook()
@@ -163,7 +168,7 @@ func (r *listHookRepo) ListByStatus(ctx context.Context, s eventruleproposal.Sta
 // rejects it in the store, as a panel decision racing the CLI.
 func rejectAfterListing(t *testing.T, h *harness, phrase string) {
 	t.Helper()
-	repo := &listHookRepo{Repository: h.repo}
+	repo := &listHookRepo{Repository: h.repo, skip: 1}
 	repo.afterApproved = func() {
 		p := h.byPhrase(t)[phrase]
 		if _, err := eventrulecycle.Reject(context.Background(), eventrulecycle.Deps{Proposals: h.repo}, p, testNow); err != nil {

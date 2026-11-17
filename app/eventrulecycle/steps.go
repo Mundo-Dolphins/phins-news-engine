@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -72,9 +73,9 @@ func Prepare(ctx context.Context, d Deps) (Context, error) {
 // DiscoverResult summarises one discovery pass. Unavailable is true when
 // every LLM call failed; nothing is stored then.
 type DiscoverResult struct {
-	Sampled, Calls, Failed, Proposed int
-	FirstErr                         error
-	Unavailable                      bool
+	Sampled, Calls, Failed, Proposed, Dropped int
+	FirstErr                                  error
+	Unavailable                               bool
 }
 
 // Discover asks the LLM for topics and phrases over c's sample in batches of
@@ -88,15 +89,46 @@ func Discover(ctx context.Context, d Deps, c Context, batchSize int) (DiscoverRe
 // discoverAndStore is Discover that also returns the IDs of the pending type
 // proposals stored or updated, which Run lists at the end.
 func discoverAndStore(ctx context.Context, d Deps, c Context, batchSize int) (DiscoverResult, map[string]bool, error) {
-	topics, phrases, failed, calls, firstErr := discover(ctx, d.LLM, c.Sample, batchSize)
+	known, err := knownNames(ctx, d.Proposals)
+	if err != nil {
+		return DiscoverResult{}, nil, err
+	}
+	topics, phrases, failed, calls, firstErr := discover(ctx, d.LLM, c.Sample, batchSize, known)
 	r := DiscoverResult{Sampled: len(c.Sample), Calls: calls, Failed: failed, FirstErr: firstErr}
 	if calls > 0 && failed == calls {
 		r.Unavailable = true
 		return r, nil, nil
 	}
-	n, typesNow, err := persistProposals(ctx, d.Proposals, c.Base, c.Text, topics, phrases, nowOf(d)().UTC())
-	r.Proposed = n
+	n, typesNow, dropped, err := persistProposals(ctx, d.Proposals, c.Base, c.Text, topics, phrases, nowOf(d)().UTC())
+	r.Proposed, r.Dropped = n, dropped
 	return r, typesNow, err
+}
+
+// knownNames is KnownTypeNames plus the slugs of the pending and approved
+// type proposals, sorted and unique: the names the LLM is told exist.
+func knownNames(ctx context.Context, repo eventruleproposalport.Repository) ([]string, error) {
+	seen := map[string]bool{}
+	names := KnownTypeNames()
+	for _, n := range names {
+		seen[n] = true
+	}
+	for _, st := range []eventruleproposal.Status{eventruleproposal.StatusPending, eventruleproposal.StatusApproved} {
+		ps, err := repo.ListByStatus(ctx, st)
+		if err != nil {
+			return nil, fmt.Errorf("eventrulecycle: list %s proposals: %w", st, err)
+		}
+		for _, p := range ps {
+			if p.Kind != eventruleproposal.KindType {
+				continue
+			}
+			if n := eventruleproposal.Slug(p.TypeName); n != "" && !seen[n] {
+				seen[n] = true
+				names = append(names, n)
+			}
+		}
+	}
+	sort.Strings(names)
+	return names, nil
 }
 
 // Assessment is a phrase proposal measured against a Context. NoEvidence is
