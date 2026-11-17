@@ -8,6 +8,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/app/clustereval"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/clustering"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals"
+	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals/eventsignalstest"
 	"github.com/Mundo-Dolphins/phins-news-engine/testsupport/repofs"
 )
 
@@ -22,6 +23,7 @@ func almostEqual(a, b float64) bool { return math.Abs(a-b) < 1e-9 }
 // configs/event_clustering_rules.yml vocabulary.
 func testRules() eventsignals.Rules {
 	return eventsignals.Rules{
+		Taxonomy: eventsignalstest.Taxonomy(),
 		ActionTerms: map[eventsignals.Action][]string{
 			eventsignals.ActionSign:    {"sign", "signs", "signed"},
 			eventsignals.ActionRelease: {"release", "released", "releases"},

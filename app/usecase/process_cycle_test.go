@@ -19,6 +19,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/editorialveto"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/entityproposal"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals"
+	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals/eventsignalstest"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/matchstate"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/normalization"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/publishing"
@@ -110,7 +111,8 @@ func clusterTestSettings() in.ClusterSettings {
 	return in.ClusterSettings{
 		Enabled: true,
 		Rules: eventsignals.Rules{
-			Version: "test-cluster-rules-v1",
+			Taxonomy: eventsignalstest.Taxonomy(),
+			Version:  "test-cluster-rules-v1",
 			ActionTerms: map[eventsignals.Action][]string{
 				eventsignals.ActionSign:    {"sign", "signs", "signed"},
 				eventsignals.ActionRelease: {"release", "released"},

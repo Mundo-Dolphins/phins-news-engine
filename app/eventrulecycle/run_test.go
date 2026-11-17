@@ -21,6 +21,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/article"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventruleproposal"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals"
+	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals/eventsignalstest"
 	infrasqlite "github.com/Mundo-Dolphins/phins-news-engine/infra/sqlite"
 	"github.com/Mundo-Dolphins/phins-news-engine/migrations"
 	appout "github.com/Mundo-Dolphins/phins-news-engine/ports/out"
@@ -166,7 +167,9 @@ func newHarness(t *testing.T) *harness {
 		Sampler:   func(context.Context) ([]eventruleproposal.Sample, error) { return testSample(), nil },
 		LLM:       h.llm,
 		Proposals: h.repo,
-		BaseRules: func() (eventsignals.Rules, error) { return eventsignals.Rules{}, nil },
+		BaseRules: func() (eventsignals.Rules, error) {
+			return eventsignals.Rules{Taxonomy: eventsignalstest.Taxonomy()}, nil
+		},
 		Gate: func(_ context.Context, c []eventrulecycle.AppliedRule) (eventrulecycle.GateResult, error) {
 			h.gateIn = append(h.gateIn, c)
 			return h.gate, nil
@@ -599,7 +602,7 @@ func TestRun_NilScannerOnlyFailsWhenPrompting(t *testing.T) {
 func TestRun_CueRetypingATypedControlArticleIsAutoRejected(t *testing.T) {
 	h := newHarness(t)
 	h.deps.BaseRules = func() (eventsignals.Rules, error) {
-		return eventsignals.Rules{ActionTerms: map[eventsignals.Action][]string{eventsignals.ActionTrade: {"trades"}}}, nil
+		return eventsignals.Rules{Taxonomy: eventsignalstest.Taxonomy(), ActionTerms: map[eventsignals.Action][]string{eventsignals.ActionTrade: {"trades"}}}, nil
 	}
 	h.deps.Sampler = func(context.Context) ([]eventruleproposal.Sample, error) {
 		return append(testSample(), eventruleproposal.Sample{Article: article.Article{ID: "a11", Title: "The rumor mill churns after a quiet week"}, ClusterID: "c11"}), nil
@@ -625,7 +628,7 @@ func TestRun_CueRetypingATypedControlArticleIsAutoRejected(t *testing.T) {
 func TestRun_PhraseAlreadyInTheVocabularyIsNotProposedNorKept(t *testing.T) {
 	h := newHarness(t)
 	h.deps.BaseRules = func() (eventsignals.Rules, error) {
-		return eventsignals.Rules{ActionTerms: map[eventsignals.Action][]string{
+		return eventsignals.Rules{Taxonomy: eventsignalstest.Taxonomy(), ActionTerms: map[eventsignals.Action][]string{
 			eventsignals.ActionTrade:  {"Inks A Deal"},
 			eventsignals.ActionReport: {"per sources"},
 		}}, nil

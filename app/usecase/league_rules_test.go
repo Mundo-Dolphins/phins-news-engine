@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals"
+	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals/eventsignalstest"
 )
 
 type fakeSource struct {
@@ -17,7 +18,7 @@ func (f *fakeSource) Refresh(time.Time)                   { f.refreshes++ }
 func (f *fakeSource) Entities() []eventsignals.EntityRule { return f.entities }
 
 func baseWithOneEntity() eventsignals.Rules {
-	return eventsignals.Rules{Entities: []eventsignals.EntityRule{{ID: "springfield-isotopes", CanonicalName: "Springfield Isotopes", Kind: eventsignals.EntityKindTeam, Terms: []string{"isotopes"}}}}
+	return eventsignals.Rules{Taxonomy: eventsignalstest.Taxonomy(), Entities: []eventsignals.EntityRule{{ID: "springfield-isotopes", CanonicalName: "Springfield Isotopes", Kind: eventsignals.EntityKindTeam, Terms: []string{"isotopes"}}}}
 }
 
 func leagueRule(id string) eventsignals.EntityRule {

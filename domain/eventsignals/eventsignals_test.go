@@ -8,6 +8,7 @@ import (
 
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/article"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals"
+	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals/eventsignalstest"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/source"
 )
 
@@ -30,7 +31,8 @@ func mustNewID(platform source.Type, raw string) source.ID {
 // real vocabulary.
 func testRules() eventsignals.Rules {
 	return eventsignals.Rules{
-		Version: "test-v1",
+		Taxonomy: eventsignalstest.Taxonomy(),
+		Version:  "test-v1",
 		Synonyms: []eventsignals.Synonym{
 			{Phrase: "agreed to terms with", Canonical: "sign"},
 		},
@@ -369,7 +371,8 @@ func TestExtract_EventDateFallsBackToNowWhenPublishedAtIsZero(t *testing.T) {
 // order would produce.
 func TestExtract_EntitiesOpponentAndCompetitionFollowTextOrderNotRulesOrder(t *testing.T) {
 	rules := eventsignals.Rules{
-		Version: "test-text-order-v1",
+		Taxonomy: eventsignalstest.Taxonomy(),
+		Version:  "test-text-order-v1",
 		Entities: []eventsignals.EntityRule{
 			{CanonicalName: "Springfield Isotopes", Kind: eventsignals.EntityKindTeam, IsPrimaryTeam: true, Terms: []string{"isotopes"}},
 			// Declared before Sharks, but only mentioned in the summary.

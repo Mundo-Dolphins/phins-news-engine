@@ -107,6 +107,11 @@ type Rules struct {
 	// not interpreted by this package.
 	Version string
 
+	// Taxonomy declares the event types, actions and content signals, their
+	// detection priorities, and how Extract classifies an article. The zero
+	// value classifies everything as EventTypeGeneric.
+	Taxonomy Taxonomy
+
 	Synonyms []Synonym
 
 	// ActionTerms lists, per Action, the phrases (post-synonym) that

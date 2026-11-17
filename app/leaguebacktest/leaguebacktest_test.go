@@ -9,12 +9,14 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/app/leaguebacktest"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/article"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals"
+	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals/eventsignalstest"
 )
 
 var now = time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
 
 func rules() eventsignals.Rules {
 	return eventsignals.Rules{
+		Taxonomy:     eventsignalstest.Taxonomy(),
 		FieldWeights: map[string]float64{"title": 1, "description": 0.8, "body": 0.4},
 		Entities: []eventsignals.EntityRule{
 			{ID: "springfield-isotopes", CanonicalName: "Springfield Isotopes", Kind: eventsignals.EntityKindTeam, Terms: []string{"isotopes"}, IsPrimaryTeam: true},

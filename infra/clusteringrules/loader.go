@@ -204,6 +204,7 @@ type RulesFile struct {
 func (f RulesFile) ToEventSignalsRules() eventsignals.Rules {
 	return eventsignals.Rules{
 		Version:               f.Version,
+		Taxonomy:              legacyTaxonomy(), // TODO(taxonomy-yaml Task 3): replace with the parsed section
 		Synonyms:              f.Synonyms,
 		ActionTerms:           f.ActionTerms,
 		ContentCues:           f.ContentCues,

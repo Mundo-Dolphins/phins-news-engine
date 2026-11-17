@@ -4,13 +4,24 @@ package eventsignals
 // AllActions returns every Action in the closed taxonomy, in detection
 // priority order. The slice is a fresh copy.
 func AllActions() []Action {
-	return append([]Action(nil), actionPriority...)
+	return []Action{
+		ActionPracticeSquad, ActionDemote,
+		ActionSign, ActionRelease, ActionTrade, ActionWaive, ActionClaim, ActionExtend, ActionContract,
+		ActionInjuredReserve, ActionInjure, ActionReturn, ActionPractice, ActionActivate,
+		ActionPromote, ActionRoster, ActionDepthChart,
+		ActionTryout, ActionGameStatus,
+		ActionDraft, ActionPreview, ActionResult,
+		ActionQuote, ActionReport, ActionConfirm, ActionCorrect,
+	}
 }
 
 // AllContentSignals returns every ContentSignal in the closed taxonomy, in
 // detection priority order. The slice is a fresh copy.
 func AllContentSignals() []ContentSignal {
-	return append([]ContentSignal(nil), contentSignalPriority...)
+	return []ContentSignal{
+		ContentSignalCorrection, ContentSignalConfirmation, ContentSignalRumor,
+		ContentSignalAnalysis, ContentSignalReaction, ContentSignalQuote,
+	}
 }
 
 // AllEventTypes returns every EventType in the closed taxonomy, with
