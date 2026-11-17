@@ -186,7 +186,7 @@ func LoadWithGenerated(f RulesFile, generatedPath string) (RulesFile, []string, 
 	if err != nil {
 		return RulesFile{}, nil, err
 	}
-	if err := checkGeneratedBuckets(generatedPath, g, f.Taxonomy); err != nil {
+	if err := CheckGeneratedBuckets(generatedPath, g, f.Taxonomy); err != nil {
 		return RulesFile{}, nil, err
 	}
 	merged, warnings := MergeGenerated(f, g)
@@ -196,9 +196,9 @@ func LoadWithGenerated(f RulesFile, generatedPath string) (RulesFile, []string, 
 	return merged, warnings, nil
 }
 
-// checkGeneratedBuckets rejects a generated bucket naming an action or
-// content signal the taxonomy does not declare.
-func checkGeneratedBuckets(path string, g GeneratedRules, taxonomy eventsignals.Taxonomy) error {
+// CheckGeneratedBuckets rejects a bucket of g (read from path) naming an
+// action or content signal the taxonomy does not declare.
+func CheckGeneratedBuckets(path string, g GeneratedRules, taxonomy eventsignals.Taxonomy) error {
 	actions := declaredActions(taxonomy)
 	for _, a := range sortedActions(g.ActionTerms) {
 		if !actions[a] {

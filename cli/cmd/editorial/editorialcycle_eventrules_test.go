@@ -29,7 +29,7 @@ type fakeEventRuleLLM struct {
 	calls   int
 }
 
-func (f *fakeEventRuleLLM) DiscoverTopics(context.Context, []appout.EventRuleArticle, []string) ([]appout.EventTopicProposal, error) {
+func (f *fakeEventRuleLLM) DiscoverTopics(context.Context, []appout.EventRuleArticle, []appout.KnownEventKind) ([]appout.EventTopicProposal, error) {
 	f.calls++
 	return nil, f.err
 }

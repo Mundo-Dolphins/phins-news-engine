@@ -12,6 +12,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventruleproposal"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals"
 	"github.com/Mundo-Dolphins/phins-news-engine/ports/eventruleproposalport"
+	appout "github.com/Mundo-Dolphins/phins-news-engine/ports/out"
 )
 
 // The non-interactive steps of the cycle. Run composes them with the
@@ -89,11 +90,11 @@ func Discover(ctx context.Context, d Deps, c Context, batchSize int) (DiscoverRe
 // discoverAndStore is Discover that also returns the IDs of the pending type
 // proposals stored or updated, which Run lists at the end.
 func discoverAndStore(ctx context.Context, d Deps, c Context, batchSize int) (DiscoverResult, map[string]bool, error) {
-	known, err := knownNames(ctx, d.Proposals)
+	known, err := knownKinds(ctx, d.Proposals, c.Base.Taxonomy)
 	if err != nil {
 		return DiscoverResult{}, nil, err
 	}
-	topics, phrases, failed, calls, firstErr := discover(ctx, d.LLM, c.Sample, batchSize, known)
+	topics, phrases, failed, calls, firstErr := discover(ctx, d.LLM, c.Sample, batchSize, known, c.Base.Taxonomy)
 	r := DiscoverResult{Sampled: len(c.Sample), Calls: calls, Failed: failed, FirstErr: firstErr}
 	if calls > 0 && failed == calls {
 		r.Unavailable = true
@@ -104,11 +105,14 @@ func discoverAndStore(ctx context.Context, d Deps, c Context, batchSize int) (Di
 	return r, typesNow, err
 }
 
-// knownNames is KnownTypeNames plus the slugs of the pending and approved
-// type proposals, sorted and unique: the names the LLM is told exist.
-func knownNames(ctx context.Context, repo eventruleproposalport.Repository) ([]string, error) {
+// knownKinds is KnownTypeNames(t) plus the slugs of the pending and
+// approved type proposals, sorted by name and unique: the kinds the LLM is
+// told exist. Event types carry their taxonomy description (a name that is
+// both a type and an action keeps the type's); actions and proposals carry
+// none.
+func knownKinds(ctx context.Context, repo eventruleproposalport.Repository, t eventsignals.Taxonomy) ([]appout.KnownEventKind, error) {
 	seen := map[string]bool{}
-	names := KnownTypeNames()
+	names := KnownTypeNames(t)
 	for _, n := range names {
 		seen[n] = true
 	}
@@ -128,7 +132,11 @@ func knownNames(ctx context.Context, repo eventruleproposalport.Repository) ([]s
 		}
 	}
 	sort.Strings(names)
-	return names, nil
+	kinds := make([]appout.KnownEventKind, 0, len(names))
+	for _, n := range names {
+		kinds = append(kinds, appout.KnownEventKind{Name: n, Description: t.Description(eventsignals.EventType(n))})
+	}
+	return kinds, nil
 }
 
 // Assessment is a phrase proposal measured against a Context. NoEvidence is

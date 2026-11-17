@@ -81,27 +81,54 @@ func CycleDepsSized(cfg *config.Config, db *sql.DB, datasetPath string, sampleSi
 		LLM:       llm,
 		Proposals: sqliteeventruleproposal.NewRepository(db),
 		BaseRules: func() (eventsignals.Rules, error) {
-			f, err := HandWrittenRules(cfg)
+			f, err := baseRules(cfg, generatedPath, warn)
 			if err != nil {
 				return eventsignals.Rules{}, err
-			}
-			// Merged so Impact sees the phrases already applied, whether or
-			// not the operator has activated the file yet.
-			f, warnings, err := clusteringrules.LoadWithGenerated(f, generatedPath)
-			if err != nil {
-				return eventsignals.Rules{}, err
-			}
-			for _, w := range warnings {
-				warn(w)
 			}
 			return f.ToEventSignalsRules(), nil
 		},
 		Gate: func(ctx context.Context, candidate []eventrulecycle.AppliedRule) (eventrulecycle.GateResult, error) {
 			return RunGate(ctx, cfg, datasetPath, candidate)
 		},
-		ReadApplied:   ReadApplied,
+		ReadApplied: func(path string) ([]eventrulecycle.AppliedRule, error) {
+			f, err := HandWrittenRules(cfg)
+			if err != nil {
+				return nil, err
+			}
+			return readAppliedIn(path, f.Taxonomy)
+		},
 		WriteApplied:  WriteApplied,
 		GeneratedPath: generatedPath,
 		Now:           now,
 	}
+}
+
+// baseRules is the hand-written rules of cfg with the generated file at
+// generatedPath merged in, so Impact sees the phrases already applied whether
+// or not the operator has activated the file yet. warn receives each merge
+// warning.
+func baseRules(cfg *config.Config, generatedPath string, warn func(string)) (clusteringrules.RulesFile, error) {
+	f, err := HandWrittenRules(cfg)
+	if err != nil {
+		return clusteringrules.RulesFile{}, err
+	}
+	f, warnings, err := clusteringrules.LoadWithGenerated(f, generatedPath)
+	if err != nil {
+		return clusteringrules.RulesFile{}, err
+	}
+	for _, w := range warnings {
+		warn(w)
+	}
+	return f, nil
+}
+
+// KnownTypeNames returns the event type and action names of cfg's taxonomy
+// (eventrulecycle.KnownTypeNames over the rules the cycle runs with): the
+// names a type proposal can be merged into or is covered by.
+func KnownTypeNames(cfg *config.Config) ([]string, error) {
+	f, err := baseRules(cfg, GeneratedPath(cfg), func(string) {})
+	if err != nil {
+		return nil, err
+	}
+	return eventrulecycle.KnownTypeNames(f.ToEventSignalsRules().Taxonomy), nil
 }

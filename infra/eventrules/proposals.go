@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -144,12 +145,12 @@ type MergeResult struct {
 
 // MergeType folds the pending or approved type proposal id into into at now.
 // An into starting with "evr_" is another pending or approved type proposal,
-// which gains the source's evidence; anything else is slugged and must be a
-// known event type or action. Either way the source is rejected. A phrase
+// which gains the source's evidence; anything else is slugged and must be in
+// known, the known event type and action names (KnownTypeNames). Either way the source is rejected. A phrase
 // source returns ErrNotTypeProposal, a decided one ErrAlreadyDecided, a
 // refused target ErrBadMergeTarget, and an unknown id the repository's
 // not-found error.
-func MergeType(ctx context.Context, db *sql.DB, id, into string, now time.Time) (MergeResult, error) {
+func MergeType(ctx context.Context, db *sql.DB, id, into string, known []string, now time.Time) (MergeResult, error) {
 	if into == id {
 		return MergeResult{}, &textError{msg: fmt.Sprintf("proposal %s cannot be merged into itself", id), sentinel: ErrBadMergeTarget}
 	}
@@ -177,7 +178,7 @@ func MergeType(ctx context.Context, db *sql.DB, id, into string, now time.Time) 
 
 	if !strings.HasPrefix(into, "evr_") {
 		name := eventruleproposal.Slug(into)
-		if !isKnownTypeName(name) {
+		if !slices.Contains(known, name) {
 			return MergeResult{}, &textError{msg: fmt.Sprintf("%q is not a known event type or action", into), sentinel: ErrBadMergeTarget}
 		}
 		if err := repo.Transition(ctx, rejected, src.Status); err != nil {
@@ -203,16 +204,6 @@ func MergeType(ctx context.Context, db *sql.DB, id, into string, now time.Time) 
 	return MergeResult{Source: rejected, Target: merged}, nil
 }
 
-// isKnownTypeName reports whether name is a known event type or action.
-func isKnownTypeName(name string) bool {
-	for _, k := range eventrulecycle.KnownTypeNames() {
-		if k == name {
-			return true
-		}
-	}
-	return false
-}
-
 // NormalizeReport counts what NormalizeTypes did: the type proposals (not
 // applied) Before and After, and the plan's counters.
 type NormalizeReport struct {
@@ -221,10 +212,11 @@ type NormalizeReport struct {
 
 // NormalizeTypes folds every stored type proposal that is not applied onto
 // its slug in one transaction (see eventruleproposal.PlanTypeNormalization),
-// rejecting those covered by a known event type or action. With
+// rejecting those covered by a name in known, the known event type and
+// action names (KnownTypeNames). With
 // reopenApproved every approved type proposal goes back to pending, not only
 // merged ones. A second run with no decisions in between plans nothing.
-func NormalizeTypes(ctx context.Context, db *sql.DB, reopenApproved bool, now time.Time) (NormalizeReport, error) {
+func NormalizeTypes(ctx context.Context, db *sql.DB, reopenApproved bool, known []string, now time.Time) (NormalizeReport, error) {
 	repo := sqliteeventruleproposal.NewRepository(db)
 	var ps []eventruleproposal.Proposal
 	for _, st := range []eventruleproposal.Status{eventruleproposal.StatusPending, eventruleproposal.StatusApproved, eventruleproposal.StatusRejected} {
@@ -238,11 +230,11 @@ func NormalizeTypes(ctx context.Context, db *sql.DB, reopenApproved bool, now ti
 			}
 		}
 	}
-	known := map[string]bool{}
-	for _, k := range eventrulecycle.KnownTypeNames() {
-		known[k] = true
+	covered := make(map[string]bool, len(known))
+	for _, k := range known {
+		covered[k] = true
 	}
-	plan := eventruleproposal.PlanTypeNormalization(ps, known, reopenApproved, now)
+	plan := eventruleproposal.PlanTypeNormalization(ps, covered, reopenApproved, now)
 	if len(plan.Delete) > 0 || len(plan.Insert) > 0 {
 		if err := repo.ReplaceTypes(ctx, plan.Delete, plan.Insert); err != nil {
 			return NormalizeReport{}, err

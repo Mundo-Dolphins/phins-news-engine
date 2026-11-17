@@ -92,13 +92,13 @@ type fakeLLM struct {
 	topicErr   error
 	phraseErr  error
 	topicCalls int
-	known      [][]string
+	known      [][]appout.KnownEventKind
 	batchSizes []int
 	actions    []string
 	signals    []string
 }
 
-func (f *fakeLLM) DiscoverTopics(_ context.Context, arts []appout.EventRuleArticle, known []string) ([]appout.EventTopicProposal, error) {
+func (f *fakeLLM) DiscoverTopics(_ context.Context, arts []appout.EventRuleArticle, known []appout.KnownEventKind) ([]appout.EventTopicProposal, error) {
 	f.topicCalls++
 	f.known = append(f.known, known)
 	if f.topicErr != nil {
@@ -750,9 +750,9 @@ func TestDiscover_PassesKnownNamesToLLM(t *testing.T) {
 	if _, err := eventrulecycle.Discover(context.Background(), h.deps, c, 20); err != nil {
 		t.Fatal(err)
 	}
-	want := append(eventrulecycle.KnownTypeNames(), "betting-odds")
+	want := append(eventrulecycle.KnownTypeNames(eventsignalstest.Taxonomy()), "betting-odds")
 	sort.Strings(want)
-	if len(h.llm.known) == 0 || fmt.Sprint(h.llm.known[0]) != fmt.Sprint(want) {
+	if len(h.llm.known) == 0 || fmt.Sprint(kindNames(h.llm.known[0])) != fmt.Sprint(want) {
 		t.Errorf("known = %v, want %v", h.llm.known, want)
 	}
 }

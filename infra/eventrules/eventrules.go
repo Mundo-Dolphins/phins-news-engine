@@ -66,6 +66,25 @@ func ReadApplied(path string) ([]eventrulecycle.AppliedRule, error) {
 	if err != nil {
 		return nil, err
 	}
+	return appliedRules(g), nil
+}
+
+// readAppliedIn is ReadApplied that also rejects a bucket taxonomy does not
+// declare, as clusteringrules.LoadWithGenerated does.
+func readAppliedIn(path string, taxonomy eventsignals.Taxonomy) ([]eventrulecycle.AppliedRule, error) {
+	g, err := clusteringrules.ParseGenerated(path)
+	if err != nil {
+		return nil, err
+	}
+	if err := clusteringrules.CheckGeneratedBuckets(path, g, taxonomy); err != nil {
+		return nil, err
+	}
+	return appliedRules(g), nil
+}
+
+// appliedRules converts g to the cycle's rules, actions first, then signals,
+// each sorted by target and phrase.
+func appliedRules(g clusteringrules.GeneratedRules) []eventrulecycle.AppliedRule {
 	out := []eventrulecycle.AppliedRule{}
 	appendAll := func(kind string, targets []string, entries func(string) []clusteringrules.GeneratedEntry) {
 		sort.Strings(targets)
@@ -87,7 +106,7 @@ func ReadApplied(path string) ([]eventrulecycle.AppliedRule, error) {
 		signals = append(signals, string(s))
 	}
 	appendAll(string(eventruleproposal.TargetSignal), signals, func(t string) []clusteringrules.GeneratedEntry { return g.ContentCues[eventsignals.ContentSignal(t)] })
-	return out, nil
+	return out
 }
 
 // toGenerated converts the cycle's rules to the generated file model.

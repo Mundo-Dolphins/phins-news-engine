@@ -86,7 +86,7 @@ type fakeRuleLLM struct {
 	topics []out.EventTopicProposal
 }
 
-func (l fakeRuleLLM) DiscoverTopics(context.Context, []out.EventRuleArticle, []string) ([]out.EventTopicProposal, error) {
+func (l fakeRuleLLM) DiscoverTopics(context.Context, []out.EventRuleArticle, []out.KnownEventKind) ([]out.EventTopicProposal, error) {
 	return l.topics, l.err
 }
 

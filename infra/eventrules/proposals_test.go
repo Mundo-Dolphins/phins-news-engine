@@ -13,9 +13,16 @@ import (
 	"time"
 
 	"github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqliteeventruleproposal"
+	"github.com/Mundo-Dolphins/phins-news-engine/app/eventrulecycle"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventruleproposal"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals"
+	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals/eventsignalstest"
 )
+
+// knownNames is the reference taxonomy's known event type and action names.
+func knownNames() []string {
+	return eventrulecycle.KnownTypeNames(eventsignalstest.Taxonomy())
+}
 
 func typeProposal(name string, status eventruleproposal.Status, evidence ...string) eventruleproposal.Proposal {
 	return eventruleproposal.Proposal{Kind: eventruleproposal.KindType, TypeName: name, Description: name + ".", EvidenceIDs: evidence, Status: status, PromptVersion: "v1"}
@@ -139,7 +146,7 @@ func TestMergeType_IntoProposal(t *testing.T) {
 		typeProposal("missed kick", eventruleproposal.StatusApproved, "a2", "a3"),
 	)
 	now := time.Date(2026, 5, 1, 9, 0, 0, 0, time.UTC)
-	res, err := MergeType(context.Background(), db, ids[0], ids[1], now)
+	res, err := MergeType(context.Background(), db, ids[0], ids[1], knownNames(), now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +178,7 @@ func TestMergeType_DecidedElsewhere(t *testing.T) {
 		WHEN OLD.id = '` + ids[0] + `' BEGIN SELECT RAISE(IGNORE); END`); err != nil {
 		t.Fatal(err)
 	}
-	_, err := MergeType(context.Background(), db, ids[0], ids[1], time.Now())
+	_, err := MergeType(context.Background(), db, ids[0], ids[1], knownNames(), time.Now())
 	if !errors.Is(err, ErrAlreadyDecided) || !strings.Contains(err.Error(), "decided elsewhere") {
 		t.Fatalf("err = %v, want ErrAlreadyDecided with decided elsewhere", err)
 	}
@@ -181,7 +188,7 @@ func TestMergeType_IntoKnownType(t *testing.T) {
 	db := openTestDB(t)
 	ids := seedProposals(t, db, typeProposal("contract extension", eventruleproposal.StatusApproved, "a1"))
 	now := time.Date(2026, 5, 1, 9, 0, 0, 0, time.UTC)
-	res, err := MergeType(context.Background(), db, ids[0], " Extend ", now)
+	res, err := MergeType(context.Background(), db, ids[0], " Extend ", knownNames(), now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,6 +200,18 @@ func TestMergeType_IntoKnownType(t *testing.T) {
 	}
 	if got, err := ListTypes(context.Background(), db); err != nil || len(got) != 0 {
 		t.Fatalf("ListTypes() = %+v, %v; want none left", got, err)
+	}
+}
+
+func TestMergeType_IntoAKnownNameOfTheGivenList(t *testing.T) {
+	db := openTestDB(t)
+	ids := seedProposals(t, db, typeProposal("delta move", eventruleproposal.StatusPending, "a1"), typeProposal("other", eventruleproposal.StatusPending, "a2"))
+	res, err := MergeType(context.Background(), db, ids[0], "delta", []string{"delta"}, time.Now())
+	if err != nil || res.CoveredBy != "delta" {
+		t.Fatalf("MergeType(into delta) = %+v, %v; want covered by delta", res, err)
+	}
+	if _, err := MergeType(context.Background(), db, ids[1], "game", []string{"delta"}, time.Now()); !errors.Is(err, ErrBadMergeTarget) {
+		t.Fatalf("err = %v, want ErrBadMergeTarget for a name outside the list", err)
 	}
 }
 
@@ -227,7 +246,7 @@ func TestMergeType_Refused(t *testing.T) {
 				}
 				before[id] = p
 			}
-			_, err := MergeType(context.Background(), db, ids[0], tc.into(ids), time.Now())
+			_, err := MergeType(context.Background(), db, ids[0], tc.into(ids), knownNames(), time.Now())
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("err = %v, want %v", err, tc.want)
 			}
@@ -284,7 +303,7 @@ func TestNormalizeTypes(t *testing.T) {
 	ids := seedProposals(t, db, phraseProposal())
 	now := base.Add(48 * time.Hour)
 
-	rep, err := NormalizeTypes(context.Background(), db, true, now)
+	rep, err := NormalizeTypes(context.Background(), db, true, knownNames(), now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,7 +329,7 @@ func TestNormalizeTypes(t *testing.T) {
 		t.Errorf("the phrase proposal must survive: %v", err)
 	}
 
-	again, err := NormalizeTypes(context.Background(), db, true, now.Add(time.Hour))
+	again, err := NormalizeTypes(context.Background(), db, true, knownNames(), now.Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}

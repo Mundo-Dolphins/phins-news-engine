@@ -118,7 +118,20 @@ func proposalError(err error) error {
 	return err
 }
 
+// knownTypeNames returns the known event type and action names of env's
+// configured taxonomy.
+func knownTypeNames(env action.Env) ([]string, error) {
+	if env.Config == nil {
+		return nil, errors.New("events: no configuration loaded")
+	}
+	return eventrules.KnownTypeNames(env.Config)
+}
+
 func runTypeList(ctx context.Context, env action.Env, _ any) (action.Result, error) {
+	known, err := knownTypeNames(env)
+	if err != nil {
+		return action.Result{}, err
+	}
 	ps, err := eventrules.ListTypes(ctx, env.DB)
 	if err != nil {
 		return action.Result{}, err
@@ -135,7 +148,7 @@ func runTypeList(ctx context.Context, env action.Env, _ any) (action.Result, err
 		summary = "No pending or approved event type proposals."
 	}
 	return action.Result{
-		Object: map[string]any{"known": eventrulecycle.KnownTypeNames()},
+		Object: map[string]any{"known": known},
 		Render: "table",
 		Columns: []action.Column{
 			{Key: "id", Label: "ID"}, {Key: "status", Label: "Status"}, {Key: "type", Label: "Type"},
@@ -183,7 +196,11 @@ func runMerge(ctx context.Context, env action.Env, params any) (action.Result, e
 	if !ok {
 		return action.Result{}, errBadParams
 	}
-	res, err := eventrules.MergeType(ctx, env.DB, p.ID, p.Into, env.Now().UTC())
+	known, err := knownTypeNames(env)
+	if err != nil {
+		return action.Result{}, err
+	}
+	res, err := eventrules.MergeType(ctx, env.DB, p.ID, p.Into, known, env.Now().UTC())
 	if err != nil {
 		return action.Result{}, proposalError(err)
 	}
