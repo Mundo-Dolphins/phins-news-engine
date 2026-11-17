@@ -51,3 +51,17 @@ func TestAllContentSignals_ClosedList(t *testing.T) {
 		t.Error("AllContentSignals returned shared backing array")
 	}
 }
+
+func TestAllEventTypes_FreshCopyGenericLast(t *testing.T) {
+	got := eventsignals.AllEventTypes()
+	if len(got) != 12 {
+		t.Fatalf("len = %d, want 12: %v", len(got), got)
+	}
+	if last := got[len(got)-1]; last != eventsignals.EventTypeGeneric {
+		t.Errorf("last = %q, want %q", last, eventsignals.EventTypeGeneric)
+	}
+	got[0] = "mutated"
+	if eventsignals.AllEventTypes()[0] == "mutated" {
+		t.Error("AllEventTypes returned shared backing array")
+	}
+}

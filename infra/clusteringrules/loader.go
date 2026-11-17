@@ -354,15 +354,6 @@ var knownEventTypes = map[eventsignals.EventType]bool{
 	eventsignals.EventTypeAnalysis: true, eventsignals.EventTypeReaction: true, eventsignals.EventTypeGeneric: true,
 }
 
-// allEventTypes lists knownEventTypes' keys in a fixed order, used to walk
-// every event type deterministically when resolving temporal_windows.
-var allEventTypes = []eventsignals.EventType{
-	eventsignals.EventTypeTransaction, eventsignals.EventTypeInjury, eventsignals.EventTypeDraft,
-	eventsignals.EventTypeGame, eventsignals.EventTypePractice, eventsignals.EventTypeQuote,
-	eventsignals.EventTypeRumor, eventsignals.EventTypeConfirmation, eventsignals.EventTypeCorrection,
-	eventsignals.EventTypeAnalysis, eventsignals.EventTypeReaction, eventsignals.EventTypeGeneric,
-}
-
 // -- loading -----------------------------------------------------------
 
 // Parse reads path and decodes it into a RulesFile. It only parses (strict
@@ -555,8 +546,8 @@ func toEventWindows(raw map[string]string, defaultWindow string) (map[eventsigna
 		haveFallback = true
 	}
 
-	windows := make(map[eventsignals.EventType]time.Duration, len(allEventTypes))
-	for _, et := range allEventTypes {
+	windows := make(map[eventsignals.EventType]time.Duration, len(eventsignals.AllEventTypes()))
+	for _, et := range eventsignals.AllEventTypes() {
 		if s, ok := raw[string(et)]; ok {
 			d, err := time.ParseDuration(s)
 			if err != nil {
@@ -742,7 +733,7 @@ func validateWeights(f RulesFile) error {
 }
 
 func validateEventWindows(windows map[eventsignals.EventType]time.Duration) error {
-	for _, et := range allEventTypes {
+	for _, et := range eventsignals.AllEventTypes() {
 		d, ok := windows[et]
 		if !ok || d <= 0 {
 			return fmt.Errorf("temporal_windows[%s]: must resolve to a positive duration, got %v", et, d)
