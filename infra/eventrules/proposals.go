@@ -146,10 +146,10 @@ type MergeResult struct {
 // MergeType folds the pending or approved type proposal id into into at now.
 // An into starting with "evr_" is another pending or approved type proposal,
 // which gains the source's evidence; anything else is slugged and must be in
-// known, the known event type and action names (KnownTypeNames). Either way the source is rejected. A phrase
-// source returns ErrNotTypeProposal, a decided one ErrAlreadyDecided, a
-// refused target ErrBadMergeTarget, and an unknown id the repository's
-// not-found error.
+// known, the known event type and action names (KnownTypeNames). Either way
+// the source is rejected. A phrase source returns ErrNotTypeProposal, a
+// decided one ErrAlreadyDecided, a refused target ErrBadMergeTarget, and an
+// unknown id the repository's not-found error.
 func MergeType(ctx context.Context, db *sql.DB, id, into string, known []string, now time.Time) (MergeResult, error) {
 	if into == id {
 		return MergeResult{}, &textError{msg: fmt.Sprintf("proposal %s cannot be merged into itself", id), sentinel: ErrBadMergeTarget}
@@ -213,9 +213,9 @@ type NormalizeReport struct {
 // NormalizeTypes folds every stored type proposal that is not applied onto
 // its slug in one transaction (see eventruleproposal.PlanTypeNormalization),
 // rejecting those covered by a name in known, the known event type and
-// action names (KnownTypeNames). With
-// reopenApproved every approved type proposal goes back to pending, not only
-// merged ones. A second run with no decisions in between plans nothing.
+// action names (KnownTypeNames). With reopenApproved every approved type
+// proposal goes back to pending, not only merged ones. A second run with no
+// decisions in between plans nothing.
 func NormalizeTypes(ctx context.Context, db *sql.DB, reopenApproved bool, known []string, now time.Time) (NormalizeReport, error) {
 	repo := sqliteeventruleproposal.NewRepository(db)
 	var ps []eventruleproposal.Proposal

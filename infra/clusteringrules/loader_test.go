@@ -638,6 +638,16 @@ func loadErr(t *testing.T, path, want string) {
 	}
 }
 
+func TestLoad_RejectsEmptyEventTypes(t *testing.T) {
+	base := baseFixture(t)
+	start := strings.Index(base, "taxonomy:\n")
+	end := strings.Index(base[start:], "\n\n")
+	if start < 0 || end < 0 {
+		t.Fatal("base fixture has no taxonomy section")
+	}
+	loadErr(t, writeFixture(t, base[:start]+"taxonomy: {event_types: []}"+base[start+end:]), "taxonomy.event_types must declare at least one event type")
+}
+
 func TestLoad_RequiresTaxonomy(t *testing.T) {
 	base := baseFixture(t)
 	start := strings.Index(base, "taxonomy:\n")
@@ -713,7 +723,7 @@ func TestLoad_TaxonomyValidationErrors(t *testing.T) {
 		{"undeclared action_terms key", `    claim: ["claimed off waivers"]`, `    claim: ["claimed off waivers"]` + "\n" + `    scrimmage: ["scrimmage"]`, `action_terms: unrecognized action "scrimmage"`},
 		{"undeclared content_cues key", `    quote: ["said", "press conference"]` + "\n  date_window_policy", `    quote: ["said", "press conference"]` + "\n" + `    hedge: ["perhaps"]` + "\n  date_window_policy", `content_cues: unrecognized content signal "hedge"`},
 		{"undeclared temporal_windows key", `  reaction: "12h"`, `  reaction: "12h"` + "\n" + `  scrimmage: "12h"`, `temporal_windows: unrecognized event type "scrimmage"`},
-		{"undeclared topic_groups value", `transaction: [sign, extend]`, `transaction: [sign, extend, scrimmage]`, `topic_groups[transaction]: "scrimmage" is neither a declared action nor a declared event type`},
+		{"undeclared topic_groups value", `transaction: [sign, extend]`, `transaction: [sign, extend, scrimmage]`, `topic_groups[transaction]: "scrimmage" is neither a declared action, a declared event type nor generic`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

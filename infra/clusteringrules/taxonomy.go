@@ -37,7 +37,7 @@ var (
 // positive body_fallback ranks.
 func validateTaxonomy(t eventsignals.Taxonomy) error {
 	if len(t.EventTypes) == 0 {
-		return fmt.Errorf("taxonomy is required")
+		return fmt.Errorf("taxonomy.event_types must declare at least one event type")
 	}
 
 	declared := make(map[eventsignals.EventType]bool, len(t.EventTypes))

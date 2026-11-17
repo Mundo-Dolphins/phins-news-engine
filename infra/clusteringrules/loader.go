@@ -970,7 +970,7 @@ func validateTopicGroups(groups map[eventsignals.Topic][]string, taxonomy events
 	for _, k := range keys {
 		for _, v := range groups[eventsignals.Topic(k)] {
 			if !actions[eventsignals.Action(v)] && !types[v] {
-				return fmt.Errorf("topic_groups[%s]: %q is neither a declared action nor a declared event type", k, v)
+				return fmt.Errorf("topic_groups[%s]: %q is neither a declared action, a declared event type nor generic", k, v)
 			}
 		}
 	}
