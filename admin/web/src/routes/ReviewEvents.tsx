@@ -289,13 +289,17 @@ interface TypeProposal {
   evidence: string;
 }
 
+/** mergeTargets lists the values a proposal can be merged into: the other proposals, then the known names. */
+const mergeTargets = (t: TypeProposal, all: TypeProposal[], known: string[]) => [...all.filter((o) => o.id !== t.id).map((o) => o.id), ...known];
+
 const evidenceCount = (t: TypeProposal) => (t.evidence ? t.evidence.split(",").filter((s) => s.trim()).length : 0);
 
 /**
  * TypeProposals lists the new event type proposals discovery stores next to
- * the phrases, for `events type approve|reject`. They are never applied
- * here: an approved type is implemented through its brief. version reloads
- * the list when it changes.
+ * the phrases, for `events type approve|reject|merge`. They are never applied
+ * here: an approved type is implemented through its brief. A proposal that
+ * duplicates another, or a type that already exists, is merged into it.
+ * version reloads the list when it changes.
  */
 function TypeProposals({ version }: { version: number }) {
   const [types, setTypes] = useState<TypeProposal[] | null>(null);
@@ -303,6 +307,11 @@ function TypeProposals({ version }: { version: number }) {
   const [notice, setNotice] = useState<Notice | undefined>();
   const [briefs, setBriefs] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string>("");
+  const [known, setKnown] = useState<string[]>([]);
+  /** merging is the proposal whose merge target is being picked, and the pick. */
+  const [merging, setMerging] = useState<{ id: string; into: string } | null>(null);
+  /** reloads counts the lists reloaded after a merge. */
+  const [reloads, setReloads] = useState(0);
 
   useEffect(() => {
     let live = true;
@@ -312,6 +321,7 @@ function TypeProposals({ version }: { version: number }) {
         if ("job" in out) throw new Error("unexpected job for events.type_list");
         if (!live) return;
         setTypes((out.result.rows ?? []) as unknown as TypeProposal[]);
+        setKnown((out.result.object as { known?: string[] } | undefined)?.known ?? []);
         setLoadError("");
       } catch (e) {
         if (live) setLoadError("Could not load the event type proposals: " + errorText(e));
@@ -320,7 +330,7 @@ function TypeProposals({ version }: { version: number }) {
     return () => {
       live = false;
     };
-  }, [version]);
+  }, [version, reloads]);
 
   const decide = async (t: TypeProposal, approve: boolean) => {
     setBusy(t.id);
@@ -332,6 +342,23 @@ function TypeProposals({ version }: { version: number }) {
         (ts ?? []).flatMap((x) => (x.id !== t.id ? [x] : approve ? [{ ...x, status: "approved" }] : [])),
       );
       setNotice({ kind: "info", text: out.result.summary || `“${t.type}” ${approve ? "approved" : "rejected"}.` });
+    } catch (e) {
+      setNotice({ kind: "error", text: errorText(e) });
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const merge = async (t: TypeProposal, into: string) => {
+    setBusy(t.id);
+    setNotice(undefined);
+    try {
+      const out = await runAction("events.type_merge", { id: t.id, into }, false);
+      if ("job" in out) throw new Error("unexpected job for events.type_merge");
+      setTypes((ts) => (ts ?? []).filter((x) => x.id !== t.id));
+      setMerging(null);
+      setNotice({ kind: "info", text: out.result.summary || `“${t.type}” merged.` });
+      setReloads((n) => n + 1);
     } catch (e) {
       setNotice({ kind: "error", text: errorText(e) });
     } finally {
@@ -401,6 +428,45 @@ function TypeProposals({ version }: { version: number }) {
                 <button type="button" class="btn" disabled={busy !== ""} aria-label={"Reject " + t.type} onClick={() => decide(t, false)}>
                   Reject
                 </button>
+                {merging?.id === t.id ? (
+                  <>
+                    <select
+                      aria-label={"Merge " + t.type + " into"}
+                      value={merging.into}
+                      disabled={busy !== ""}
+                      onChange={(e) => setMerging({ id: t.id, into: (e.target as HTMLSelectElement).value })}
+                    >
+                      {types
+                        .filter((o) => o.id !== t.id)
+                        .map((o) => (
+                          <option key={o.id} value={o.id}>
+                            proposal: {o.type}
+                          </option>
+                        ))}
+                      {known.map((k) => (
+                        <option key={"known:" + k} value={k}>
+                          existing: {k}
+                        </option>
+                      ))}
+                    </select>
+                    <button type="button" class="btn" disabled={busy !== "" || merging.into === ""} onClick={() => merge(t, merging.into)}>
+                      Merge
+                    </button>
+                    <button type="button" class="btn" disabled={busy !== ""} onClick={() => setMerging(null)}>
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    class="btn"
+                    disabled={busy !== ""}
+                    aria-label={"Merge " + t.type}
+                    onClick={() => setMerging({ id: t.id, into: mergeTargets(t, types ?? [], known)[0] ?? "" })}
+                  >
+                    Merge into…
+                  </button>
+                )}
                 <button type="button" class="btn" aria-label={"Brief " + t.type} onClick={() => brief(t)}>
                   Brief
                 </button>

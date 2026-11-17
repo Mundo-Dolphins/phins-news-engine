@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -125,6 +126,7 @@ func TestMetadata(t *testing.T) {
 		"events.type_list": {action.KindRead, 2, false}, "events.brief": {action.KindRead, 2, false},
 		"events.gate": {action.KindRead, 2, false}, "events.impact": {action.KindRead, 2, true},
 		"events.type_approve": {action.KindWrite, 1, false}, "events.type_reject": {action.KindWrite, 1, false},
+		"events.type_merge": {action.KindWrite, 1, false},
 	}
 	var as []action.Action
 	for _, a := range events.Actions() {
@@ -153,19 +155,111 @@ func TestMetadata(t *testing.T) {
 
 func TestTypeListPendingThenApproved(t *testing.T) {
 	f := newFixture(t)
-	f.seed(typeProposal("approved one", eventruleproposal.StatusApproved))
-	f.seed(typeProposal("pending one", eventruleproposal.StatusPending))
+	f.seed(typeProposal("approved-one", eventruleproposal.StatusApproved))
+	f.seed(typeProposal("pending-one", eventruleproposal.StatusPending))
 	f.seed(phraseProposal())
 	f.seed(typeProposal("rejected one", eventruleproposal.StatusRejected))
 	res, err := f.runIn(action.ModeProduction, "events.type_list", `{}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Rows) != 2 || res.Rows[0]["type"] != "pending one" || res.Rows[1]["type"] != "approved one" {
+	if len(res.Rows) != 2 || res.Rows[0]["type"] != "pending-one" || res.Rows[1]["type"] != "approved-one" {
 		t.Fatalf("rows = %v", res.Rows)
 	}
 	if res.Rows[0]["evidence"] != "a1, a2" || res.Rows[0]["status"] != "pending" {
 		t.Errorf("row = %v", res.Rows[0])
+	}
+}
+
+func TestTypeListCarriesKnownNames(t *testing.T) {
+	res, err := newFixture(t).run("events.type_list", `{}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	obj, _ := res.Object.(map[string]any)
+	known, _ := obj["known"].([]string)
+	if !slices.Contains(known, "game") {
+		t.Errorf("known = %v, want it to contain game", known)
+	}
+}
+
+func TestTypeMergeIntoProposal(t *testing.T) {
+	f := newFixture(t)
+	a := f.seed(typeProposal("a", eventruleproposal.StatusPending))
+	b := f.seed(typeProposal("b", eventruleproposal.StatusPending))
+	res, err := f.run("events.type_merge", `{"id":"`+a+`","into":"`+b+`"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "Event type proposal " + a + " (a) merged into " + b + " (b)."; res.Summary != want {
+		t.Errorf("summary = %q, want %q", res.Summary, want)
+	}
+	obj, _ := res.Object.(map[string]any)
+	if res.Render != "object" || obj["id"] != a || obj["type"] != "a" || obj["status"] != "rejected" || obj["into"] != b || obj["covered_by"] != "" {
+		t.Errorf("object = %v", res.Object)
+	}
+	if f.status(a) != eventruleproposal.StatusRejected || f.status(b) != eventruleproposal.StatusPending {
+		t.Errorf("statuses = %s, %s", f.status(a), f.status(b))
+	}
+	if !strings.Contains(f.log.String(), "event type proposal merged") {
+		t.Errorf("log = %q", f.log.String())
+	}
+}
+
+func TestTypeMergeIntoKnownName(t *testing.T) {
+	f := newFixture(t)
+	a := f.seed(typeProposal("a", eventruleproposal.StatusPending))
+	res, err := f.run("events.type_merge", `{"id":"`+a+`","into":"game"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "Event type proposal " + a + " (a) rejected: covered by game."; res.Summary != want {
+		t.Errorf("summary = %q, want %q", res.Summary, want)
+	}
+	obj, _ := res.Object.(map[string]any)
+	if obj["into"] != "game" || obj["covered_by"] != "game" || obj["status"] != "rejected" {
+		t.Errorf("object = %v", res.Object)
+	}
+	if f.status(a) != eventruleproposal.StatusRejected {
+		t.Errorf("status = %s", f.status(a))
+	}
+}
+
+func TestTypeMergeErrors(t *testing.T) {
+	f := newFixture(t)
+	a := f.seed(typeProposal("a", eventruleproposal.StatusPending))
+	ph := f.seed(phraseProposal())
+	old := f.seed(typeProposal("old", eventruleproposal.StatusRejected))
+	for name, c := range map[string]struct{ id, into, code string }{
+		"unknown name":  {a, "no-such-type", action.CodeInvalidParams},
+		"itself":        {a, a, action.CodeInvalidParams},
+		"phrase":        {a, ph, action.CodeInvalidParams},
+		"phrase source": {ph, "game", action.CodeConflict},
+		"decided":       {old, "game", action.CodeConflict},
+		"missing":       {"nope", "game", action.CodeNotFound},
+	} {
+		_, err := f.run("events.type_merge", `{"id":"`+c.id+`","into":"`+c.into+`"}`)
+		if err == nil {
+			t.Errorf("%s: no error", name)
+			continue
+		}
+		wantCode(t, err, c.code)
+	}
+	if f.status(a) != eventruleproposal.StatusPending {
+		t.Errorf("status = %s, want the source untouched", f.status(a))
+	}
+}
+
+func TestTypeMergeIsLocalOnly(t *testing.T) {
+	var reg action.Registry
+	reg.Add(events.Actions()...)
+	for _, a := range reg.For(action.ModeProduction) {
+		if a.Name == "events.type_merge" {
+			t.Fatal("events.type_merge is offered in production mode")
+		}
+	}
+	if _, ok := reg.Get("events.type_merge"); !ok {
+		t.Fatal("events.type_merge is not registered")
 	}
 }
 

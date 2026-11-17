@@ -51,6 +51,9 @@ func runEventRulesDiscover(ctx context.Context, env action.Env, _ any) (_ action
 		return action.Result{}, err
 	}
 	summary := fmt.Sprintf("%d sampled, %d calls (%d failed), %d proposals created or updated", d.Sampled, d.Calls, d.Failed, d.Proposed)
+	if d.Dropped > 0 {
+		summary += fmt.Sprintf(", %d dropped (already an event type or action)", d.Dropped)
+	}
 	if d.Failed > 0 {
 		summary = "WARNING: " + summary
 	}

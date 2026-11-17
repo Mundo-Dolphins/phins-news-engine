@@ -143,15 +143,18 @@ func runRulesDiscover(ctx context.Context, env action.Env, _ any) (action.Result
 	if err != nil {
 		return action.Result{}, err
 	}
-	obj := map[string]any{"sampled": r.Sampled, "calls": r.Calls, "failed": r.Failed, "proposed": r.Proposed, "error": ""}
+	obj := map[string]any{"sampled": r.Sampled, "calls": r.Calls, "failed": r.Failed, "proposed": r.Proposed, "dropped": r.Dropped, "error": ""}
 	if r.FirstErr != nil {
 		obj["error"] = r.FirstErr.Error()
 	}
 	summary := fmt.Sprintf("%d sampled, %d calls (%d failed), %d proposals created or updated", r.Sampled, r.Calls, r.Failed, r.Proposed)
+	if r.Dropped > 0 {
+		summary += fmt.Sprintf(", %d dropped (already an event type or action)", r.Dropped)
+	}
 	if r.Failed > 0 {
 		summary = "WARNING: " + summary
 	}
-	env.Log.Info("event rule discovery", "sampled", r.Sampled, "calls", r.Calls, "failed", r.Failed, "proposed", r.Proposed, "by", env.Actor)
+	env.Log.Info("event rule discovery", "sampled", r.Sampled, "calls", r.Calls, "failed", r.Failed, "proposed", r.Proposed, "dropped", r.Dropped, "by", env.Actor)
 	return action.Result{Render: "object", Object: obj, Summary: summary}, nil
 }
 

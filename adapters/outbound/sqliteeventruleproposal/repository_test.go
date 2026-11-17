@@ -152,7 +152,7 @@ func TestUpsert_TypeProposalKeyIgnoresCase(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, err := repo.Upsert(ctx, mk("practice squad"))
-	if err != nil || a.ID != b.ID || a.TypeName != "practice squad" {
+	if err != nil || a.ID != b.ID || a.TypeName != "practice-squad" {
 		t.Fatalf("a=%+v b=%+v err=%v", a, b, err)
 	}
 }
@@ -257,5 +257,177 @@ func TestTransition_NotFound(t *testing.T) {
 	err := repo.Transition(context.Background(), eventruleproposal.Proposal{ID: "evr_missing", Status: eventruleproposal.StatusApproved}, eventruleproposal.StatusPending)
 	if !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("Transition() error = %v, want sql.ErrNoRows", err)
+	}
+}
+
+func typeProposal(name, target string, evidence ...string) eventruleproposal.Proposal {
+	return eventruleproposal.Proposal{
+		Kind:          eventruleproposal.KindType,
+		TypeName:      name,
+		Target:        target,
+		Description:   "d",
+		EvidenceIDs:   evidence,
+		Status:        eventruleproposal.StatusPending,
+		PromptVersion: "v1",
+		CreatedAt:     time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC),
+	}
+}
+
+func TestUpsert_TypeSlugIgnoresTarget(t *testing.T) {
+	ctx := context.Background()
+	repo := sqliteeventruleproposal.NewRepository(newTestDB(t))
+
+	first, err := repo.Upsert(ctx, typeProposal("player injury status", "Injury-Reserve Move", "a1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := repo.Upsert(ctx, typeProposal("player_injury_status", "", "a2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ID != first.ID || second.TypeName != "player-injury-status" {
+		t.Fatalf("first=%+v second=%+v", first, second)
+	}
+	if want := []string{"a1", "a2"}; !reflect.DeepEqual(second.EvidenceIDs, want) {
+		t.Fatalf("evidence = %v, want %v", second.EvidenceIDs, want)
+	}
+	if second.Target != "Injury-Reserve Move" {
+		t.Fatalf("Target = %q", second.Target)
+	}
+	pending, err := repo.ListByStatus(ctx, eventruleproposal.StatusPending)
+	if err != nil || len(pending) != 1 || pending[0].Target != "Injury-Reserve Move" {
+		t.Fatalf("pending = %+v, err = %v", pending, err)
+	}
+}
+
+func TestUpsert_TypeFirstNonEmptyTarget(t *testing.T) {
+	ctx := context.Background()
+	repo := sqliteeventruleproposal.NewRepository(newTestDB(t))
+
+	if _, err := repo.Upsert(ctx, typeProposal("contract-news", "", "a1")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.Upsert(ctx, typeProposal("Contract News", "Signing", "a2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Target != "Signing" {
+		t.Fatalf("Target = %q, want Signing", got.Target)
+	}
+	stored, err := repo.Get(ctx, got.ID)
+	if err != nil || stored.Target != "Signing" {
+		t.Fatalf("stored = %+v, err = %v", stored, err)
+	}
+}
+
+func TestUpsert_TypeDoesNotResurrectRejected(t *testing.T) {
+	ctx := context.Background()
+	repo := sqliteeventruleproposal.NewRepository(newTestDB(t))
+
+	p, err := repo.Upsert(ctx, typeProposal("player injury status", "", "a1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejected, err := p.Reject(time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Save(ctx, rejected); err != nil {
+		t.Fatal(err)
+	}
+	again, err := repo.Upsert(ctx, typeProposal("Player Injury Status", "", "a9"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Status != eventruleproposal.StatusRejected || !reflect.DeepEqual(again.EvidenceIDs, []string{"a1"}) {
+		t.Fatalf("again = %+v", again)
+	}
+}
+
+func seedType(t *testing.T, repo *sqliteeventruleproposal.Repository, name string, status eventruleproposal.Status, evidence ...string) eventruleproposal.Proposal {
+	t.Helper()
+	ctx := context.Background()
+	p, err := repo.Upsert(ctx, typeProposal(name, "", evidence...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != eventruleproposal.StatusPending {
+		p.Status = status
+		if err := repo.Save(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return p
+}
+
+func TestMergeTypes(t *testing.T) {
+	ctx := context.Background()
+	repo := sqliteeventruleproposal.NewRepository(newTestDB(t))
+	src := seedType(t, repo, "kicking error", eventruleproposal.StatusPending, "a1")
+	dst := seedType(t, repo, "kicker miss", eventruleproposal.StatusApproved, "a2")
+	now := time.Date(2026, 10, 11, 0, 0, 0, 0, time.UTC)
+
+	got, err := repo.MergeTypes(ctx, src.ID, eventruleproposal.StatusPending, dst.ID, eventruleproposal.StatusApproved, now)
+	if err != nil {
+		t.Fatalf("MergeTypes() error = %v", err)
+	}
+	if want := []string{"a2", "a1"}; !reflect.DeepEqual(got.EvidenceIDs, want) || got.Status != eventruleproposal.StatusApproved {
+		t.Fatalf("returned = %+v", got)
+	}
+	storedDst, err := repo.Get(ctx, dst.ID)
+	if err != nil || !reflect.DeepEqual(storedDst.EvidenceIDs, []string{"a2", "a1"}) || storedDst.Status != eventruleproposal.StatusApproved {
+		t.Fatalf("dst = %+v, err = %v", storedDst, err)
+	}
+	storedSrc, err := repo.Get(ctx, src.ID)
+	if err != nil || storedSrc.Status != eventruleproposal.StatusRejected || !storedSrc.DecidedAt.Equal(now) {
+		t.Fatalf("src = %+v, err = %v", storedSrc, err)
+	}
+}
+
+func TestMergeTypes_StatusChangedWritesNothing(t *testing.T) {
+	ctx := context.Background()
+	repo := sqliteeventruleproposal.NewRepository(newTestDB(t))
+	src := seedType(t, repo, "kicking error", eventruleproposal.StatusPending, "a1")
+	dst := seedType(t, repo, "kicker miss", eventruleproposal.StatusApproved, "a2")
+
+	_, err := repo.MergeTypes(ctx, src.ID, eventruleproposal.StatusPending, dst.ID, eventruleproposal.StatusPending, time.Now())
+	if !errors.Is(err, eventruleproposalport.ErrStatusChanged) {
+		t.Fatalf("err = %v, want ErrStatusChanged", err)
+	}
+	storedSrc, err := repo.Get(ctx, src.ID)
+	if err != nil || storedSrc.Status != eventruleproposal.StatusPending || !storedSrc.DecidedAt.IsZero() {
+		t.Fatalf("src = %+v, err = %v", storedSrc, err)
+	}
+	storedDst, err := repo.Get(ctx, dst.ID)
+	if err != nil || !reflect.DeepEqual(storedDst.EvidenceIDs, []string{"a2"}) {
+		t.Fatalf("dst = %+v, err = %v", storedDst, err)
+	}
+}
+
+func TestReplaceTypes(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+	repo := sqliteeventruleproposal.NewRepository(db)
+	a := seedType(t, repo, "kicking error", eventruleproposal.StatusPending, "a1")
+	b := seedType(t, repo, "kicker miss", eventruleproposal.StatusPending, "a2")
+
+	if err := repo.ReplaceTypes(ctx, []string{a.ID, b.ID}, []eventruleproposal.Proposal{typeProposal("Special Teams Error", "", "a1", "a2")}); err != nil {
+		t.Fatalf("ReplaceTypes() error = %v", err)
+	}
+	pending, err := repo.ListByStatus(ctx, eventruleproposal.StatusPending)
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("pending = %+v, err = %v", pending, err)
+	}
+	if pending[0].TypeName != "special-teams-error" || !reflect.DeepEqual(pending[0].EvidenceIDs, []string{"a1", "a2"}) {
+		t.Fatalf("row = %+v", pending[0])
+	}
+	// A later Upsert of the same slug must land on the replaced row.
+	again, err := repo.Upsert(ctx, typeProposal("special teams error", "", "a3"))
+	if err != nil || again.ID != pending[0].ID {
+		t.Fatalf("again = %+v, err = %v (want ID %s)", again, err, pending[0].ID)
+	}
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM event_rule_proposals`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("rows = %d, err = %v", n, err)
 	}
 }

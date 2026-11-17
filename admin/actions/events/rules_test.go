@@ -80,10 +80,13 @@ func list(t *testing.T, m map[string]any, key string) []any {
 	return l
 }
 
-type fakeLLM struct{ err error }
+type fakeLLM struct {
+	err    error
+	topics []appout.EventTopicProposal
+}
 
-func (l fakeLLM) DiscoverTopics(context.Context, []appout.EventRuleArticle) ([]appout.EventTopicProposal, error) {
-	return nil, l.err
+func (l fakeLLM) DiscoverTopics(context.Context, []appout.EventRuleArticle, []string) ([]appout.EventTopicProposal, error) {
+	return l.topics, l.err
 }
 
 func (l fakeLLM) DiscoverPhrases(context.Context, []appout.EventRuleArticle, []string, []string) ([]appout.EventPhraseProposal, error) {
@@ -421,8 +424,29 @@ func TestRulesDiscoverSummary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.HasPrefix(res.Summary, "WARNING") || !strings.HasPrefix(res.Summary, "1 sampled, 2 calls (0 failed), 0 proposals") {
+	if strings.HasPrefix(res.Summary, "WARNING") || !strings.HasPrefix(res.Summary, "1 sampled, 2 calls (0 failed), 0 proposals") || strings.Contains(res.Summary, "dropped") {
 		t.Errorf("summary = %q", res.Summary)
+	}
+	if got := asMap(t, res.Object)["dropped"]; got != float64(0) {
+		t.Errorf("dropped = %v, want 0", got)
+	}
+}
+
+func TestRulesDiscoverReportsDropped(t *testing.T) {
+	f := newFixture(t)
+	f.cfg.OfflineTraining.LLM.BaseURL = "http://llm.invalid"
+	f.cfg.OfflineTraining.LLM.Model = "m"
+	f.seedGeneric("art-1", "Springfield Isotopes inks a deal with Tavion Dale")
+	defer events.SetDiscoveryLLM(fakeLLM{topics: []appout.EventTopicProposal{{Name: "injury"}, {Name: "Injured Reserve"}}})()
+	res, err := f.run("events.rules_discover", `{}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Summary, ", 2 dropped (already an event type or action)") {
+		t.Errorf("summary = %q", res.Summary)
+	}
+	if got := asMap(t, res.Object)["dropped"]; got != float64(2) {
+		t.Errorf("dropped = %v, want 2", got)
 	}
 }
 

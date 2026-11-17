@@ -33,7 +33,7 @@ type EventPhraseProposal struct {
 // completions endpoint for event rule discovery. Validation of targets and
 // phrases against article text is the caller's job.
 type EventRuleDiscoveryLLM interface {
-	DiscoverTopics(ctx context.Context, articles []EventRuleArticle) ([]EventTopicProposal, error)
+	DiscoverTopics(ctx context.Context, articles []EventRuleArticle, known []string) ([]EventTopicProposal, error)
 	// DiscoverPhrases proposes phrases for the closed lists of allowed
 	// action and signal names, which the prompt enumerates.
 	DiscoverPhrases(ctx context.Context, articles []EventRuleArticle, allowedActions, allowedSignals []string) ([]EventPhraseProposal, error)

@@ -25,7 +25,7 @@ func TestEventsType_ListGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	out = strings.NewReplacer(ids[0], "<p0>", ids[1], "<p1>").Replace(out)
-	want := "<p0> [pending] contract extension: Re-signings. (evidence g0, g1)\n<p1> [approved] stadium works: Construction. (evidence )\n"
+	want := "<p0> [pending] contract-extension: Re-signings. (evidence g0, g1)\n<p1> [approved] stadium-works: Construction. (evidence )\n"
 	if out != want {
 		t.Fatalf("output:\n%q\nwant:\n%q", out, want)
 	}

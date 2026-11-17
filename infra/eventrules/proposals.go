@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	sqliteadapter "github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqlite"
@@ -28,6 +29,11 @@ var (
 	// ErrAlreadyDecided reports a type proposal that is not in a state the
 	// decision applies to; errors.Is matches it.
 	ErrAlreadyDecided = errors.New("proposal already decided")
+	// ErrBadMergeTarget reports a merge target that is the source itself, a
+	// phrase proposal, a type proposal that is neither pending nor approved,
+	// or a name that is not a known event type or action; errors.Is matches
+	// it.
+	ErrBadMergeTarget = errors.New("bad merge target")
 )
 
 // textError carries a fixed message and matches a sentinel through errors.Is.
@@ -126,4 +132,124 @@ func Brief(ctx context.Context, db *sql.DB, id string) (string, error) {
 		examples = append(examples, a.Title)
 	}
 	return eventrulecycle.Brief(p, examples), nil
+}
+
+// MergeResult is the outcome of MergeType: the rejected Source and either the
+// Target proposal that gained its evidence or, when merged into a known
+// event type or action, the zero Target and that name in CoveredBy.
+type MergeResult struct {
+	Source, Target eventruleproposal.Proposal
+	CoveredBy      string
+}
+
+// MergeType folds the pending or approved type proposal id into into at now.
+// An into starting with "evr_" is another pending or approved type proposal,
+// which gains the source's evidence; anything else is slugged and must be a
+// known event type or action. Either way the source is rejected. A phrase
+// source returns ErrNotTypeProposal, a decided one ErrAlreadyDecided, a
+// refused target ErrBadMergeTarget, and an unknown id the repository's
+// not-found error.
+func MergeType(ctx context.Context, db *sql.DB, id, into string, now time.Time) (MergeResult, error) {
+	if into == id {
+		return MergeResult{}, &textError{msg: fmt.Sprintf("proposal %s cannot be merged into itself", id), sentinel: ErrBadMergeTarget}
+	}
+	repo := sqliteeventruleproposal.NewRepository(db)
+	src, err := repo.Get(ctx, id)
+	if err != nil {
+		return MergeResult{}, err
+	}
+	if src.Kind != eventruleproposal.KindType {
+		return MergeResult{}, &textError{
+			msg:      fmt.Sprintf("proposal %s is a %s proposal, not a type proposal", src.ID, src.Kind),
+			sentinel: ErrNotTypeProposal,
+		}
+	}
+	rejected, err := src.Reject(now)
+	if err != nil {
+		return MergeResult{}, &textError{msg: err.Error(), sentinel: ErrAlreadyDecided}
+	}
+	decidedElsewhere := func(err error) error {
+		if errors.Is(err, eventruleproposalport.ErrStatusChanged) {
+			return &textError{msg: fmt.Sprintf("proposal %s or its merge target was decided elsewhere since it was read; reload it", src.ID), sentinel: ErrAlreadyDecided}
+		}
+		return err
+	}
+
+	if !strings.HasPrefix(into, "evr_") {
+		name := eventruleproposal.Slug(into)
+		if !isKnownTypeName(name) {
+			return MergeResult{}, &textError{msg: fmt.Sprintf("%q is not a known event type or action", into), sentinel: ErrBadMergeTarget}
+		}
+		if err := repo.Transition(ctx, rejected, src.Status); err != nil {
+			return MergeResult{}, decidedElsewhere(err)
+		}
+		return MergeResult{Source: rejected, CoveredBy: name}, nil
+	}
+
+	dst, err := repo.Get(ctx, into)
+	if err != nil {
+		return MergeResult{}, err
+	}
+	if dst.Kind != eventruleproposal.KindType {
+		return MergeResult{}, &textError{msg: fmt.Sprintf("merge target %s is a %s proposal, not a type proposal", dst.ID, dst.Kind), sentinel: ErrBadMergeTarget}
+	}
+	if dst.Status != eventruleproposal.StatusPending && dst.Status != eventruleproposal.StatusApproved {
+		return MergeResult{}, &textError{msg: fmt.Sprintf("merge target %s is %s; only pending or approved type proposals take a merge", dst.ID, dst.Status), sentinel: ErrBadMergeTarget}
+	}
+	merged, err := repo.MergeTypes(ctx, src.ID, src.Status, dst.ID, dst.Status, now)
+	if err != nil {
+		return MergeResult{}, decidedElsewhere(err)
+	}
+	return MergeResult{Source: rejected, Target: merged}, nil
+}
+
+// isKnownTypeName reports whether name is a known event type or action.
+func isKnownTypeName(name string) bool {
+	for _, k := range eventrulecycle.KnownTypeNames() {
+		if k == name {
+			return true
+		}
+	}
+	return false
+}
+
+// NormalizeReport counts what NormalizeTypes did: the type proposals (not
+// applied) Before and After, and the plan's counters.
+type NormalizeReport struct {
+	Before, After, Merged, Covered, Reopened, Emptied int
+}
+
+// NormalizeTypes folds every stored type proposal that is not applied onto
+// its slug in one transaction (see eventruleproposal.PlanTypeNormalization),
+// rejecting those covered by a known event type or action. With
+// reopenApproved every approved type proposal goes back to pending, not only
+// merged ones. A second run with no decisions in between plans nothing.
+func NormalizeTypes(ctx context.Context, db *sql.DB, reopenApproved bool, now time.Time) (NormalizeReport, error) {
+	repo := sqliteeventruleproposal.NewRepository(db)
+	var ps []eventruleproposal.Proposal
+	for _, st := range []eventruleproposal.Status{eventruleproposal.StatusPending, eventruleproposal.StatusApproved, eventruleproposal.StatusRejected} {
+		list, err := repo.ListByStatus(ctx, st)
+		if err != nil {
+			return NormalizeReport{}, err
+		}
+		for _, p := range list {
+			if p.Kind == eventruleproposal.KindType {
+				ps = append(ps, p)
+			}
+		}
+	}
+	known := map[string]bool{}
+	for _, k := range eventrulecycle.KnownTypeNames() {
+		known[k] = true
+	}
+	plan := eventruleproposal.PlanTypeNormalization(ps, known, reopenApproved, now)
+	if len(plan.Delete) > 0 || len(plan.Insert) > 0 {
+		if err := repo.ReplaceTypes(ctx, plan.Delete, plan.Insert); err != nil {
+			return NormalizeReport{}, err
+		}
+	}
+	return NormalizeReport{
+		Before: len(ps), After: len(ps) - len(plan.Delete) + len(plan.Insert),
+		Merged: plan.Merged, Covered: plan.Covered, Reopened: plan.Reopened, Emptied: plan.Emptied,
+	}, nil
 }

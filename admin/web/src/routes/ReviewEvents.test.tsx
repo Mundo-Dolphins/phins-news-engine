@@ -77,7 +77,7 @@ function typeRow(over: Record<string, unknown> = {}) {
 }
 
 const typeList = (rows: unknown[]): RunOutcome => ({
-  result: { render: "table", rows: rows as Record<string, unknown>[], summary: `${rows.length} event type proposal(s)` },
+  result: { render: "table", rows: rows as Record<string, unknown>[], object: { known: ["game", "injury"] }, summary: `${rows.length} event type proposal(s)` },
 });
 
 /**
@@ -400,6 +400,72 @@ describe("ReviewEvents", () => {
     await within(zone).findByText("kicking error");
     fireEvent.click(within(zone).getByRole("button", { name: "Approve kicking error" }));
     expect(await within(zone).findByText(/is not pending/)).toBeTruthy();
+    expect(within(zone).getByText("kicking error")).toBeTruthy();
+  });
+
+  it("merges a type proposal into another proposal and reloads the list", async () => {
+    const s = await open(
+      {},
+      {
+        "events.type_merge": () => {
+          s.setTypes([typeRow({ id: "t2", type: "betting odds", evidence: "a3, a4, a5" })]);
+          return obj({ id: "t1", type: "kicking error", status: "rejected", into: "t2", covered_by: "" }, "Event type proposal t1 (kicking error) merged into t2 (betting odds).");
+        },
+      },
+      [typeRow(), typeRow({ id: "t2", type: "betting odds", evidence: "a3" })],
+    );
+    const zone = screen.getByRole("region", { name: /New event types/ });
+    await within(zone).findByText("kicking error");
+    fireEvent.click(within(zone).getByRole("button", { name: "Merge kicking error" }));
+    const pick = within(zone).getByRole("combobox") as HTMLSelectElement;
+    const labels = Array.from(pick.options).map((o) => o.textContent);
+    expect(labels).toEqual(["proposal: betting odds", "existing: game", "existing: injury"]);
+    fireEvent.change(pick, { target: { value: "t2" } });
+    fireEvent.click(within(zone).getByRole("button", { name: "Merge" }));
+    await waitFor(() => expect(run).toHaveBeenCalledWith("events.type_merge", { id: "t1", into: "t2" }, false));
+    expect(await within(zone).findByText("Event type proposal t1 (kicking error) merged into t2 (betting odds).")).toBeTruthy();
+    expect(within(zone).queryByText("kicking error")).toBeNull();
+    expect(await within(zone).findByText(/3 evidence articles/)).toBeTruthy();
+    expect(within(zone).queryByRole("combobox")).toBeNull();
+  });
+
+  it("merges a type proposal into a known name", async () => {
+    await open({}, { "events.type_merge": () => obj({ id: "t1", type: "kicking error", status: "rejected", into: "game", covered_by: "game" }, "Event type proposal t1 (kicking error) rejected: covered by game.") }, [typeRow()]);
+    const zone = screen.getByRole("region", { name: /New event types/ });
+    await within(zone).findByText("kicking error");
+    fireEvent.click(within(zone).getByRole("button", { name: "Merge kicking error" }));
+    fireEvent.change(within(zone).getByRole("combobox"), { target: { value: "game" } });
+    fireEvent.click(within(zone).getByRole("button", { name: "Merge" }));
+    await waitFor(() => expect(run).toHaveBeenCalledWith("events.type_merge", { id: "t1", into: "game" }, false));
+    expect(await within(zone).findByText("Event type proposal t1 (kicking error) rejected: covered by game.")).toBeTruthy();
+    expect(within(zone).queryByText("kicking error")).toBeNull();
+  });
+
+  it("cancels a merge without calling the action", async () => {
+    await open({}, {}, [typeRow()]);
+    const zone = screen.getByRole("region", { name: /New event types/ });
+    await within(zone).findByText("kicking error");
+    fireEvent.click(within(zone).getByRole("button", { name: "Merge kicking error" }));
+    fireEvent.click(within(zone).getByRole("button", { name: "Cancel" }));
+    expect(within(zone).queryByRole("combobox")).toBeNull();
+    expect(calls("events.type_merge")).toHaveLength(0);
+  });
+
+  it("shows why a merge failed and keeps the proposal", async () => {
+    await open(
+      {},
+      {
+        "events.type_merge": () => {
+          throw new ApiError(409, "conflict", "proposal t1 already decided");
+        },
+      },
+      [typeRow()],
+    );
+    const zone = screen.getByRole("region", { name: /New event types/ });
+    await within(zone).findByText("kicking error");
+    fireEvent.click(within(zone).getByRole("button", { name: "Merge kicking error" }));
+    fireEvent.click(within(zone).getByRole("button", { name: "Merge" }));
+    expect(await within(zone).findByText(/already decided/)).toBeTruthy();
     expect(within(zone).getByText("kicking error")).toBeTruthy();
   });
 

@@ -32,9 +32,16 @@ Return at most 30 phrases. Return JSON only, matching this shape:
 {"phrases": [{"target_kind": "action", "target": "sign", "phrase": "agrees to terms with", "article_ids": ["..."]}, {"target_kind": "signal", "target": "rumor", "phrase": "is expected to", "article_ids": ["..."]}]}`
 
 // DiscoverTopics implements ports/out.EventRuleDiscoveryLLM. Retry
-// semantics match Discover.
-func (c *Client) DiscoverTopics(ctx context.Context, articles []appout.EventRuleArticle) ([]appout.EventTopicProposal, error) {
-	return runStructured(ctx, c, CurrentPrompts().EventTopics, eventRulesUserPrompt(articles), parseEventTopics)
+// semantics match Discover. known lists the event kind names that already
+// exist; it opens the user message (the system prompt is unchanged, so a
+// bot-supplied override keeps working) and is omitted when empty.
+func (c *Client) DiscoverTopics(ctx context.Context, articles []appout.EventRuleArticle, known []string) ([]appout.EventTopicProposal, error) {
+	user := eventRulesUserPrompt(articles)
+	if len(known) > 0 {
+		user = "KNOWN EVENT KINDS: " + strings.Join(known, ", ") +
+			"\nIf a topic fits one of these, use that exact name. Propose a new name only for a kind none of them covers.\n\n" + user
+	}
+	return runStructured(ctx, c, CurrentPrompts().EventTopics, user, parseEventTopics)
 }
 
 // DiscoverPhrases implements ports/out.EventRuleDiscoveryLLM. The prompt

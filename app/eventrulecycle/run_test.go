@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -90,13 +91,15 @@ type fakeLLM struct {
 	topicErr   error
 	phraseErr  error
 	topicCalls int
+	known      [][]string
 	batchSizes []int
 	actions    []string
 	signals    []string
 }
 
-func (f *fakeLLM) DiscoverTopics(_ context.Context, arts []appout.EventRuleArticle) ([]appout.EventTopicProposal, error) {
+func (f *fakeLLM) DiscoverTopics(_ context.Context, arts []appout.EventRuleArticle, known []string) ([]appout.EventTopicProposal, error) {
 	f.topicCalls++
+	f.known = append(f.known, known)
 	if f.topicErr != nil {
 		return nil, f.topicErr
 	}
@@ -267,7 +270,7 @@ func TestRun_ApproveOneRejectOneAndApply(t *testing.T) {
 	if p := ps["inks"]; p.Status != eventruleproposal.StatusRejected {
 		t.Errorf("auto-rejected proposal %+v", p)
 	}
-	if p := ps["type:stadium renovation"]; p.Status != eventruleproposal.StatusPending || p.Kind != eventruleproposal.KindType {
+	if p := ps["type:stadium-renovation"]; p.Status != eventruleproposal.StatusPending || p.Kind != eventruleproposal.KindType {
 		t.Errorf("type proposal %+v", p)
 	}
 
@@ -279,7 +282,7 @@ func TestRun_ApproveOneRejectOneAndApply(t *testing.T) {
 		w[1].TargetKind != "action" || w[1].ProposalID != ps["lands on the shelf"].ID {
 		t.Errorf("written %+v", w)
 	}
-	for _, want := range []string{"1 generic → injury", "Ezo lands on the shelf with ankle", "phrase shorter than", "stadium renovation"} {
+	for _, want := range []string{"1 generic → injury", "Ezo lands on the shelf with ankle", "phrase shorter than", "stadium-renovation"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}
@@ -660,8 +663,8 @@ func TestRun_ListsOnlyThisRunsTypeProposals(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, out := h.run(t, "s\ns\n")
-	cur := h.byPhrase(t)["type:stadium renovation"]
-	if !strings.Contains(out, cur.ID) || !strings.Contains(out, "stadium renovation") {
+	cur := h.byPhrase(t)["type:stadium-renovation"]
+	if !strings.Contains(out, cur.ID) || !strings.Contains(out, "stadium-renovation") {
 		t.Errorf("this run's type proposal not listed with its id:\n%s", out)
 	}
 	if strings.Contains(out, "coaching search") || strings.Contains(out, old.ID) {
@@ -688,5 +691,79 @@ func TestRun_ReportsHowManyDatasetArticlesTheGateSawChange(t *testing.T) {
 	res, out = h2.run(t, "a\nr\n")
 	if !res.GateRan || res.GateAffected != 3 || !strings.Contains(out, "3 dataset article(s) affected") || strings.Contains(out, "not exercised") {
 		t.Errorf("result %+v\n%s", res, out)
+	}
+}
+
+func TestDiscover_DropsKnownAndSlugsTopics(t *testing.T) {
+	h := newHarness(t)
+	h.llm.phrases = nil
+	h.llm.topics = []appout.EventTopicProposal{
+		{Name: "Game Result", ArticleIDs: []string{"a3"}},
+		{Name: "injury", ArticleIDs: []string{"a3"}},
+		{Name: "Injured Reserve", ArticleIDs: []string{"a3"}},
+		{Name: "///", ArticleIDs: []string{"a3"}},
+		{Name: "kicking_error", ArticleIDs: []string{"a3"}},
+	}
+	c, err := eventrulecycle.Prepare(context.Background(), h.deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := eventrulecycle.Discover(context.Background(), h.deps, c, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Dropped != 2 {
+		t.Errorf("Dropped = %d, want 2", r.Dropped)
+	}
+	ps, err := h.repo.ListByStatus(context.Background(), eventruleproposal.StatusPending)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, p := range ps {
+		if p.Kind == eventruleproposal.KindType {
+			names = append(names, p.TypeName)
+		}
+	}
+	sort.Strings(names)
+	if got := fmt.Sprint(names); got != "[game-result kicking-error]" {
+		t.Errorf("stored type names = %s", got)
+	}
+}
+
+func TestDiscover_PassesKnownNamesToLLM(t *testing.T) {
+	h := newHarness(t)
+	h.llm.topics = nil
+	if _, err := h.repo.Upsert(context.Background(), eventruleproposal.Proposal{
+		Kind: eventruleproposal.KindType, TypeName: "betting-odds",
+		Status: eventruleproposal.StatusPending, PromptVersion: "event-rules-v1", CreatedAt: testNow,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	c, err := eventrulecycle.Prepare(context.Background(), h.deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eventrulecycle.Discover(context.Background(), h.deps, c, 20); err != nil {
+		t.Fatal(err)
+	}
+	want := append(eventrulecycle.KnownTypeNames(), "betting-odds")
+	sort.Strings(want)
+	if len(h.llm.known) == 0 || fmt.Sprint(h.llm.known[0]) != fmt.Sprint(want) {
+		t.Errorf("known = %v, want %v", h.llm.known, want)
+	}
+}
+
+func TestRun_ReportsDroppedTopics(t *testing.T) {
+	h := newHarness(t)
+	h.llm.topics = []appout.EventTopicProposal{{Name: "injury"}, {Name: "Injured Reserve"}}
+	_, out := h.run(t, "s\ns\n")
+	if !strings.Contains(out, "event rules: 2 topic(s) dropped (already an event type or action)") {
+		t.Errorf("no dropped line:\n%s", out)
+	}
+	h2 := newHarness(t)
+	_, out = h2.run(t, "s\ns\n")
+	if strings.Contains(out, "dropped") {
+		t.Errorf("unexpected dropped line:\n%s", out)
 	}
 }

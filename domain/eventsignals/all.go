@@ -12,3 +12,14 @@ func AllActions() []Action {
 func AllContentSignals() []ContentSignal {
 	return append([]ContentSignal(nil), contentSignalPriority...)
 }
+
+// AllEventTypes returns every EventType in the closed taxonomy, with
+// EventTypeGeneric last. The slice is a fresh copy.
+func AllEventTypes() []EventType {
+	return []EventType{
+		EventTypeTransaction, EventTypeInjury, EventTypeDraft,
+		EventTypeGame, EventTypePractice, EventTypeQuote,
+		EventTypeRumor, EventTypeConfirmation, EventTypeCorrection,
+		EventTypeAnalysis, EventTypeReaction, EventTypeGeneric,
+	}
+}

@@ -108,6 +108,9 @@ func Run(ctx context.Context, d Deps, in Input) (Result, error) {
 		return res, err
 	}
 	fmt.Fprintf(in.Out, "event rules: %d proposals created or updated\n", res.Proposed)
+	if dr.Dropped > 0 {
+		fmt.Fprintf(in.Out, "event rules: %d topic(s) dropped (already an event type or action)\n", dr.Dropped)
+	}
 
 	s := &session{ctx: ctx, d: d, in: in, c: c, now: now, res: &res, approvedNow: map[string]bool{}}
 	if err := s.review(); err != nil {
@@ -119,7 +122,7 @@ func Run(ctx context.Context, d Deps, in Input) (Result, error) {
 	return res, listTypes(ctx, d.Proposals, in.Out, typesNow)
 }
 
-func discover(ctx context.Context, llm appout.EventRuleDiscoveryLLM, sample []eventruleproposal.Sample, batchSize int) (topics []appout.EventTopicProposal, phrases []appout.EventPhraseProposal, failed, calls int, firstErr error) {
+func discover(ctx context.Context, llm appout.EventRuleDiscoveryLLM, sample []eventruleproposal.Sample, batchSize int, known []string) (topics []appout.EventTopicProposal, phrases []appout.EventPhraseProposal, failed, calls int, firstErr error) {
 	if batchSize <= 0 {
 		batchSize = defaultBatchSize
 	}
@@ -144,7 +147,7 @@ func discover(ctx context.Context, llm appout.EventRuleDiscoveryLLM, sample []ev
 			arts = append(arts, appout.EventRuleArticle{ArticleID: s.Article.ID, Title: s.Article.Title, Summary: s.Article.Summary})
 		}
 		calls += 2
-		if ts, err := llm.DiscoverTopics(ctx, arts); err != nil {
+		if ts, err := llm.DiscoverTopics(ctx, arts, known); err != nil {
 			note(err)
 		} else {
 			topics = append(topics, ts...)
@@ -189,11 +192,16 @@ func knownTarget(kind, target string) (eventruleproposal.TargetKind, bool) {
 
 // persistProposals validates and upserts the LLM output as pending
 // proposals (evidence must be in text, the sample's lowercased title +
-// summary by article ID) and returns how many were stored and the IDs of
-// the type proposals stored or updated. A phrase already in any bucket of base (the
+// summary by article ID) and returns how many were stored, the IDs of
+// the type proposals stored or updated and how many topics were dropped for
+// naming an existing event type or action (compared by slug). A phrase already in any bucket of base (the
 // hand-written plus the current generated rules) is not stored.
-func persistProposals(ctx context.Context, repo eventruleproposalport.Repository, base eventsignals.Rules, text map[string]string, topics []appout.EventTopicProposal, phrases []appout.EventPhraseProposal, now time.Time) (int, map[string]bool, error) {
-	n := 0
+func persistProposals(ctx context.Context, repo eventruleproposalport.Repository, base eventsignals.Rules, text map[string]string, topics []appout.EventTopicProposal, phrases []appout.EventPhraseProposal, now time.Time) (int, map[string]bool, int, error) {
+	n, dropped := 0, 0
+	builtin := map[string]bool{}
+	for _, k := range KnownTypeNames() {
+		builtin[k] = true
+	}
 	typesNow := map[string]bool{}
 	for _, lp := range phrases {
 		target := strings.TrimSpace(lp.Target)
@@ -219,13 +227,17 @@ func persistProposals(ctx context.Context, repo eventruleproposalport.Repository
 			EvidenceIDs: evidence, Status: eventruleproposal.StatusPending,
 			PromptVersion: EventRulesPromptVersion, CreatedAt: now,
 		}); err != nil {
-			return n, typesNow, fmt.Errorf("eventrulecycle: upsert phrase %q: %w", phrase, err)
+			return n, typesNow, dropped, fmt.Errorf("eventrulecycle: upsert phrase %q: %w", phrase, err)
 		}
 		n++
 	}
 	for _, tp := range topics {
-		name := normalizePhrase(tp.Name)
+		name := eventruleproposal.Slug(tp.Name)
 		if name == "" {
+			continue
+		}
+		if builtin[name] {
+			dropped++
 			continue
 		}
 		var evidence []string
@@ -240,14 +252,14 @@ func persistProposals(ctx context.Context, repo eventruleproposalport.Repository
 			Status: eventruleproposal.StatusPending, PromptVersion: EventRulesPromptVersion, CreatedAt: now,
 		})
 		if err != nil {
-			return n, typesNow, fmt.Errorf("eventrulecycle: upsert topic %q: %w", name, err)
+			return n, typesNow, dropped, fmt.Errorf("eventrulecycle: upsert topic %q: %w", name, err)
 		}
 		if stored.Status == eventruleproposal.StatusPending {
 			typesNow[stored.ID] = true
 		}
 		n++
 	}
-	return n, typesNow, nil
+	return n, typesNow, dropped, nil
 }
 
 func sampleText(sample []eventruleproposal.Sample) map[string]string {
