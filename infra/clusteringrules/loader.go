@@ -48,7 +48,7 @@ type yamlSynonym struct {
 
 type yamlDateWindowPolicy struct {
 	// DefaultWindow is a fallback event window (a duration string, e.g.
-	// "24h") applied to any of eventsignals' 12 known EventTypes that
+	// "24h") applied to any declared event type (or generic) that
 	// temporal_windows does not list explicitly. It has no equivalent
 	// field on eventsignals.Rules — it only exists to let a rules-file
 	// author avoid repeating an entry for every event type; toEventWindows
@@ -98,8 +98,37 @@ type yamlContentTypeRule struct {
 	AllowUpdates bool `yaml:"allow_updates"`
 }
 
+type yamlEventType struct {
+	Name        string   `yaml:"name"`
+	Description string   `yaml:"description"`
+	Flags       []string `yaml:"flags"`
+	MemberRole  string   `yaml:"member_role"`
+}
+
+type yamlAction struct {
+	Name      string `yaml:"name"`
+	EventType string `yaml:"event_type"`
+	// BodyFallback is a pointer so an explicit 0 (rejected) is told apart
+	// from an omitted rank (never a body fallback).
+	BodyFallback *int `yaml:"body_fallback"`
+}
+
+type yamlContentSignal struct {
+	Name       string   `yaml:"name"`
+	EventType  string   `yaml:"event_type"`
+	Precedence string   `yaml:"precedence"`
+	Flags      []string `yaml:"flags"`
+}
+
+type yamlTaxonomy struct {
+	EventTypes     []yamlEventType     `yaml:"event_types"`
+	Actions        []yamlAction        `yaml:"actions"`
+	ContentSignals []yamlContentSignal `yaml:"content_signals"`
+}
+
 type yamlFile struct {
 	Meta                  yamlMeta                       `yaml:"meta"`
+	Taxonomy              *yamlTaxonomy                  `yaml:"taxonomy"`
 	Synonyms              []yamlSynonym                  `yaml:"synonyms"`
 	EventRules            yamlEventRules                 `yaml:"event_rules"`
 	FieldWeights          map[string]float64             `yaml:"field_weights"`
@@ -155,7 +184,9 @@ type RepresentativeRankingConfig struct {
 }
 
 // RulesFile is the fully parsed, structurally validated content of a
-// clustering rules YAML file (Task 3). Its Synonyms/ActionTerms/
+// clustering rules YAML file (Task 3). Taxonomy is the event vocabulary
+// every other section's action, content-signal and event-type names are
+// checked against. Its Synonyms/ActionTerms/
 // ContentCues/Entities/EventWindows fields and its threshold/weight fields
 // are exactly the data eventsignals.Rules and clustering.Config need —
 // ToEventSignalsRules and ToClusteringConfig only assemble them into those
@@ -166,6 +197,8 @@ type RulesFile struct {
 	Version     string
 	Name        string
 	GeneratedAt time.Time
+
+	Taxonomy eventsignals.Taxonomy
 
 	Synonyms              []eventsignals.Synonym
 	ActionTerms           map[eventsignals.Action][]string
@@ -204,7 +237,7 @@ type RulesFile struct {
 func (f RulesFile) ToEventSignalsRules() eventsignals.Rules {
 	return eventsignals.Rules{
 		Version:               f.Version,
-		Taxonomy:              legacyTaxonomy(), // TODO(taxonomy-yaml Task 3): replace with the parsed section
+		Taxonomy:              f.Taxonomy,
 		Synonyms:              f.Synonyms,
 		ActionTerms:           f.ActionTerms,
 		ContentCues:           f.ContentCues,
@@ -235,7 +268,7 @@ func (f RulesFile) ToClusteringConfig() clustering.Config {
 		NoveltyMatchWeight:    f.NoveltyMatchWeight,
 
 		RulesVersion: f.Version,
-		Taxonomy:     legacyTaxonomy(), // TODO(taxonomy-yaml Task 3): replace with the parsed section
+		Taxonomy:     f.Taxonomy,
 	}
 }
 
@@ -320,41 +353,8 @@ func (f RulesFile) ToRepresentativeConfig() clustering.RepresentativeConfig {
 		SubstantialUpdateThreshold: f.Representative.SubstantialUpdateThreshold,
 		RepresentativeSwitchMargin: f.Representative.RepresentativeSwitchMargin,
 		RulesVersion:               f.Version,
-		Taxonomy:                   legacyTaxonomy(), // TODO(taxonomy-yaml Task 3): replace with the parsed section
+		Taxonomy:                   f.Taxonomy,
 	}
-}
-
-// -- known vocabulary (sourced from eventsignals' own constants, never
-// duplicated as bare strings, so this loader can never drift from the
-// domain package's actual taxonomy) ------------------------------------
-
-var knownActions = map[eventsignals.Action]bool{
-	eventsignals.ActionSign: true, eventsignals.ActionRelease: true, eventsignals.ActionTrade: true,
-	eventsignals.ActionWaive: true, eventsignals.ActionClaim: true, eventsignals.ActionExtend: true,
-	eventsignals.ActionInjure: true, eventsignals.ActionReturn: true, eventsignals.ActionPractice: true,
-	eventsignals.ActionActivate: true, eventsignals.ActionDraft: true, eventsignals.ActionPreview: true,
-	eventsignals.ActionResult: true, eventsignals.ActionQuote: true, eventsignals.ActionReport: true,
-	eventsignals.ActionConfirm: true, eventsignals.ActionCorrect: true,
-	// New in the entity-extraction/fingerprint work — see
-	// eventsignals.Action's own doc comment for why these 9 exist
-	// alongside the original 17.
-	eventsignals.ActionInjuredReserve: true, eventsignals.ActionPracticeSquad: true,
-	eventsignals.ActionPromote: true, eventsignals.ActionDemote: true, eventsignals.ActionTryout: true,
-	eventsignals.ActionContract: true, eventsignals.ActionGameStatus: true,
-	eventsignals.ActionDepthChart: true, eventsignals.ActionRoster: true,
-}
-
-var knownContentSignals = map[eventsignals.ContentSignal]bool{
-	eventsignals.ContentSignalRumor: true, eventsignals.ContentSignalConfirmation: true,
-	eventsignals.ContentSignalCorrection: true, eventsignals.ContentSignalAnalysis: true,
-	eventsignals.ContentSignalReaction: true, eventsignals.ContentSignalQuote: true,
-}
-
-var knownEventTypes = map[eventsignals.EventType]bool{
-	eventsignals.EventTypeTransaction: true, eventsignals.EventTypeInjury: true, eventsignals.EventTypeDraft: true,
-	eventsignals.EventTypeGame: true, eventsignals.EventTypePractice: true, eventsignals.EventTypeQuote: true,
-	eventsignals.EventTypeRumor: true, eventsignals.EventTypeConfirmation: true, eventsignals.EventTypeCorrection: true,
-	eventsignals.EventTypeAnalysis: true, eventsignals.EventTypeReaction: true, eventsignals.EventTypeGeneric: true,
 }
 
 // -- loading -----------------------------------------------------------
@@ -465,7 +465,15 @@ func toRulesFile(yf yamlFile) (RulesFile, error) {
 	unknownEntityStoplist := make([]string, len(yf.UnknownEntityStoplist))
 	copy(unknownEntityStoplist, yf.UnknownEntityStoplist)
 
-	eventWindows, err := toEventWindows(yf.TemporalWindows, yf.EventRules.DateWindowPolicy.DefaultWindow)
+	if yf.Taxonomy == nil {
+		return RulesFile{}, fmt.Errorf("taxonomy is required")
+	}
+	taxonomy, err := toTaxonomy(*yf.Taxonomy)
+	if err != nil {
+		return RulesFile{}, err
+	}
+
+	eventWindows, err := toEventWindows(yf.TemporalWindows, yf.EventRules.DateWindowPolicy.DefaultWindow, taxonomy)
 	if err != nil {
 		return RulesFile{}, err
 	}
@@ -488,6 +496,8 @@ func toRulesFile(yf yamlFile) (RulesFile, error) {
 		Version:     yf.Meta.Version,
 		Name:        yf.Meta.Name,
 		GeneratedAt: timeOrZero(generatedAt),
+
+		Taxonomy: taxonomy,
 
 		Synonyms:              synonyms,
 		ActionTerms:           actionTerms,
@@ -523,20 +533,66 @@ func toRulesFile(yf yamlFile) (RulesFile, error) {
 	}, nil
 }
 
+// toTaxonomy converts the taxonomy section into an eventsignals.Taxonomy,
+// keeping each list's order (its detection priority). An empty or omitted
+// flags list becomes nil. An explicit body_fallback must be positive (an
+// omitted one means "never a body fallback", rank 0); every other check
+// lives in validateTaxonomy.
+func toTaxonomy(yt yamlTaxonomy) (eventsignals.Taxonomy, error) {
+	var t eventsignals.Taxonomy
+	for _, et := range yt.EventTypes {
+		var flags []eventsignals.TypeFlag
+		for _, fl := range et.Flags {
+			flags = append(flags, eventsignals.TypeFlag(fl))
+		}
+		t.EventTypes = append(t.EventTypes, eventsignals.EventTypeDef{
+			Name:        eventsignals.EventType(et.Name),
+			Description: et.Description,
+			Flags:       flags,
+			MemberRole:  et.MemberRole,
+		})
+	}
+	for _, a := range yt.Actions {
+		rank := 0
+		if a.BodyFallback != nil {
+			if *a.BodyFallback <= 0 {
+				return eventsignals.Taxonomy{}, fmt.Errorf("taxonomy.actions[%s]: body_fallback must be positive, got %d", a.Name, *a.BodyFallback)
+			}
+			rank = *a.BodyFallback
+		}
+		t.Actions = append(t.Actions, eventsignals.ActionDef{
+			Name:             eventsignals.Action(a.Name),
+			EventType:        eventsignals.EventType(a.EventType),
+			BodyFallbackRank: rank,
+		})
+	}
+	for _, sig := range yt.ContentSignals {
+		var flags []eventsignals.SignalFlag
+		for _, fl := range sig.Flags {
+			flags = append(flags, eventsignals.SignalFlag(fl))
+		}
+		t.Signals = append(t.Signals, eventsignals.SignalDef{
+			Name:       eventsignals.ContentSignal(sig.Name),
+			EventType:  eventsignals.EventType(sig.EventType),
+			Precedence: eventsignals.Precedence(sig.Precedence),
+			Flags:      flags,
+		})
+	}
+	return t, nil
+}
+
 // toEventWindows resolves temporal_windows (event-type name -> duration
 // string) plus an optional default fallback into a
-// map[eventsignals.EventType]time.Duration keyed by every one of
-// eventsignals' 12 known EventTypes. An event type present in
-// temporal_windows uses its own duration; one absent from it uses
-// defaultWindow (parsed the same way) if set. Neither unknown event-type
-// keys nor unparseable duration strings are silently dropped — both are
-// reported here so Validate never has to re-parse strings.
-func toEventWindows(raw map[string]string, defaultWindow string) (map[eventsignals.EventType]time.Duration, error) {
-	for k := range raw {
-		if !knownEventTypes[eventsignals.EventType(k)] {
-			return nil, fmt.Errorf("temporal_windows: unrecognized event type %q", k)
-		}
-	}
+// map[eventsignals.EventType]time.Duration keyed by every event type in
+// taxonomy.EventTypeNames() (the declared ones plus generic). An event type
+// present in temporal_windows uses its own duration; one absent from it
+// uses defaultWindow (parsed the same way) if set. Unparseable duration
+// strings are reported here so Validate never has to re-parse strings; a
+// key the taxonomy does not declare is kept in the map for Validate to
+// reject, so a malformed taxonomy is reported as such rather than as an
+// unknown temporal_windows key.
+func toEventWindows(raw map[string]string, defaultWindow string, taxonomy eventsignals.Taxonomy) (map[eventsignals.EventType]time.Duration, error) {
+	eventTypes := taxonomy.EventTypeNames()
 
 	var fallback time.Duration
 	haveFallback := false
@@ -549,14 +605,17 @@ func toEventWindows(raw map[string]string, defaultWindow string) (map[eventsigna
 		haveFallback = true
 	}
 
-	windows := make(map[eventsignals.EventType]time.Duration, len(eventsignals.AllEventTypes()))
-	for _, et := range eventsignals.AllEventTypes() {
-		if s, ok := raw[string(et)]; ok {
-			d, err := time.ParseDuration(s)
-			if err != nil {
-				return nil, fmt.Errorf("temporal_windows[%s]: invalid duration %q: %w", et, s, err)
-			}
-			windows[et] = d
+	windows := make(map[eventsignals.EventType]time.Duration, len(eventTypes))
+	for _, k := range sortedKeys(raw) {
+		s := raw[k]
+		d, err := time.ParseDuration(s)
+		if err != nil {
+			return nil, fmt.Errorf("temporal_windows[%s]: invalid duration %q: %w", k, s, err)
+		}
+		windows[eventsignals.EventType(k)] = d
+	}
+	for _, et := range eventTypes {
+		if _, ok := windows[et]; ok {
 			continue
 		}
 		if !haveFallback {
@@ -588,16 +647,20 @@ func timeOrZero(t *time.Time) time.Time {
 // -- validation ----------------------------------------------------------
 
 // Validate checks f for the structural and semantic constraints the plan's
-// checklist requires: required metadata, threshold ranges/ordering,
-// weight finiteness/sign, positive event windows, no duplicate synonym or
-// action/content-cue terms, recognized vocabulary keys, and sane
-// representative-ranking-only data. It never mutates f.
+// checklist requires: required metadata, a well-formed taxonomy, threshold
+// ranges/ordering, weight finiteness/sign, positive event windows, no
+// duplicate synonym or action/content-cue terms, vocabulary keys and topic
+// group values the taxonomy declares, and sane representative-ranking-only
+// data. It never mutates f.
 func (f RulesFile) Validate() error {
 	if f.Version == "" {
 		return fmt.Errorf("meta.version is required")
 	}
 	if f.Name == "" {
 		return fmt.Errorf("meta.name is required")
+	}
+	if err := validateTaxonomy(f.Taxonomy); err != nil {
+		return err
 	}
 
 	if err := validateThresholds(f); err != nil {
@@ -609,7 +672,7 @@ func (f RulesFile) Validate() error {
 	if err := validateFieldWeights(f.FieldWeights); err != nil {
 		return err
 	}
-	if err := validateEventWindows(f.EventWindows); err != nil {
+	if err := validateEventWindows(f.EventWindows, f.Taxonomy); err != nil {
 		return err
 	}
 	if err := validateDuplicateSynonyms(f.Synonyms); err != nil {
@@ -621,10 +684,13 @@ func (f RulesFile) Validate() error {
 	if err := validateNoCrossBucketDuplicates("content_cues", stringKeyedSignal(f.ContentCues)); err != nil {
 		return err
 	}
-	if err := validateActionKeys(f.ActionTerms); err != nil {
+	if err := validateActionKeys(f.ActionTerms, f.Taxonomy); err != nil {
 		return err
 	}
-	if err := validateContentSignalKeys(f.ContentCues); err != nil {
+	if err := validateContentSignalKeys(f.ContentCues, f.Taxonomy); err != nil {
+		return err
+	}
+	if err := validateTopicGroups(f.TopicGroups, f.Taxonomy); err != nil {
 		return err
 	}
 	if err := validateRepresentative(f.Representative); err != nil {
@@ -735,8 +801,22 @@ func validateWeights(f RulesFile) error {
 	return finiteWeight("weights.clickbait_penalty", f.Representative.ClickbaitPenaltyWeight)
 }
 
-func validateEventWindows(windows map[eventsignals.EventType]time.Duration) error {
-	for _, et := range eventsignals.AllEventTypes() {
+func validateEventWindows(windows map[eventsignals.EventType]time.Duration, taxonomy eventsignals.Taxonomy) error {
+	declared := make(map[eventsignals.EventType]bool, len(taxonomy.EventTypes)+1)
+	for _, et := range taxonomy.EventTypeNames() {
+		declared[et] = true
+	}
+	keys := make([]string, 0, len(windows))
+	for et := range windows {
+		keys = append(keys, string(et))
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if !declared[eventsignals.EventType(k)] {
+			return fmt.Errorf("temporal_windows: unrecognized event type %q", k)
+		}
+	}
+	for _, et := range taxonomy.EventTypeNames() {
 		d, ok := windows[et]
 		if !ok || d <= 0 {
 			return fmt.Errorf("temporal_windows[%s]: must resolve to a positive duration, got %v", et, d)
@@ -769,8 +849,8 @@ func validateDuplicateSynonyms(synonyms []eventsignals.Synonym) error {
 // validateNoCrossBucketDuplicates rejects a term (case-insensitive,
 // trimmed) that appears more than once across buckets — whether twice
 // within the same bucket or once each under two different buckets. Both
-// detectAction and detectContentSignal (eventsignals) walk their bucket map
-// in a fixed priority order and return the first bucket whose term list
+// detectActionWithPriority and detectContentSignal (eventsignals) walk their
+// bucket map in the taxonomy's priority order and return the first bucket whose term list
 // matches; a term repeated under a second bucket can never actually be
 // reached through that second bucket, and a term repeated within one
 // bucket is simply redundant data — both are treated as the same class of
@@ -854,22 +934,72 @@ func stringKeyedSignal(m map[eventsignals.ContentSignal][]string) map[string][]s
 	return out
 }
 
-func validateActionKeys(m map[eventsignals.Action][]string) error {
-	for k := range m {
-		if !knownActions[k] {
+func validateActionKeys(m map[eventsignals.Action][]string, taxonomy eventsignals.Taxonomy) error {
+	known := declaredActions(taxonomy)
+	for _, k := range sortedKeys(stringKeyed(m)) {
+		if !known[eventsignals.Action(k)] {
 			return fmt.Errorf("action_terms: unrecognized action %q", k)
 		}
 	}
 	return nil
 }
 
-func validateContentSignalKeys(m map[eventsignals.ContentSignal][]string) error {
-	for k := range m {
-		if !knownContentSignals[k] {
+func validateContentSignalKeys(m map[eventsignals.ContentSignal][]string, taxonomy eventsignals.Taxonomy) error {
+	known := declaredSignals(taxonomy)
+	for _, k := range sortedKeys(stringKeyedSignal(m)) {
+		if !known[eventsignals.ContentSignal(k)] {
 			return fmt.Errorf("content_cues: unrecognized content signal %q", k)
 		}
 	}
 	return nil
+}
+
+// validateTopicGroups requires every topic_groups value to be a declared
+// action, a declared event type, or generic. Keys are free topic names.
+func validateTopicGroups(groups map[eventsignals.Topic][]string, taxonomy eventsignals.Taxonomy) error {
+	actions := declaredActions(taxonomy)
+	types := make(map[string]bool, len(taxonomy.EventTypes)+1)
+	for _, et := range taxonomy.EventTypeNames() {
+		types[string(et)] = true
+	}
+	keys := make([]string, 0, len(groups))
+	for k := range groups {
+		keys = append(keys, string(k))
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		for _, v := range groups[eventsignals.Topic(k)] {
+			if !actions[eventsignals.Action(v)] && !types[v] {
+				return fmt.Errorf("topic_groups[%s]: %q is neither a declared action nor a declared event type", k, v)
+			}
+		}
+	}
+	return nil
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func declaredActions(taxonomy eventsignals.Taxonomy) map[eventsignals.Action]bool {
+	out := make(map[eventsignals.Action]bool, len(taxonomy.Actions))
+	for _, a := range taxonomy.Actions {
+		out[a.Name] = true
+	}
+	return out
+}
+
+func declaredSignals(taxonomy eventsignals.Taxonomy) map[eventsignals.ContentSignal]bool {
+	out := make(map[eventsignals.ContentSignal]bool, len(taxonomy.Signals))
+	for _, s := range taxonomy.Signals {
+		out[s.Name] = true
+	}
+	return out
 }
 
 // validateFieldWeights requires exactly the three keys Extract's

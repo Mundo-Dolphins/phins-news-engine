@@ -4,6 +4,7 @@ package clusteringrules_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals"
@@ -26,11 +27,10 @@ func TestParseGenerated_MissingFileIsEmpty(t *testing.T) {
 	}
 }
 
-func TestParseGenerated_RejectsUnknownActionAndBlankPhrase(t *testing.T) {
+func TestParseGenerated_RejectsBlankPhraseAndUnknownField(t *testing.T) {
 	for name, body := range map[string]string{
-		"unknown action": "meta: {version: 1}\naction_terms:\n  nope:\n    - {phrase: x y, proposal_id: a, prompt_version: v}\n",
-		"blank phrase":   "meta: {version: 1}\naction_terms:\n  sign:\n    - {phrase: \"  \", proposal_id: a, prompt_version: v}\n",
-		"unknown field":  "meta: {version: 1}\nbogus: 1\n",
+		"blank phrase":  "meta: {version: 1}\naction_terms:\n  sign:\n    - {phrase: \"  \", proposal_id: a, prompt_version: v}\n",
+		"unknown field": "meta: {version: 1}\nbogus: 1\n",
 	} {
 		p := filepath.Join(t.TempDir(), "g.yml")
 		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
@@ -38,6 +38,36 @@ func TestParseGenerated_RejectsUnknownActionAndBlankPhrase(t *testing.T) {
 		}
 		if _, err := clusteringrules.ParseGenerated(p); err == nil {
 			t.Errorf("%s: expected error", name)
+		}
+	}
+}
+
+// ParseGenerated has no taxonomy to check bucket names against: that check
+// lives in LoadWithGenerated, against the hand-written rules' taxonomy.
+func TestParseGenerated_AcceptsAnyBucketName(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "g.yml")
+	body := "meta: {version: 1}\naction_terms:\n  nope:\n    - {phrase: x y, proposal_id: a, prompt_version: v}\n"
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	g, err := clusteringrules.ParseGenerated(p)
+	if err != nil || len(g.ActionTerms["nope"]) != 1 {
+		t.Fatalf("got %+v, %v", g, err)
+	}
+}
+
+func TestLoadWithGenerated_RejectsUndeclaredActionAndSignal(t *testing.T) {
+	for name, tc := range map[string]struct{ body, want string }{
+		"unknown action": {"meta: {version: 1}\naction_terms:\n  nope:\n    - {phrase: x y, proposal_id: a, prompt_version: v}\n", `unknown action "nope"`},
+		"unknown signal": {"meta: {version: 1}\ncontent_cues:\n  hedge:\n    - {phrase: x y, proposal_id: a, prompt_version: v}\n", `unknown content signal "hedge"`},
+	} {
+		p := filepath.Join(t.TempDir(), "g.yml")
+		if err := os.WriteFile(p, []byte(tc.body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, _, err := clusteringrules.LoadWithGenerated(baseRules(t), p)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: error = %v, want it to contain %q", name, err, tc.want)
 		}
 	}
 }

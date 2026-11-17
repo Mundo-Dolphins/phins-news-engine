@@ -6,6 +6,15 @@ meta:
   name: test_clustering_rules_invalid
   generated_at: "2026-07-24"
 
+taxonomy:
+  event_types:
+    - {name: transaction, description: "A roster move."}
+    - {name: rumor, description: "An unconfirmed report.", flags: [referential]}
+  actions:
+    - {name: sign, event_type: transaction}
+  content_signals:
+    - {name: rumor, event_type: rumor, precedence: before_action, flags: [speculative]}
+
 synonyms:
   - phrase: "agrees to a deal"
     canonical: "sign"
