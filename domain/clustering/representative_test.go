@@ -8,6 +8,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/clustering"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/editorial"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals"
+	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals/eventsignalstest"
 )
 
 // neutralEditorial is the placeholder editorial.Score every candidate in
@@ -49,6 +50,8 @@ func testRepresentativeConfig() clustering.RepresentativeConfig {
 		RepresentativeSwitchMargin: 0.05,
 
 		RulesVersion: "test-representative-rules-v1",
+
+		Taxonomy: eventsignalstest.Taxonomy(),
 	}
 }
 

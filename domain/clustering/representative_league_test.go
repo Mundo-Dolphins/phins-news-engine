@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals"
+	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals/eventsignalstest"
 )
 
 // League-scope mentions must not raise verifiability: they are recorded only,
@@ -14,13 +15,13 @@ func TestVerifiability_IgnoresLeagueMentions(t *testing.T) {
 
 	without := eventsignals.Representation{Entities: []string{"Ezo Quarrington"}, EntityMentions: []eventsignals.EntityMention{isotopes}}
 	with := eventsignals.Representation{Entities: []string{"Ezo Quarrington", "Josh Wrenfield"}, EntityMentions: []eventsignals.EntityMention{isotopes, league}}
-	if a, b := verifiability(without), verifiability(with); a != b {
+	if a, b := verifiability(without, eventsignalstest.Taxonomy()), verifiability(with, eventsignalstest.Taxonomy()); a != b {
 		t.Fatalf("verifiability changed with a league mention: %v -> %v", a, b)
 	}
 
 	// Representations stored before mentions existed only have Entities.
 	legacy := eventsignals.Representation{Entities: []string{"A", "B"}}
-	if verifiability(legacy) <= verifiability(eventsignals.Representation{Entities: []string{"A"}}) {
+	if verifiability(legacy, eventsignalstest.Taxonomy()) <= verifiability(eventsignals.Representation{Entities: []string{"A"}}, eventsignalstest.Taxonomy()) {
 		t.Fatal("legacy representations (no mentions) must still count len(Entities) >= 2")
 	}
 }

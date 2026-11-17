@@ -55,6 +55,8 @@ func testConfig() clustering.Config {
 		NoveltyMatchWeight:    0.05,
 
 		RulesVersion: "test-rules-v1",
+
+		Taxonomy: eventsignalstest.Taxonomy(),
 	}
 }
 
@@ -87,7 +89,7 @@ func TestEvaluate_TwoCorrectlySeparatedGroups_ScoresPrecisionRecallF1PurityAtOne
 		}},
 	}}
 
-	report, err := clustereval.Evaluate(dataset, testRules(), testConfig(), clustering.RepresentativeConfig{}, fixedNow)
+	report, err := clustereval.Evaluate(dataset, testRules(), testConfig(), clustering.RepresentativeConfig{Taxonomy: eventsignalstest.Taxonomy()}, fixedNow)
 	if err != nil {
 		t.Fatalf("Evaluate() error = %v", err)
 	}
@@ -138,7 +140,7 @@ func mixedDataset() clustereval.Dataset {
 }
 
 func TestEvaluate_OverGroupedAndFragmented_PairwiseMetricsReflectBothErrors(t *testing.T) {
-	report, err := clustereval.Evaluate(mixedDataset(), testRules(), testConfig(), clustering.RepresentativeConfig{}, fixedNow)
+	report, err := clustereval.Evaluate(mixedDataset(), testRules(), testConfig(), clustering.RepresentativeConfig{Taxonomy: eventsignalstest.Taxonomy()}, fixedNow)
 	if err != nil {
 		t.Fatalf("Evaluate() error = %v", err)
 	}
@@ -159,7 +161,7 @@ func TestEvaluate_OverGroupedAndFragmented_PairwiseMetricsReflectBothErrors(t *t
 }
 
 func TestEvaluate_OverGroupedAndFragmented_ComputesPurity(t *testing.T) {
-	report, err := clustereval.Evaluate(mixedDataset(), testRules(), testConfig(), clustering.RepresentativeConfig{}, fixedNow)
+	report, err := clustereval.Evaluate(mixedDataset(), testRules(), testConfig(), clustering.RepresentativeConfig{Taxonomy: eventsignalstest.Taxonomy()}, fixedNow)
 	if err != nil {
 		t.Fatalf("Evaluate() error = %v", err)
 	}
@@ -170,7 +172,7 @@ func TestEvaluate_OverGroupedAndFragmented_ComputesPurity(t *testing.T) {
 }
 
 func TestEvaluate_OverGroupedAndFragmented_CountsOverGroupedCluster(t *testing.T) {
-	report, err := clustereval.Evaluate(mixedDataset(), testRules(), testConfig(), clustering.RepresentativeConfig{}, fixedNow)
+	report, err := clustereval.Evaluate(mixedDataset(), testRules(), testConfig(), clustering.RepresentativeConfig{Taxonomy: eventsignalstest.Taxonomy()}, fixedNow)
 	if err != nil {
 		t.Fatalf("Evaluate() error = %v", err)
 	}
@@ -181,7 +183,7 @@ func TestEvaluate_OverGroupedAndFragmented_CountsOverGroupedCluster(t *testing.T
 }
 
 func TestEvaluate_OverGroupedAndFragmented_CountsFragmentedGoldGroup(t *testing.T) {
-	report, err := clustereval.Evaluate(mixedDataset(), testRules(), testConfig(), clustering.RepresentativeConfig{}, fixedNow)
+	report, err := clustereval.Evaluate(mixedDataset(), testRules(), testConfig(), clustering.RepresentativeConfig{Taxonomy: eventsignalstest.Taxonomy()}, fixedNow)
 	if err != nil {
 		t.Fatalf("Evaluate() error = %v", err)
 	}
@@ -217,7 +219,7 @@ func TestEvaluate_ExpectedAmbiguousArticle_ExcludedFromPairwiseButReportedSepara
 		{ID: "gZ", Articles: []clustereval.DatasetArticle{art("z", "Beta Injured At Practice", "src-1", at(2*time.Hour))}},
 	}}
 
-	report, err := clustereval.Evaluate(dataset, testRules(), testConfig(), clustering.RepresentativeConfig{}, fixedNow)
+	report, err := clustereval.Evaluate(dataset, testRules(), testConfig(), clustering.RepresentativeConfig{Taxonomy: eventsignalstest.Taxonomy()}, fixedNow)
 	if err != nil {
 		t.Fatalf("Evaluate() error = %v", err)
 	}
@@ -245,7 +247,7 @@ func TestEvaluate_UnexpectedAmbiguousArticle_CountedAndStillScoredInPairwise(t *
 		{ID: "gA", Articles: []clustereval.DatasetArticle{first, second}},
 	}}
 
-	report, err := clustereval.Evaluate(dataset, testRules(), testConfig(), clustering.RepresentativeConfig{}, fixedNow)
+	report, err := clustereval.Evaluate(dataset, testRules(), testConfig(), clustering.RepresentativeConfig{Taxonomy: eventsignalstest.Taxonomy()}, fixedNow)
 	if err != nil {
 		t.Fatalf("Evaluate() error = %v", err)
 	}
@@ -265,7 +267,7 @@ func TestEvaluate_UnexpectedAmbiguousArticle_CountedAndStillScoredInPairwise(t *
 // -- representative accuracy --------------------------------------------
 
 func TestEvaluate_RepresentativeAccuracy_CorrectAndIncorrectPicks(t *testing.T) {
-	repCfg := clustering.RepresentativeConfig{PrimarySourceWeight: 1.0}
+	repCfg := clustering.RepresentativeConfig{PrimarySourceWeight: 1.0, Taxonomy: eventsignalstest.Taxonomy()}
 
 	dataset := clustereval.Dataset{Groups: []clustereval.Group{
 		{
@@ -327,7 +329,7 @@ func TestEvaluate_MemberRoleTracking_ComparesExpectedToActual(t *testing.T) {
 		{ID: "g1", Articles: []clustereval.DatasetArticle{a, b, c}},
 	}}
 
-	report, err := clustereval.Evaluate(dataset, testRules(), testConfig(), clustering.RepresentativeConfig{}, fixedNow)
+	report, err := clustereval.Evaluate(dataset, testRules(), testConfig(), clustering.RepresentativeConfig{Taxonomy: eventsignalstest.Taxonomy()}, fixedNow)
 	if err != nil {
 		t.Fatalf("Evaluate() error = %v", err)
 	}

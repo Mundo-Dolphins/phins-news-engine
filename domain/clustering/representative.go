@@ -235,6 +235,10 @@ type RepresentativeConfig struct {
 	// thresholds, for audit purposes only — copied verbatim onto every
 	// RepresentativeScore.RulesVersion, never interpreted by this package.
 	RulesVersion string
+
+	// Taxonomy declares which content signals are speculative (see
+	// verifiability). The zero value declares none.
+	Taxonomy eventsignals.Taxonomy
 }
 
 // completeness is the fraction, in [0,1], of Representation's core event
@@ -286,11 +290,11 @@ func clarity(rep eventsignals.Representation) float64 {
 
 // verifiability is a proxy for "this article commits to checkable facts",
 // in [0,1]: the fraction of {Opponent, Competition, PrimaryTeam, two or
-// more distinct Entities} present, halved when ContentSignal is
-// ContentSignalRumor — a rumor can still name specific parties, but
-// inherently carries more uncertainty than a hard-news report naming the
-// same parties.
-func verifiability(rep eventsignals.Representation) float64 {
+// more distinct Entities} present, halved when tax flags ContentSignal as
+// speculative (a rumor, today) — a rumor can still name specific parties,
+// but inherently carries more uncertainty than a hard-news report naming
+// the same parties.
+func verifiability(rep eventsignals.Representation, tax eventsignals.Taxonomy) float64 {
 	total := 4.0
 	got := 0.0
 	if rep.Opponent != "" {
@@ -306,7 +310,7 @@ func verifiability(rep eventsignals.Representation) float64 {
 		got++
 	}
 	v := got / total
-	if rep.ContentSignal == eventsignals.ContentSignalRumor {
+	if tax.SignalHasFlag(rep.ContentSignal, eventsignals.FlagSpeculative) {
 		v /= 2
 	}
 	return v
@@ -435,7 +439,7 @@ func scoreCandidate(candidate RepresentativeCandidate, baseline eventsignals.Rep
 		originalContentValue = 1.0
 	}
 	editorialValue := candidate.Editorial.Value / 100
-	verifiabilityValue := verifiability(rep)
+	verifiabilityValue := verifiability(rep, cfg.Taxonomy)
 
 	type signal struct {
 		weight      float64

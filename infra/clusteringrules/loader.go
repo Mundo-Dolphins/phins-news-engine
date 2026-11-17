@@ -235,6 +235,7 @@ func (f RulesFile) ToClusteringConfig() clustering.Config {
 		NoveltyMatchWeight:    f.NoveltyMatchWeight,
 
 		RulesVersion: f.Version,
+		Taxonomy:     legacyTaxonomy(), // TODO(taxonomy-yaml Task 3): replace with the parsed section
 	}
 }
 
@@ -319,6 +320,7 @@ func (f RulesFile) ToRepresentativeConfig() clustering.RepresentativeConfig {
 		SubstantialUpdateThreshold: f.Representative.SubstantialUpdateThreshold,
 		RepresentativeSwitchMargin: f.Representative.RepresentativeSwitchMargin,
 		RulesVersion:               f.Version,
+		Taxonomy:                   legacyTaxonomy(), // TODO(taxonomy-yaml Task 3): replace with the parsed section
 	}
 }
 

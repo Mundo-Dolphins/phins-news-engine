@@ -8,39 +8,29 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals"
 )
 
-// referentialEventTypes are EventTypes eventsignals.classifyEventType
-// assigns based on how an article *frames* its coverage of an event
+// isReferential reports whether tax flags t as referential: an EventType
+// assigned from how an article *frames* its coverage of an event
 // (confirming, correcting, rumoring, analyzing, reacting to, or quoting
-// it) rather than based on what kind of event occurred. An article with
+// it, today) rather than from what kind of event occurred. An article with
 // one of these EventTypes typically describes the same underlying event
 // as an earlier transaction/injury/draft/game/practice report even though
-// its own EventType differs from that report's — classifyEventType
-// prioritizes ContentSignal-derived framing over the action-derived
-// category, so a rumor's own EventType is "rumor", not "transaction", and
-// its later confirmation's EventType is "confirmation", not
-// "transaction". compareEventType (via Compare) treats a referential
-// EventType on either side as compatible with any EventType on the other
-// side; it never disqualifies a same-event join purely because a
-// confirmation/correction/rumor/analysis/reaction/quote article's
+// its own EventType differs from that report's — Taxonomy.Classify lets a
+// ContentSignal-derived framing win over the action-derived category, so
+// a rumor's own EventType is "rumor", not "transaction", and its later
+// confirmation's EventType is "confirmation", not "transaction".
+// compareEventType (via Compare) treats a referential EventType on either
+// side as compatible with any EventType on the other side; it never
+// disqualifies a same-event join purely because a referential article's
 // EventType differs from the original report's.
-var referentialEventTypes = map[eventsignals.EventType]bool{
-	eventsignals.EventTypeConfirmation: true,
-	eventsignals.EventTypeCorrection:   true,
-	eventsignals.EventTypeRumor:        true,
-	eventsignals.EventTypeAnalysis:     true,
-	eventsignals.EventTypeReaction:     true,
-	eventsignals.EventTypeQuote:        true,
-}
-
-func isReferential(t eventsignals.EventType) bool {
-	return referentialEventTypes[t]
+func isReferential(tax eventsignals.Taxonomy, t eventsignals.EventType) bool {
+	return tax.HasFlag(t, eventsignals.FlagReferential)
 }
 
 // eventTypeCompatible reports whether a and b are compatible enough to be
 // the same underlying event: identical, or either side is a referential
-// framing (see referentialEventTypes) of some other event.
-func eventTypeCompatible(a, b eventsignals.EventType) bool {
-	return a == b || isReferential(a) || isReferential(b)
+// framing (see isReferential) of some other event.
+func eventTypeCompatible(tax eventsignals.Taxonomy, a, b eventsignals.EventType) bool {
+	return a == b || isReferential(tax, a) || isReferential(tax, b)
 }
 
 // detectConflict reports whether incoming and cand are hard-disqualified
@@ -50,7 +40,7 @@ func eventTypeCompatible(a, b eventsignals.EventType) bool {
 // differing primary subjects, differing named opponents, an
 // action/event-type combination that shares no compatible category, or an
 // event date outside both sides' event windows.
-func detectConflict(incoming, cand eventsignals.Representation) (bool, Evidence) {
+func detectConflict(incoming, cand eventsignals.Representation, tax eventsignals.Taxonomy) (bool, Evidence) {
 	if incoming.PrimaryEntity != "" && cand.PrimaryEntity != "" && incoming.PrimaryEntity != cand.PrimaryEntity {
 		return true, Evidence(fmt.Sprintf("conflict: primary entity %q vs %q", incoming.PrimaryEntity, cand.PrimaryEntity))
 	}
@@ -60,7 +50,7 @@ func detectConflict(incoming, cand eventsignals.Representation) (bool, Evidence)
 	}
 
 	actionMatches := incoming.Action != "" && incoming.Action == cand.Action
-	if !eventTypeCompatible(incoming.EventType, cand.EventType) && !actionMatches {
+	if !eventTypeCompatible(tax, incoming.EventType, cand.EventType) && !actionMatches {
 		return true, Evidence(fmt.Sprintf(
 			"conflict: event type %q vs %q and action %q vs %q neither match nor are referential framings of each other",
 			incoming.EventType, cand.EventType, incoming.Action, cand.Action,
@@ -128,7 +118,7 @@ func Compare(incoming eventsignals.Representation, cand Candidate, cfg Config) C
 	c := Comparison{ArticleID: cand.ArticleID, ClusterID: cand.ClusterID}
 	rep := cand.Representation
 
-	if conflicted, reason := detectConflict(incoming, rep); conflicted {
+	if conflicted, reason := detectConflict(incoming, rep, cfg.Taxonomy); conflicted {
 		c.Relation = RelationDifferent
 		c.Score = 0
 		c.Evidence = []Evidence{reason}
@@ -141,7 +131,7 @@ func Compare(incoming eventsignals.Representation, cand Candidate, cfg Config) C
 	// affected team-level quotes and previews whenever the extractor did not
 	// find a concrete subject. Require an event-level anchor before scoring;
 	// exact/near-copy hints remain sufficient on their own.
-	if !hasSufficientEventIdentity(incoming, rep, cand.DuplicateRelation) {
+	if !hasSufficientEventIdentity(incoming, rep, cand.DuplicateRelation, cfg.Taxonomy) {
 		c.Relation = RelationDifferent
 		c.Score = 0
 		c.Evidence = []Evidence{
@@ -156,7 +146,7 @@ func Compare(incoming eventsignals.Representation, cand Candidate, cfg Config) C
 	actionApplicable := incoming.Action != "" && rep.Action != ""
 	actionMatched := actionApplicable && incoming.Action == rep.Action
 
-	eventTypeMatched := eventTypeCompatible(incoming.EventType, rep.EventType)
+	eventTypeMatched := eventTypeCompatible(cfg.Taxonomy, incoming.EventType, rep.EventType)
 
 	opponentApplicable := incoming.Opponent != "" && rep.Opponent != ""
 	// detectConflict already ruled out a mismatch, so if both sides named
@@ -251,7 +241,7 @@ func Compare(incoming eventsignals.Representation, cand Candidate, cfg Config) C
 		c.Evidence = append(c.Evidence, Evidence(fmt.Sprintf(
 			"dedup: candidate flagged near_copy (score %.2f)", cand.DuplicateScore,
 		)))
-	case noveltyMatched, isUpdateFraming(incoming):
+	case noveltyMatched, isUpdateFraming(incoming, cfg.Taxonomy):
 		c.Relation = RelationUpdate
 	default:
 		c.Relation = RelationSameEvent
@@ -266,7 +256,7 @@ func Compare(incoming eventsignals.Representation, cand Candidate, cfg Config) C
 // game opponent and action because the team name alone is present in almost
 // every article. Referential confirmation/correction framing may link a
 // concrete subject to the original action even though the actions differ.
-func hasSufficientEventIdentity(incoming, candidate eventsignals.Representation, duplicateRelation Relation) bool {
+func hasSufficientEventIdentity(incoming, candidate eventsignals.Representation, duplicateRelation Relation, tax eventsignals.Taxonomy) bool {
 	if duplicateRelation == RelationExactDuplicate || duplicateRelation == RelationNearCopy {
 		return true
 	}
@@ -293,27 +283,27 @@ func hasSufficientEventIdentity(incoming, candidate eventsignals.Representation,
 	// isUpdateFraming below, which requires an explicit confirmation/
 	// correction cue rather than a bare shared category.
 	sameEventTypeProgression := incoming.Action != "" && candidate.Action != "" &&
-		incoming.EventType == candidate.EventType && !isReferential(incoming.EventType)
+		incoming.EventType == candidate.EventType && !isReferential(tax, incoming.EventType)
 	concreteSubject := incoming.PrimaryEntity != incoming.PrimaryTeam && candidate.PrimaryEntity != candidate.PrimaryTeam
 	if concreteSubject && (actionMatches ||
 		sameEventTypeProgression ||
-		isUpdateFraming(incoming) || isUpdateFraming(candidate)) {
+		isUpdateFraming(incoming, tax) || isUpdateFraming(candidate, tax)) {
 		return true
 	}
 
-	return actionMatches && incoming.EventType == eventsignals.EventTypeGame &&
-		candidate.EventType == eventsignals.EventTypeGame &&
+	return actionMatches && incoming.EventType == candidate.EventType &&
+		tax.HasFlag(incoming.EventType, eventsignals.FlagTeamLevelNeedsOpponent) &&
 		incoming.Opponent != "" && incoming.Opponent == candidate.Opponent
 }
 
 // isUpdateFraming reports whether rep explicitly frames itself as
 // contributing new information about an earlier report — a confirmation
-// or correction — as opposed to being a plain restatement.
-func isUpdateFraming(rep eventsignals.Representation) bool {
-	return rep.EventType == eventsignals.EventTypeConfirmation ||
-		rep.EventType == eventsignals.EventTypeCorrection ||
-		rep.ContentSignal == eventsignals.ContentSignalConfirmation ||
-		rep.ContentSignal == eventsignals.ContentSignalCorrection
+// or correction, today — as opposed to being a plain restatement: its
+// EventType, or the EventType its ContentSignal maps to, carries tax's
+// update_framing flag.
+func isUpdateFraming(rep eventsignals.Representation, tax eventsignals.Taxonomy) bool {
+	return tax.HasFlag(rep.EventType, eventsignals.FlagUpdateFraming) ||
+		tax.HasFlag(tax.SignalEventType(rep.ContentSignal), eventsignals.FlagUpdateFraming)
 }
 
 // scoredCluster is the best Comparison seen so far for one distinct
@@ -403,7 +393,7 @@ func DecideJoin(incoming eventsignals.Representation, candidates []Candidate, cf
 	default:
 		decision.Action = ActionJoin
 		decision.ClusterID = best.comparison.ClusterID
-		decision.MemberRole = selectMemberRole(incoming, best.representation, best.comparison.Relation)
+		decision.MemberRole = selectMemberRole(incoming, best.representation, best.comparison.Relation, cfg.Taxonomy)
 	}
 
 	return decision
@@ -417,16 +407,11 @@ func DecideJoin(incoming eventsignals.Representation, candidates []Candidate, cf
 // finally to MemberRoleConfirmation as the default for "another
 // independent report of the same fact" — corroboration is itself a form
 // of confirmation even without an explicit "confirmed" cue.
-func selectMemberRole(incoming, candRep eventsignals.Representation, relation Relation) MemberRole {
+func selectMemberRole(incoming, candRep eventsignals.Representation, relation Relation, tax eventsignals.Taxonomy) MemberRole {
+	if role, ok := framingMemberRole(incoming, tax); ok {
+		return role
+	}
 	switch {
-	case incoming.EventType == eventsignals.EventTypeCorrection || incoming.ContentSignal == eventsignals.ContentSignalCorrection:
-		return MemberRoleCorrection
-	case incoming.EventType == eventsignals.EventTypeConfirmation || incoming.ContentSignal == eventsignals.ContentSignalConfirmation:
-		return MemberRoleConfirmation
-	case incoming.EventType == eventsignals.EventTypeAnalysis || incoming.ContentSignal == eventsignals.ContentSignalAnalysis:
-		return MemberRoleAnalysis
-	case incoming.EventType == eventsignals.EventTypeReaction || incoming.ContentSignal == eventsignals.ContentSignalReaction:
-		return MemberRoleReaction
 	case relation == RelationExactDuplicate || relation == RelationNearCopy:
 		return MemberRoleDuplicate
 	case incoming.Action != "" && candRep.Action != "" && incoming.Action != candRep.Action:
@@ -434,4 +419,25 @@ func selectMemberRole(incoming, candRep eventsignals.Representation, relation Re
 	default:
 		return MemberRoleConfirmation
 	}
+}
+
+// framingRolePrecedence is the order selectMemberRole checks the incoming
+// article's framing roles in when its EventType and its ContentSignal's
+// EventType name different ones.
+var framingRolePrecedence = []MemberRole{
+	MemberRoleCorrection, MemberRoleConfirmation, MemberRoleAnalysis, MemberRoleReaction,
+}
+
+// framingMemberRole returns the first role in framingRolePrecedence that
+// tax assigns to incoming's EventType or to the EventType its
+// ContentSignal maps to.
+func framingMemberRole(incoming eventsignals.Representation, tax eventsignals.Taxonomy) (MemberRole, bool) {
+	typeRole := MemberRole(tax.MemberRole(incoming.EventType))
+	signalRole := MemberRole(tax.MemberRole(tax.SignalEventType(incoming.ContentSignal)))
+	for _, role := range framingRolePrecedence {
+		if typeRole == role || signalRole == role {
+			return role, true
+		}
+	}
+	return "", false
 }
