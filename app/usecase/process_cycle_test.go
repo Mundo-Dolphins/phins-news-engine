@@ -19,6 +19,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/editorialveto"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/entityproposal"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals"
+	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals/eventsignalstest"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/matchstate"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/normalization"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/publishing"
@@ -110,7 +111,8 @@ func clusterTestSettings() in.ClusterSettings {
 	return in.ClusterSettings{
 		Enabled: true,
 		Rules: eventsignals.Rules{
-			Version: "test-cluster-rules-v1",
+			Taxonomy: eventsignalstest.Taxonomy(),
+			Version:  "test-cluster-rules-v1",
 			ActionTerms: map[eventsignals.Action][]string{
 				eventsignals.ActionSign:    {"sign", "signs", "signed"},
 				eventsignals.ActionRelease: {"release", "released"},
@@ -140,6 +142,7 @@ func clusterTestSettings() in.ClusterSettings {
 			EntityMatchWeight: 0.35, ActionMatchWeight: 0.20, EventTypeMatchWeight: 0.15,
 			OpponentMatchWeight: 0.10, DateWindowMatchWeight: 0.05, SourcePriorityWeight: 0.10,
 			NoveltyMatchWeight: 0.05, RulesVersion: "test-cluster-rules-v1",
+			Taxonomy: eventsignalstest.Taxonomy(),
 		},
 		Representative: clustering.RepresentativeConfig{
 			CompletenessWeight:         1,
@@ -148,6 +151,7 @@ func clusterTestSettings() in.ClusterSettings {
 			RepresentativeSwitchMargin: 0.05,
 			DefaultDomainPriority:      50,
 			RulesVersion:               "test-cluster-rules-v1",
+			Taxonomy:                   eventsignalstest.Taxonomy(),
 		},
 		CandidateLimit: 50,
 		RulesVersion:   "test-cluster-rules-v1",
@@ -1800,6 +1804,7 @@ func TestProcessCycle_RepresentativePreference_ComesFromSourcePolicy_NotClassifi
 		RepresentativeSwitchMargin: 0.2,
 		DefaultDomainPriority:      50,
 		RulesVersion:               "test-cluster-rules-v1",
+		Taxonomy:                   eventsignalstest.Taxonomy(),
 	}
 
 	// "sprisotopes" is NOT in Classification.TrustedSourceIDs (that map is

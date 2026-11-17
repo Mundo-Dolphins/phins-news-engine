@@ -122,7 +122,11 @@ func newTypeCommand() *cobra.Command {
 				return err
 			}
 			defer db.Close()
-			res, err := eventrules.MergeType(cmd.Context(), db, args[0], into, time.Now().UTC())
+			known, err := eventrules.KnownTypeNames(cfg)
+			if err != nil {
+				return fmt.Errorf("events type merge: %w", err)
+			}
+			res, err := eventrules.MergeType(cmd.Context(), db, args[0], into, known, time.Now().UTC())
 			if err != nil {
 				return fmt.Errorf("events type merge: %w", err)
 			}
@@ -153,7 +157,11 @@ func newTypeCommand() *cobra.Command {
 				return err
 			}
 			defer db.Close()
-			r, err := eventrules.NormalizeTypes(cmd.Context(), db, reopen, time.Now().UTC())
+			known, err := eventrules.KnownTypeNames(cfg)
+			if err != nil {
+				return fmt.Errorf("events type normalize: %w", err)
+			}
+			r, err := eventrules.NormalizeTypes(cmd.Context(), db, reopen, known, time.Now().UTC())
 			if err != nil {
 				return fmt.Errorf("events type normalize: %w", err)
 			}

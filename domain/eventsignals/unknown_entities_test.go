@@ -7,11 +7,13 @@ import (
 
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/article"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals"
+	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals/eventsignalstest"
 )
 
 func unknownEntityTestRules() eventsignals.Rules {
 	return eventsignals.Rules{
-		Version: "unknown-entity-test-v1",
+		Taxonomy: eventsignalstest.Taxonomy(),
+		Version:  "unknown-entity-test-v1",
 		Entities: []eventsignals.EntityRule{
 			{ID: "pierce-quenby", CanonicalName: "Pierce Quenby", Kind: eventsignals.EntityKindPlayer, Terms: []string{"pierce quenby"}},
 			{ID: "springfield-isotopes", CanonicalName: "Springfield Isotopes", Kind: eventsignals.EntityKindTeam, IsPrimaryTeam: true, Terms: []string{"isotopes", "springfield isotopes"}},

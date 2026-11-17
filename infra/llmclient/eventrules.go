@@ -32,16 +32,31 @@ Return at most 30 phrases. Return JSON only, matching this shape:
 {"phrases": [{"target_kind": "action", "target": "sign", "phrase": "agrees to terms with", "article_ids": ["..."]}, {"target_kind": "signal", "target": "rumor", "phrase": "is expected to", "article_ids": ["..."]}]}`
 
 // DiscoverTopics implements ports/out.EventRuleDiscoveryLLM. Retry
-// semantics match Discover. known lists the event kind names that already
-// exist; it opens the user message (the system prompt is unchanged, so a
-// bot-supplied override keeps working) and is omitted when empty.
-func (c *Client) DiscoverTopics(ctx context.Context, articles []appout.EventRuleArticle, known []string) ([]appout.EventTopicProposal, error) {
-	user := eventRulesUserPrompt(articles)
-	if len(known) > 0 {
-		user = "KNOWN EVENT KINDS: " + strings.Join(known, ", ") +
-			"\nIf a topic fits one of these, use that exact name. Propose a new name only for a kind none of them covers.\n\n" + user
+// semantics match Discover. known lists the event kinds that already exist,
+// one line each with its description when it has one; the list opens the
+// user message (the system prompt is unchanged, so a bot-supplied override
+// keeps working) and is omitted when empty.
+func (c *Client) DiscoverTopics(ctx context.Context, articles []appout.EventRuleArticle, known []appout.KnownEventKind) ([]appout.EventTopicProposal, error) {
+	return runStructured(ctx, c, CurrentPrompts().EventTopics, knownKindsBlock(known)+eventRulesUserPrompt(articles), parseEventTopics)
+}
+
+// knownKindsBlock renders known as the KNOWN EVENT KINDS block of the topics
+// user message, or "" when known is empty.
+func knownKindsBlock(known []appout.KnownEventKind) string {
+	if len(known) == 0 {
+		return ""
 	}
-	return runStructured(ctx, c, CurrentPrompts().EventTopics, user, parseEventTopics)
+	var b strings.Builder
+	b.WriteString("KNOWN EVENT KINDS:\n")
+	for _, k := range known {
+		if k.Description == "" {
+			fmt.Fprintf(&b, "- %s\n", k.Name)
+		} else {
+			fmt.Fprintf(&b, "- %s: %s\n", k.Name, k.Description)
+		}
+	}
+	b.WriteString("If a topic fits one of these, use that exact name. Propose a new name only for a kind none of them covers.\n\n")
+	return b.String()
 }
 
 // DiscoverPhrases implements ports/out.EventRuleDiscoveryLLM. The prompt

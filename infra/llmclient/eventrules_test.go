@@ -191,7 +191,7 @@ func TestClient_EventRulePrompts_TreatRecordsAsData(t *testing.T) {
 }
 
 func TestDiscoverTopics_UserPromptListsKnownNames(t *testing.T) {
-	userOf := func(known []string) string {
+	userOf := func(known []appout.KnownEventKind) string {
 		var calls int32
 		var bodies []string
 		s := eventServer(t, topicsJSON, &calls, &bodies)
@@ -214,9 +214,11 @@ func TestDiscoverTopics_UserPromptListsKnownNames(t *testing.T) {
 		return ""
 	}
 	records := "ARTICLE_ID: a1\nTITLE: Isotopes place Quarrington on IR\nSUMMARY: s\n\n"
-	want := "KNOWN EVENT KINDS: game, injury, kicking-error\n" +
+	want := "KNOWN EVENT KINDS:\n" +
+		"- game: A game preview or result.\n" +
+		"- kicking-error\n" +
 		"If a topic fits one of these, use that exact name. Propose a new name only for a kind none of them covers.\n\n" + records
-	if got := userOf([]string{"game", "injury", "kicking-error"}); got != want {
+	if got := userOf([]appout.KnownEventKind{{Name: "game", Description: "A game preview or result."}, {Name: "kicking-error"}}); got != want {
 		t.Errorf("user message = %q, want %q", got, want)
 	}
 	if got := userOf(nil); got != records {

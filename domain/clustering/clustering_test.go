@@ -8,6 +8,7 @@ import (
 
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/clustering"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals"
+	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals/eventsignalstest"
 )
 
 // testConfig returns a Config with a full set of weights/thresholds
@@ -32,6 +33,8 @@ func testConfig() clustering.Config {
 		NoveltyMatchWeight:    0.05,
 
 		RulesVersion: "test-rules-v1",
+
+		Taxonomy: eventsignalstest.Taxonomy(),
 	}
 }
 

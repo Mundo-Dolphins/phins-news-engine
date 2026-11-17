@@ -353,11 +353,11 @@ type Config struct {
 	//     Representation.Action on both sides. Applicable only when both
 	//     sides have a non-empty Action.
 	//   - EventTypeMatchWeight rewards an identical
-	//     Representation.EventType, OR either side's EventType being one
-	//     of confirmation/correction/rumor/analysis/reaction/quote — a
-	//     "referential" framing that, by construction
-	//     (eventsignals.classifyEventType prioritizes ContentSignal-
-	//     derived framing over the action-derived category), describes an
+	//     Representation.EventType, OR either side's EventType carrying
+	//     the taxonomy's referential flag (confirmation/correction/rumor/
+	//     analysis/reaction/quote today) — a "referential" framing that,
+	//     by construction (Taxonomy.Classify lets a ContentSignal-derived
+	//     framing win over the action-derived category), describes an
 	//     earlier/different-EventType event rather than being its own
 	//     event category. Without this carve-out a rumor followed by its
 	//     own confirmation, or a transaction followed by its correction,
@@ -422,4 +422,10 @@ type Config struct {
 	// populates it; eventsignals.Rules.Version is the analogous field on
 	// the eventsignals side.
 	RulesVersion string
+
+	// Taxonomy declares the event-type behaviour Compare and DecideJoin
+	// read: which types are referential framings, which frame an update,
+	// which need an opponent for team-level identity, and which member
+	// role a type implies. The zero value declares none of them.
+	Taxonomy eventsignals.Taxonomy
 }

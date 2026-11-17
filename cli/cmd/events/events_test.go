@@ -196,7 +196,7 @@ func TestEventsBrief_PrintsBriefForTypeProposal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute() error = %v\n%s", err, out)
 	}
-	for _, want := range []string{"contract-extension", "- Isotopes extend Ezo", "- Dale gets new deal", "ActionContractExtension", "knownEventTypes"} {
+	for _, want := range []string{"contract-extension", "- Isotopes extend Ezo", "- Dale gets new deal", "`contract-extension`", "taxonomy.event_types"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}
@@ -295,7 +295,7 @@ func TestEventsType_ListApproveReject(t *testing.T) {
 
 type noopEventRuleLLM struct{}
 
-func (noopEventRuleLLM) DiscoverTopics(context.Context, []appout.EventRuleArticle, []string) ([]appout.EventTopicProposal, error) {
+func (noopEventRuleLLM) DiscoverTopics(context.Context, []appout.EventRuleArticle, []appout.KnownEventKind) ([]appout.EventTopicProposal, error) {
 	return nil, nil
 }
 

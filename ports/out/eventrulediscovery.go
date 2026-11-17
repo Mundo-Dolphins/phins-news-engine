@@ -29,11 +29,19 @@ type EventPhraseProposal struct {
 	ArticleIDs []string `json:"article_ids"`
 }
 
+// KnownEventKind is one event kind name that already exists, told to the LLM
+// so it reuses the name. Description is empty when none is known (actions
+// and earlier proposals carry none).
+type KnownEventKind struct {
+	Name        string
+	Description string
+}
+
 // EventRuleDiscoveryLLM is the driven port to an OpenAI-compatible chat-
 // completions endpoint for event rule discovery. Validation of targets and
 // phrases against article text is the caller's job.
 type EventRuleDiscoveryLLM interface {
-	DiscoverTopics(ctx context.Context, articles []EventRuleArticle, known []string) ([]EventTopicProposal, error)
+	DiscoverTopics(ctx context.Context, articles []EventRuleArticle, known []KnownEventKind) ([]EventTopicProposal, error)
 	// DiscoverPhrases proposes phrases for the closed lists of allowed
 	// action and signal names, which the prompt enumerates.
 	DiscoverPhrases(ctx context.Context, articles []EventRuleArticle, allowedActions, allowedSignals []string) ([]EventPhraseProposal, error)

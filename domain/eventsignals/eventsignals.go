@@ -89,48 +89,13 @@ const (
 	ActionRoster         Action = "roster"
 )
 
-// actionPriority is the order Extract checks Actions in when more than one
-// matches the same article: whichever comes first here wins the single
-// Action field on Representation. The order follows the plan's Action
-// taxonomy so it is easy to audit against the spec; ties are broken in
-// favor of the more specific transaction/injury verbs before the more
-// generic reporting/framing ones.
-var actionPriority = []Action{
-	ActionPracticeSquad, ActionDemote,
-	ActionSign, ActionRelease, ActionTrade, ActionWaive, ActionClaim, ActionExtend, ActionContract,
-	ActionInjuredReserve, ActionInjure, ActionReturn, ActionPractice, ActionActivate,
-	ActionPromote, ActionRoster, ActionDepthChart,
-	ActionTryout, ActionGameStatus,
-	ActionDraft, ActionPreview, ActionResult,
-	ActionQuote, ActionReport, ActionConfirm, ActionCorrect,
-}
-
-// bodyFallbackActionPriority is intentionally narrower than actionPriority.
-// Body text can contain boilerplate, related links, or recaps that should not
-// override a clear title/summary signal. Use it only when title+summary found
-// no action, and favor concrete roster/injury transactions over generic verbs.
-var bodyFallbackActionPriority = []Action{
-	ActionInjuredReserve,
-	ActionPracticeSquad,
-	ActionPromote,
-	ActionDemote,
-	ActionActivate,
-	ActionWaive,
-	ActionClaim,
-	ActionRelease,
-	ActionTrade,
-	ActionSign,
-	ActionRoster,
-	ActionInjure,
-}
-
 // ContentSignal is a textual stance or format cue Extract detects
 // independently of any single Action verb: whether the article hedges a
 // claim, confirms one, corrects one, or is written as analysis, reaction,
-// or quote coverage rather than hard news. classifyEventType consults
-// ContentSignal ahead of Action, because the same underlying action verb
-// ("sign") can describe a rumor, a transaction, or a confirmation
-// depending on how the article frames it.
+// or quote coverage rather than hard news. Taxonomy.Classify consults
+// before_action signals ahead of Action, because the same underlying
+// action verb ("sign") can describe a rumor, a transaction, or a
+// confirmation depending on how the article frames it.
 type ContentSignal string
 
 const (
@@ -141,15 +106,6 @@ const (
 	ContentSignalReaction     ContentSignal = "reaction"
 	ContentSignalQuote        ContentSignal = "quote"
 )
-
-// contentSignalPriority mirrors classifyEventType's precedence: a
-// correction framing outranks a confirmation framing, which outranks a
-// rumor framing, if an article's text somehow matched cues for more than
-// one (e.g. a correction that quotes the original, wrong report).
-var contentSignalPriority = []ContentSignal{
-	ContentSignalCorrection, ContentSignalConfirmation, ContentSignalRumor,
-	ContentSignalAnalysis, ContentSignalReaction, ContentSignalQuote,
-}
 
 // Evidence is one human-readable, audit-suitable explanation of a signal
 // Extract matched — which phrase, for which rule, drove part of a
@@ -292,12 +248,12 @@ func Extract(a article.Article, rules Rules, now time.Time) Representation {
 	summaryText := NormalizeSynonyms(strings.ToLower(canonPunct(a.Summary)), rules.Synonyms)
 	fullText := strings.TrimSpace(titleText + " " + summaryText)
 
-	action, actionEvidence := detectAction(fullText, rules.ActionTerms)
-	signal, signalEvidence := detectContentSignal(fullText, rules.ContentCues)
+	action, actionEvidence := detectActionWithPriority(fullText, rules.ActionTerms, rules.Taxonomy.ActionPriority(), "")
+	signal, signalEvidence := detectContentSignal(fullText, rules.ContentCues, rules.Taxonomy.SignalPriority())
 
 	bodyText := NormalizeSynonyms(strings.ToLower(canonPunct(a.Body)), rules.Synonyms)
 	if action == "" && bodyText != "" {
-		action, actionEvidence = detectActionWithPriority(bodyText, rules.ActionTerms, bodyFallbackActionPriority, "body")
+		action, actionEvidence = detectActionWithPriority(bodyText, rules.ActionTerms, rules.Taxonomy.BodyFallbackPriority(), "body")
 	}
 	det := detectEntities(titleText, summaryText, bodyText, rules.Entities, rules.FieldWeights)
 
@@ -312,7 +268,7 @@ func Extract(a article.Article, rules Rules, now time.Time) Representation {
 	rep.PrimaryEntities = det.primaryEntities
 	rep.SecondaryEntities = det.secondaryEntities
 	rep.Teams = det.teams
-	rep.EventType = classifyEventType(action, signal)
+	rep.EventType = rules.Taxonomy.Classify(action, signal)
 	rep.EventWindow = rules.EventWindows[rep.EventType]
 
 	rep.Topics = topicsFor(rep.Action, rep.EventType, rules.TopicGroups)
@@ -348,65 +304,10 @@ func topicsFor(action Action, eventType EventType, groups map[Topic][]string) []
 	return topics
 }
 
-// classifyEventType picks a single EventType from the detected action and
-// content signal. ContentSignal is consulted first: a correction,
-// confirmation, or rumor framing describes the article's relationship to
-// the underlying event, and takes precedence over which specific verb
-// (sign, trade, extend, ...) that event involved. Action-derived buckets
-// come next, and format-only ContentSignals (analysis/reaction/quote) are
-// the fallback for articles with no specific action verb at all.
-func classifyEventType(action Action, signal ContentSignal) EventType {
-	switch signal {
-	case ContentSignalCorrection:
-		return EventTypeCorrection
-	case ContentSignalConfirmation:
-		return EventTypeConfirmation
-	case ContentSignalRumor:
-		return EventTypeRumor
-	}
-
-	switch action {
-	case ActionSign, ActionRelease, ActionTrade, ActionWaive, ActionClaim, ActionExtend, ActionContract,
-		ActionPracticeSquad, ActionPromote, ActionDemote, ActionRoster:
-		return EventTypeTransaction
-	case ActionInjure, ActionInjuredReserve, ActionReturn, ActionActivate, ActionGameStatus:
-		return EventTypeInjury
-	case ActionPractice, ActionTryout, ActionDepthChart:
-		return EventTypePractice
-	case ActionDraft:
-		return EventTypeDraft
-	case ActionPreview, ActionResult:
-		return EventTypeGame
-	case ActionQuote:
-		return EventTypeQuote
-	case ActionReport:
-		return EventTypeRumor
-	case ActionConfirm:
-		return EventTypeConfirmation
-	case ActionCorrect:
-		return EventTypeCorrection
-	}
-
-	switch signal {
-	case ContentSignalQuote:
-		return EventTypeQuote
-	case ContentSignalAnalysis:
-		return EventTypeAnalysis
-	case ContentSignalReaction:
-		return EventTypeReaction
-	}
-
-	return EventTypeGeneric
-}
-
-// detectAction returns the highest-priority Action (see actionPriority)
-// whose terms include a phrase found in text, and one Evidence string
-// naming the phrase that matched. text is assumed already lower-cased and
-// synonym-normalized.
-func detectAction(text string, terms map[Action][]string) (Action, []Evidence) {
-	return detectActionWithPriority(text, terms, actionPriority, "")
-}
-
+// detectActionWithPriority returns the first Action in priority whose terms
+// include a phrase found in text, and one Evidence string naming the phrase
+// that matched (and field, when non-empty). text is assumed already
+// lower-cased and synonym-normalized.
 func detectActionWithPriority(text string, terms map[Action][]string, priority []Action, field string) (Action, []Evidence) {
 	for _, action := range priority {
 		for _, term := range terms[action] {
@@ -421,9 +322,9 @@ func detectActionWithPriority(text string, terms map[Action][]string, priority [
 	return "", nil
 }
 
-// detectContentSignal mirrors detectAction for ContentSignal cues.
-func detectContentSignal(text string, cues map[ContentSignal][]string) (ContentSignal, []Evidence) {
-	for _, signal := range contentSignalPriority {
+// detectContentSignal mirrors detectActionWithPriority for ContentSignal cues.
+func detectContentSignal(text string, cues map[ContentSignal][]string, priority []ContentSignal) (ContentSignal, []Evidence) {
+	for _, signal := range priority {
 		for _, term := range cues[signal] {
 			if matched, _ := matchTerm(text, term); matched {
 				return signal, []Evidence{Evidence(fmt.Sprintf("content signal %q matched phrase %q", signal, term))}

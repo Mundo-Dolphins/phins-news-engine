@@ -50,6 +50,19 @@ func writeFixture(t *testing.T, contents string) string {
 	return path
 }
 
+// minimalTaxonomyYAML is the smallest taxonomy section the inline fixtures
+// below need: the sign and injure actions their action_terms and
+// topic_groups name.
+const minimalTaxonomyYAML = `taxonomy:
+  event_types:
+    - {name: transaction, description: "A roster move."}
+    - {name: injury, description: "An injury."}
+  actions:
+    - {name: sign, event_type: transaction}
+    - {name: injure, event_type: injury}
+  content_signals: []
+`
+
 // -- happy path ----------------------------------------------------------
 
 func TestLoad_ValidFile_DecodesMeta(t *testing.T) {
@@ -181,7 +194,7 @@ field_weights: {title: 1.0, description: 0.7, body: 0.3}
 topic_groups: {transaction: [sign], injury: [injure]}
 thresholds: {join_threshold: 0.7, join_margin: 0.1, ambiguous_low: 0.4, ambiguous_high: 0.5, substantial_update_threshold: 0.5, representative_switch_margin: 0.1}
 weights: {entity_match: 0.3, action_match: 0.2, event_type_match: 0.1, opponent_match: 0.1, date_window_match: 0.0, source_priority: 0.1, novelty: 0.1, primary_source: 0.1, completeness: 0.1, clickbait_penalty: 0.0}
-`)
+`+minimalTaxonomyYAML)
 	f, err := clusteringrules.Load(path)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -209,7 +222,7 @@ field_weights: {title: 1.0, description: 0.7, body: 0.3}
 topic_groups: {}
 thresholds: {join_threshold: 0.7, join_margin: 0.1, ambiguous_low: 0.4, ambiguous_high: 0.5, substantial_update_threshold: 0.5, representative_switch_margin: 0.1}
 weights: {entity_match: 0.3, action_match: 0.2, event_type_match: 0.1, opponent_match: 0.1, date_window_match: 0.0, source_priority: 0.1, novelty: 0.1, primary_source: 0.1, completeness: 0.1, clickbait_penalty: 0.0}
-`)
+`+minimalTaxonomyYAML)
 	f, err := clusteringrules.Load(path)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -232,7 +245,7 @@ injury_types: {knee: ["knee", "knee injury"], acl: ["acl", "torn acl"]}
 unknown_entity_stoplist: ["Example Bowl", "All Star Game"]
 thresholds: {join_threshold: 0.7, join_margin: 0.1, ambiguous_low: 0.4, ambiguous_high: 0.5, substantial_update_threshold: 0.5, representative_switch_margin: 0.1}
 weights: {entity_match: 0.3, action_match: 0.2, event_type_match: 0.1, opponent_match: 0.1, date_window_match: 0.0, source_priority: 0.1, novelty: 0.1, primary_source: 0.1, completeness: 0.1, clickbait_penalty: 0.0}
-`)
+`+minimalTaxonomyYAML)
 	f, err := clusteringrules.Load(path)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -265,7 +278,7 @@ topic_groups: {}
 injury_types: {knee: []}
 thresholds: {join_threshold: 0.7, join_margin: 0.1, ambiguous_low: 0.4, ambiguous_high: 0.5, substantial_update_threshold: 0.5, representative_switch_margin: 0.1}
 weights: {entity_match: 0.3, action_match: 0.2, event_type_match: 0.1, opponent_match: 0.1, date_window_match: 0.0, source_priority: 0.1, novelty: 0.1, primary_source: 0.1, completeness: 0.1, clickbait_penalty: 0.0}
-`)
+`+minimalTaxonomyYAML)
 	if _, err := clusteringrules.Load(path); err == nil {
 		t.Fatal("Load() error = nil, want error for injury_types[knee] with an empty term list")
 	}
@@ -283,7 +296,7 @@ topic_groups: {}
 unknown_entity_stoplist: ["Example Bowl", "  "]
 thresholds: {join_threshold: 0.7, join_margin: 0.1, ambiguous_low: 0.4, ambiguous_high: 0.5, substantial_update_threshold: 0.5, representative_switch_margin: 0.1}
 weights: {entity_match: 0.3, action_match: 0.2, event_type_match: 0.1, opponent_match: 0.1, date_window_match: 0.0, source_priority: 0.1, novelty: 0.1, primary_source: 0.1, completeness: 0.1, clickbait_penalty: 0.0}
-`)
+`+minimalTaxonomyYAML)
 	if _, err := clusteringrules.Load(path); err == nil {
 		t.Fatal("Load() error = nil, want error for unknown_entity_stoplist with a blank entry")
 	}
@@ -607,5 +620,123 @@ func TestLoadWithEntityCatalog_ExampleFiles_LoadsAndProducesUsableRules(t *testi
 	}
 	if !found {
 		t.Errorf("PrimaryEntities = %v, want to contain %q (surname-only alias regression)", rep.PrimaryEntities, "casey-fixture")
+	}
+}
+
+// -- taxonomy section ------------------------------------------------------
+
+// loadErr loads path and fails the test unless Load returns an error whose
+// message contains want.
+func loadErr(t *testing.T, path, want string) {
+	t.Helper()
+	_, err := clusteringrules.Load(path)
+	if err == nil {
+		t.Fatalf("Load() error = nil, want an error containing %q", want)
+	}
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("Load() error = %v, want it to contain %q", err, want)
+	}
+}
+
+func TestLoad_RejectsEmptyEventTypes(t *testing.T) {
+	base := baseFixture(t)
+	start := strings.Index(base, "taxonomy:\n")
+	end := strings.Index(base[start:], "\n\n")
+	if start < 0 || end < 0 {
+		t.Fatal("base fixture has no taxonomy section")
+	}
+	loadErr(t, writeFixture(t, base[:start]+"taxonomy: {event_types: []}"+base[start+end:]), "taxonomy.event_types must declare at least one event type")
+}
+
+func TestLoad_RequiresTaxonomy(t *testing.T) {
+	base := baseFixture(t)
+	start := strings.Index(base, "taxonomy:\n")
+	end := strings.Index(base[start:], "\n\n")
+	if start < 0 || end < 0 {
+		t.Fatal("base fixture has no taxonomy section")
+	}
+	loadErr(t, writeFixture(t, base[:start]+base[start+end+2:]), "taxonomy is required")
+}
+
+func TestLoad_ParsesTaxonomy(t *testing.T) {
+	f, err := clusteringrules.Load(filepath.Join("testdata", "valid.yml"))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	tx := f.Taxonomy
+	if len(tx.EventTypes) != 11 || len(tx.Actions) != 26 || len(tx.Signals) != 6 {
+		t.Fatalf("taxonomy sizes = %d/%d/%d, want 11/26/6", len(tx.EventTypes), len(tx.Actions), len(tx.Signals))
+	}
+	if !tx.HasFlag(eventsignals.EventTypeGame, eventsignals.FlagTeamLevelNeedsOpponent) {
+		t.Error("game should carry team_level_needs_opponent")
+	}
+	if tx.EventTypes[0].Flags != nil {
+		t.Errorf("transaction flags = %#v, want nil when omitted", tx.EventTypes[0].Flags)
+	}
+	if got := tx.MemberRole(eventsignals.EventTypeCorrection); got != "correction" {
+		t.Errorf("MemberRole(correction) = %q", got)
+	}
+	if tx.Actions[0].Name != eventsignals.ActionPracticeSquad || tx.Actions[0].BodyFallbackRank != 2 {
+		t.Errorf("first action = %+v, want practice-squad rank 2", tx.Actions[0])
+	}
+	if !tx.SignalHasFlag(eventsignals.ContentSignalRumor, eventsignals.FlagSpeculative) {
+		t.Error("rumor signal should carry speculative")
+	}
+}
+
+func TestLoad_TaxonomyEmptyFlagListParsesAsNil(t *testing.T) {
+	path := mutate(t, baseFixture(t),
+		`{name: draft, description: "A draft pick or draft-related news."}`,
+		`{name: draft, description: "A draft pick or draft-related news.", flags: []}`)
+	f, err := clusteringrules.Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if f.Taxonomy.EventTypes[2].Flags != nil {
+		t.Errorf("draft flags = %#v, want nil for flags: []", f.Taxonomy.EventTypes[2].Flags)
+	}
+}
+
+func TestLoad_TaxonomyValidationErrors(t *testing.T) {
+	cases := []struct {
+		name, old, new, want string
+	}{
+		{"event type name not a slug", `{name: draft, description`, `{name: Draft_Pick, description`, `taxonomy.event_types: name "Draft_Pick"`},
+		{"action name not a slug", `{name: tryout, event_type: practice}`, `{name: try out, event_type: practice}`, `taxonomy.actions: name "try out"`},
+		{"signal name not a slug", `{name: reaction, event_type: reaction, precedence`, `{name: 9reaction, event_type: reaction, precedence`, `taxonomy.content_signals: name "9reaction"`},
+		{"duplicate event type", `{name: draft, description`, `{name: injury, description`, `taxonomy.event_types: duplicate name "injury"`},
+		{"duplicate action", `{name: tryout, event_type: practice}`, `{name: practice, event_type: practice}`, `taxonomy.actions: duplicate name "practice"`},
+		{"duplicate signal", `{name: reaction, event_type: reaction, precedence`, `{name: analysis, event_type: reaction, precedence`, `taxonomy.content_signals: duplicate name "analysis"`},
+		{"generic declared", `{name: draft, description`, `{name: generic, description`, `taxonomy.event_types: "generic" is reserved`},
+		{"generic as action target", `{name: tryout, event_type: practice}`, `{name: tryout, event_type: generic}`, `taxonomy.actions[tryout]: event_type "generic" is reserved`},
+		{"generic as signal target", `{name: quote, event_type: quote, precedence`, `{name: quote, event_type: generic, precedence`, `taxonomy.content_signals[quote]: event_type "generic" is reserved`},
+		{"undeclared action target", `{name: tryout, event_type: practice}`, `{name: tryout, event_type: scrimmage}`, `taxonomy.actions[tryout]: event_type "scrimmage" is not declared`},
+		{"undeclared signal target", `{name: quote, event_type: quote, precedence`, `{name: quote, event_type: soundbite, precedence`, `taxonomy.content_signals[quote]: event_type "soundbite" is not declared`},
+		{"unknown type flag", `flags: [team_level_needs_opponent]`, `flags: [needs_opponent]`, `taxonomy.event_types[game]: unknown flag "needs_opponent"`},
+		{"unknown signal flag", `flags: [speculative]`, `flags: [hedged]`, `taxonomy.content_signals[rumor]: unknown flag "hedged"`},
+		{"unknown precedence", `{name: quote, event_type: quote, precedence: after_action}`, `{name: quote, event_type: quote, precedence: later}`, `taxonomy.content_signals[quote]: unknown precedence "later"`},
+		{"missing precedence", `{name: quote, event_type: quote, precedence: after_action}`, `{name: quote, event_type: quote}`, `taxonomy.content_signals[quote]: unknown precedence ""`},
+		{"unknown member_role", `member_role: reaction}`, `member_role: response}`, `taxonomy.event_types[reaction]: unknown member_role "response"`},
+		{"zero body_fallback", `{name: tryout, event_type: practice}`, `{name: tryout, event_type: practice, body_fallback: 0}`, `taxonomy.actions[tryout]: body_fallback must be positive, got 0`},
+		{"negative body_fallback", `{name: tryout, event_type: practice}`, `{name: tryout, event_type: practice, body_fallback: -1}`, `taxonomy.actions[tryout]: body_fallback must be positive, got -1`},
+		{"duplicate body_fallback", `{name: tryout, event_type: practice}`, `{name: tryout, event_type: practice, body_fallback: 2}`, `taxonomy.actions[tryout]: duplicate body_fallback 2`},
+		{"undeclared action_terms key", `    claim: ["claimed off waivers"]`, `    claim: ["claimed off waivers"]` + "\n" + `    scrimmage: ["scrimmage"]`, `action_terms: unrecognized action "scrimmage"`},
+		{"undeclared content_cues key", `    quote: ["said", "press conference"]` + "\n  date_window_policy", `    quote: ["said", "press conference"]` + "\n" + `    hedge: ["perhaps"]` + "\n  date_window_policy", `content_cues: unrecognized content signal "hedge"`},
+		{"undeclared temporal_windows key", `  reaction: "12h"`, `  reaction: "12h"` + "\n" + `  scrimmage: "12h"`, `temporal_windows: unrecognized event type "scrimmage"`},
+		{"undeclared topic_groups value", `transaction: [sign, extend]`, `transaction: [sign, extend, scrimmage]`, `topic_groups[transaction]: "scrimmage" is neither a declared action, a declared event type nor generic`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			loadErr(t, mutate(t, baseFixture(t), tc.old, tc.new), tc.want)
+		})
+	}
+}
+
+func TestLoad_TopicGroupsAcceptTypesActionsAndGeneric(t *testing.T) {
+	// Keys are free topic names; values may be a declared action, a declared
+	// event type, or generic.
+	path := mutate(t, baseFixture(t), `injury: [injure]`, `injury: [injure, injury]`+"\n  misc-topic: [generic, draft]")
+	if _, err := clusteringrules.Load(path); err != nil {
+		t.Fatalf("Load() error = %v", err)
 	}
 }

@@ -122,16 +122,16 @@ func Run(ctx context.Context, d Deps, in Input) (Result, error) {
 	return res, listTypes(ctx, d.Proposals, in.Out, typesNow)
 }
 
-func discover(ctx context.Context, llm appout.EventRuleDiscoveryLLM, sample []eventruleproposal.Sample, batchSize int, known []string) (topics []appout.EventTopicProposal, phrases []appout.EventPhraseProposal, failed, calls int, firstErr error) {
+func discover(ctx context.Context, llm appout.EventRuleDiscoveryLLM, sample []eventruleproposal.Sample, batchSize int, known []appout.KnownEventKind, taxonomy eventsignals.Taxonomy) (topics []appout.EventTopicProposal, phrases []appout.EventPhraseProposal, failed, calls int, firstErr error) {
 	if batchSize <= 0 {
 		batchSize = defaultBatchSize
 	}
 	actions := make([]string, 0)
-	for _, a := range eventsignals.AllActions() {
+	for _, a := range taxonomy.ActionPriority() {
 		actions = append(actions, string(a))
 	}
 	signals := make([]string, 0)
-	for _, s := range eventsignals.AllContentSignals() {
+	for _, s := range taxonomy.SignalPriority() {
 		signals = append(signals, string(s))
 	}
 	note := func(err error) {
@@ -163,16 +163,16 @@ func discover(ctx context.Context, llm appout.EventRuleDiscoveryLLM, sample []ev
 
 func normalizePhrase(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
 
-// knownTarget reports whether the LLM's target exists in the closed lists.
-// A kind other than action or signal (small models often repeat the
-// target's name there) is taken from the one list the target is in; a
-// target in both lists is then ambiguous and not known.
-func knownTarget(kind, target string) (eventruleproposal.TargetKind, bool) {
+// knownTarget reports whether the LLM's target is an action or content
+// signal t declares. A kind other than action or signal (small models often
+// repeat the target's name there) is taken from the one list the target is
+// in; a target in both lists is then ambiguous and not known.
+func knownTarget(kind, target string, t eventsignals.Taxonomy) (eventruleproposal.TargetKind, bool) {
 	isAction, isSignal := false, false
-	for _, a := range eventsignals.AllActions() {
+	for _, a := range t.ActionPriority() {
 		isAction = isAction || string(a) == target
 	}
-	for _, s := range eventsignals.AllContentSignals() {
+	for _, s := range t.SignalPriority() {
 		isSignal = isSignal || string(s) == target
 	}
 	switch eventruleproposal.TargetKind(kind) {
@@ -194,18 +194,19 @@ func knownTarget(kind, target string) (eventruleproposal.TargetKind, bool) {
 // proposals (evidence must be in text, the sample's lowercased title +
 // summary by article ID) and returns how many were stored, the IDs of
 // the type proposals stored or updated and how many topics were dropped for
-// naming an existing event type or action (compared by slug). A phrase already in any bucket of base (the
-// hand-written plus the current generated rules) is not stored.
+// naming an event type or action of base's taxonomy (compared by slug). A
+// phrase already in any bucket of base (the hand-written plus the current
+// generated rules) is not stored.
 func persistProposals(ctx context.Context, repo eventruleproposalport.Repository, base eventsignals.Rules, text map[string]string, topics []appout.EventTopicProposal, phrases []appout.EventPhraseProposal, now time.Time) (int, map[string]bool, int, error) {
 	n, dropped := 0, 0
 	builtin := map[string]bool{}
-	for _, k := range KnownTypeNames() {
+	for _, k := range KnownTypeNames(base.Taxonomy) {
 		builtin[k] = true
 	}
 	typesNow := map[string]bool{}
 	for _, lp := range phrases {
 		target := strings.TrimSpace(lp.Target)
-		tk, ok := knownTarget(strings.TrimSpace(lp.TargetKind), target)
+		tk, ok := knownTarget(strings.TrimSpace(lp.TargetKind), target, base.Taxonomy)
 		phrase := normalizePhrase(lp.Phrase)
 		if !ok || phrase == "" {
 			continue
@@ -637,7 +638,7 @@ func listTypes(ctx context.Context, repo eventruleproposalport.Repository, w io.
 		fmt.Fprintf(w, "%d older pending type proposal(s) not shown; see `events type list`.\n", older)
 	}
 	if len(approved) > 0 {
-		fmt.Fprintf(w, "%d approved type proposal(s) await a code change; see `events brief <id>`.\n", len(approved))
+		fmt.Fprintf(w, "%d approved type proposal(s) await a taxonomy change; see `events brief <id>`.\n", len(approved))
 	}
 	return nil
 }

@@ -49,6 +49,8 @@ type yamlGenerated struct {
 }
 
 // ParseGenerated reads path. A missing file is the empty set, not an error.
+// It checks structure only: bucket names are checked against the
+// hand-written taxonomy by LoadWithGenerated.
 func ParseGenerated(path string) (GeneratedRules, error) {
 	data, err := os.ReadFile(path) // #nosec G304 -- operator-provided config path
 	if errors.Is(err, fs.ErrNotExist) {
@@ -66,9 +68,6 @@ func ParseGenerated(path string) (GeneratedRules, error) {
 	g := GeneratedRules{}
 	for k, entries := range yg.ActionTerms {
 		a := eventsignals.Action(k)
-		if !knownActions[a] {
-			return GeneratedRules{}, fmt.Errorf("clusteringrules: %s: unknown action %q", path, k)
-		}
 		if err := checkEntries(path, "action_terms."+k, entries); err != nil {
 			return GeneratedRules{}, err
 		}
@@ -79,9 +78,6 @@ func ParseGenerated(path string) (GeneratedRules, error) {
 	}
 	for k, entries := range yg.ContentCues {
 		s := eventsignals.ContentSignal(k)
-		if !knownContentSignals[s] {
-			return GeneratedRules{}, fmt.Errorf("clusteringrules: %s: unknown content signal %q", path, k)
-		}
 		if err := checkEntries(path, "content_cues."+k, entries); err != nil {
 			return GeneratedRules{}, err
 		}
@@ -179,8 +175,9 @@ func MergeGenerated(f RulesFile, g GeneratedRules) (RulesFile, []string) {
 	return out, warnings
 }
 
-// LoadWithGenerated parses generatedPath and merges it into f, then validates
-// the merged set. An empty path is a no-op (the feature is off).
+// LoadWithGenerated parses generatedPath, checks its buckets against f's
+// taxonomy, merges it into f, then validates the merged set. An empty path
+// is a no-op (the feature is off).
 func LoadWithGenerated(f RulesFile, generatedPath string) (RulesFile, []string, error) {
 	if generatedPath == "" {
 		return f, nil, nil
@@ -189,11 +186,32 @@ func LoadWithGenerated(f RulesFile, generatedPath string) (RulesFile, []string, 
 	if err != nil {
 		return RulesFile{}, nil, err
 	}
+	if err := CheckGeneratedBuckets(generatedPath, g, f.Taxonomy); err != nil {
+		return RulesFile{}, nil, err
+	}
 	merged, warnings := MergeGenerated(f, g)
 	if err := merged.Validate(); err != nil {
 		return RulesFile{}, nil, fmt.Errorf("clusteringrules: merged generated rules from %s: %w", generatedPath, err)
 	}
 	return merged, warnings, nil
+}
+
+// CheckGeneratedBuckets rejects a bucket of g (read from path) naming an
+// action or content signal the taxonomy does not declare.
+func CheckGeneratedBuckets(path string, g GeneratedRules, taxonomy eventsignals.Taxonomy) error {
+	actions := declaredActions(taxonomy)
+	for _, a := range sortedActions(g.ActionTerms) {
+		if !actions[a] {
+			return fmt.Errorf("clusteringrules: %s: unknown action %q", path, a)
+		}
+	}
+	signals := declaredSignals(taxonomy)
+	for _, s := range sortedSignals(g.ContentCues) {
+		if !signals[s] {
+			return fmt.Errorf("clusteringrules: %s: unknown content signal %q", path, s)
+		}
+	}
+	return nil
 }
 
 func norm(s string) string { return strings.ToLower(strings.TrimSpace(s)) }

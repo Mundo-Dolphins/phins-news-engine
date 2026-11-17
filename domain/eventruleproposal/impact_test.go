@@ -7,10 +7,11 @@ import (
 
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/article"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals"
+	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals/eventsignalstest"
 )
 
 func TestImpact_CountsGenericMovedAndRetyped(t *testing.T) {
-	rules := eventsignals.Rules{ActionTerms: map[eventsignals.Action][]string{eventsignals.ActionSign: {"signed"}}}
+	rules := eventsignals.Rules{Taxonomy: eventsignalstest.Taxonomy(), ActionTerms: map[eventsignals.Action][]string{eventsignals.ActionSign: {"signed"}}}
 	sample := []Sample{
 		{Article: article.Article{ID: "1", Title: "Isotopes inks a deal with veteran"}, ClusterID: "c1"},
 		{Article: article.Article{ID: "2", Title: "Isotopes signed a veteran"}, ClusterID: "c2"},
@@ -30,7 +31,7 @@ func TestImpact_CountsGenericMovedAndRetyped(t *testing.T) {
 }
 
 func TestImpact_RetypedWhenBaselineAlreadyTyped(t *testing.T) {
-	rules := eventsignals.Rules{ActionTerms: map[eventsignals.Action][]string{eventsignals.ActionSign: {"signed"}}}
+	rules := eventsignals.Rules{Taxonomy: eventsignalstest.Taxonomy(), ActionTerms: map[eventsignals.Action][]string{eventsignals.ActionSign: {"signed"}}}
 	sample := []Sample{{Article: article.Article{ID: "1", Title: "Isotopes signed a veteran"}, ClusterID: "c1"}}
 	// A rumor cue overrides the transaction type of an already-typed article.
 	p := Proposal{Kind: KindPhrase, TargetKind: TargetSignal, Target: "rumor", Phrase: "signed a veteran"}
@@ -50,6 +51,7 @@ func TestImpact_TypeKindIsNoop(t *testing.T) {
 
 func TestImpact_ReportsPhraseAlreadyInAnyBucket(t *testing.T) {
 	rules := eventsignals.Rules{
+		Taxonomy:    eventsignalstest.Taxonomy(),
 		ActionTerms: map[eventsignals.Action][]string{eventsignals.ActionSign: {"Inks A Deal"}},
 		ContentCues: map[eventsignals.ContentSignal][]string{eventsignals.ContentSignalRumor: {"per sources"}},
 	}

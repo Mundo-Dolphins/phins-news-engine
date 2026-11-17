@@ -4,7 +4,9 @@ package eventrules
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -16,7 +18,7 @@ import (
 
 type nopLLM struct{}
 
-func (nopLLM) DiscoverTopics(context.Context, []appout.EventRuleArticle, []string) ([]appout.EventTopicProposal, error) {
+func (nopLLM) DiscoverTopics(context.Context, []appout.EventRuleArticle, []appout.KnownEventKind) ([]appout.EventTopicProposal, error) {
 	return nil, nil
 }
 
@@ -65,6 +67,47 @@ func TestCycleDepsDefaults(t *testing.T) {
 	later := CycleDeps(cfg, db, DefaultDatasetPath, llm, nil, func() time.Time { return fixed.AddDate(0, 0, 40) })
 	if sample, err := later.Sampler(ctx); err != nil || len(sample) != 0 {
 		t.Errorf("sample 40 days on %+v, %v", sample, err)
+	}
+}
+
+func TestCycleDeps_ReadAppliedRejectsUndeclaredBuckets(t *testing.T) {
+	cfg := enabledConfig(t)
+	cfg.Clustering.GeneratedRulesPath = filepath.Join(t.TempDir(), "generated.yml")
+	d := CycleDeps(cfg, openTestDB(t), DefaultDatasetPath, nopLLM{}, nil, nil)
+	path := cfg.Clustering.GeneratedRulesPath
+	write := func(body string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("action_terms:\n  sign:\n    - phrase: inks a deal\n")
+	if rules, err := d.ReadApplied(path); err != nil || len(rules) != 1 {
+		t.Fatalf("ReadApplied(declared) = %+v, %v", rules, err)
+	}
+	write("action_terms:\n  teleport:\n    - phrase: beams over\n")
+	if _, err := d.ReadApplied(path); err == nil || !strings.Contains(err.Error(), `unknown action "teleport"`) {
+		t.Errorf("err = %v, want unknown action", err)
+	}
+	write("content_cues:\n  hunch:\n    - phrase: word is\n")
+	if _, err := d.ReadApplied(path); err == nil || !strings.Contains(err.Error(), `unknown content signal "hunch"`) {
+		t.Errorf("err = %v, want unknown content signal", err)
+	}
+}
+
+func TestKnownTypeNames_FromTheConfiguredTaxonomy(t *testing.T) {
+	cfg := enabledConfig(t)
+	cfg.Clustering.GeneratedRulesPath = filepath.Join(t.TempDir(), "missing.yml")
+	got, err := KnownTypeNames(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got, knownNames()) {
+		t.Errorf("KnownTypeNames(cfg) = %v, want %v", got, knownNames())
+	}
+	cfg.Clustering.RulesPath = filepath.Join(t.TempDir(), "absent.yml")
+	if _, err := KnownTypeNames(cfg); err == nil {
+		t.Error("an unreadable rules file must be an error")
 	}
 }
 

@@ -6,6 +6,63 @@ meta:
   name: example_event_clustering_rules
   generated_at: "2026-10-01"
 
+# The event vocabulary. Each list's order is its detection priority.
+# event_types: what an article can be about; flags (referential,
+#   update_framing, team_level_needs_opponent) and member_role (correction,
+#   confirmation, analysis, reaction) drive clustering behaviour.
+# actions: map each action_terms bucket to an event type; body_fallback ranks
+#   the actions also detected from body text (lower first).
+# content_signals: map each content_cues bucket to an event type; a
+#   before_action signal wins over the action, an after_action one only
+#   applies when no action matched.
+taxonomy:
+  event_types:
+    - {name: transaction, description: "A roster move: signing, release, trade, waiver, claim, extension, contract or practice-squad change."}
+    - {name: injury, description: "A player's injury, injury-list move, return, activation or game status."}
+    - {name: draft, description: "A draft pick or draft-related news."}
+    - {name: game, description: "A game preview or result.", flags: [team_level_needs_opponent]}
+    - {name: practice, description: "Practice participation, tryouts or depth chart changes."}
+    - {name: quote, description: "Coverage built around what someone said.", flags: [referential]}
+    - {name: rumor, description: "An unconfirmed report or speculation.", flags: [referential]}
+    - {name: confirmation, description: "Confirmation of an earlier report.", flags: [referential, update_framing], member_role: confirmation}
+    - {name: correction, description: "A correction or walk-back of an earlier report.", flags: [referential, update_framing], member_role: correction}
+    - {name: analysis, description: "Analysis, predictions or breakdowns rather than news.", flags: [referential], member_role: analysis}
+    - {name: reaction, description: "Reactions to an event rather than the event itself.", flags: [referential], member_role: reaction}
+  actions:
+    - {name: practice-squad, event_type: transaction, body_fallback: 2}
+    - {name: demotion, event_type: transaction, body_fallback: 4}
+    - {name: sign, event_type: transaction, body_fallback: 10}
+    - {name: release, event_type: transaction, body_fallback: 8}
+    - {name: trade, event_type: transaction, body_fallback: 9}
+    - {name: waive, event_type: transaction, body_fallback: 6}
+    - {name: claim, event_type: transaction, body_fallback: 7}
+    - {name: extend, event_type: transaction}
+    - {name: contract, event_type: transaction}
+    - {name: injured-reserve, event_type: injury, body_fallback: 1}
+    - {name: injure, event_type: injury, body_fallback: 12}
+    - {name: return, event_type: injury}
+    - {name: practice, event_type: practice}
+    - {name: activate, event_type: injury, body_fallback: 5}
+    - {name: promotion, event_type: transaction, body_fallback: 3}
+    - {name: roster, event_type: transaction, body_fallback: 11}
+    - {name: depth-chart, event_type: practice}
+    - {name: tryout, event_type: practice}
+    - {name: game-status, event_type: injury}
+    - {name: draft, event_type: draft}
+    - {name: preview, event_type: game}
+    - {name: result, event_type: game}
+    - {name: quote, event_type: quote}
+    - {name: report, event_type: rumor}
+    - {name: confirm, event_type: confirmation}
+    - {name: correct, event_type: correction}
+  content_signals:
+    - {name: correction, event_type: correction, precedence: before_action}
+    - {name: confirmation, event_type: confirmation, precedence: before_action}
+    - {name: rumor, event_type: rumor, precedence: before_action, flags: [speculative]}
+    - {name: analysis, event_type: analysis, precedence: after_action}
+    - {name: reaction, event_type: reaction, precedence: after_action}
+    - {name: quote, event_type: quote, precedence: after_action}
+
 # Phrases rewritten to a canonical action term before action matching.
 synonyms:
   - phrase: "agrees to a deal"
