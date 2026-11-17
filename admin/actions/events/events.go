@@ -1,6 +1,6 @@
 // Package events holds the admin actions over event rule discovery: the new
 // event type proposals, the clustering gate and the impact report of the
-// generated rules. They mirror the `events type list|approve|reject`,
+// generated rules. They mirror the `events type list|approve|reject|merge`,
 // `events brief`, `events gate` and `events impact` CLI commands. Reads are
 // available in both modes; deciding a type proposal is local-only.
 package events
@@ -38,6 +38,11 @@ type idParams struct {
 	ID string `json:"id" help:"event type proposal id" required:"true"`
 }
 
+type mergeParams struct {
+	ID   string `json:"id" help:"event type proposal id to fold away" required:"true"`
+	Into string `json:"into" help:"id of the pending or approved type proposal that gains its evidence, or the name of a known event type or action that already covers it" required:"true"`
+}
+
 type gateParams struct {
 	Dataset string `json:"dataset" help:"gold clustering dataset scored by the gate" default:"testdata/clustering_groups.yml" format:"path"`
 }
@@ -46,8 +51,8 @@ type impactParams struct {
 	Days int `json:"days" help:"look-back window in days (1 or more)" default:"14"`
 }
 
-// Actions returns events.type_list, .brief, .gate, .impact, .type_approve
-// and .type_reject, and the rule review actions events.rules_discover,
+// Actions returns events.type_list, .brief, .gate, .impact, .type_approve,
+// .type_reject and .type_merge, and the rule review actions events.rules_discover,
 // .rules_queue, .rules_decide, .rules_reject_failing and .rules_apply.
 func Actions() []action.Action {
 	return append([]action.Action{
@@ -87,6 +92,11 @@ func Actions() []action.Action {
 				return runDecide(ctx, env, params, false)
 			},
 		},
+		{
+			Name: "events.type_merge", Group: group, Title: "Merge event type proposal",
+			Description: "Folds a pending or approved new event type proposal into another proposal (which gains its evidence) or into a known event type or action that already covers it. The source is rejected.",
+			Kind:        action.KindWrite, Modes: localOnly, Params: mergeParams{}, Run: runMerge,
+		},
 	}, ruleActions()...)
 }
 
@@ -100,6 +110,8 @@ func proposalError(err error) error {
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return action.NotFound(err)
+	case errors.Is(err, eventrules.ErrBadMergeTarget):
+		return &action.Error{Code: action.CodeInvalidParams, Message: err.Error()}
 	case errors.Is(err, eventrules.ErrNotTypeProposal), errors.Is(err, eventrules.ErrNoBrief), errors.Is(err, eventrules.ErrAlreadyDecided):
 		return action.Conflict(err)
 	}
@@ -123,6 +135,7 @@ func runTypeList(ctx context.Context, env action.Env, _ any) (action.Result, err
 		summary = "No pending or approved event type proposals."
 	}
 	return action.Result{
+		Object: map[string]any{"known": eventrulecycle.KnownTypeNames()},
 		Render: "table",
 		Columns: []action.Column{
 			{Key: "id", Label: "ID"}, {Key: "status", Label: "Status"}, {Key: "type", Label: "Type"},
@@ -162,6 +175,30 @@ func runDecide(ctx context.Context, env action.Env, params any, approve bool) (a
 		Render:  "object",
 		Object:  map[string]any{"id": decided.ID, "type": decided.TypeName, "status": string(decided.Status)},
 		Summary: fmt.Sprintf("Event type proposal %s (%s) %s.", decided.ID, decided.TypeName, past),
+	}, nil
+}
+
+func runMerge(ctx context.Context, env action.Env, params any) (action.Result, error) {
+	p, ok := params.(*mergeParams)
+	if !ok {
+		return action.Result{}, errBadParams
+	}
+	res, err := eventrules.MergeType(ctx, env.DB, p.ID, p.Into, env.Now().UTC())
+	if err != nil {
+		return action.Result{}, proposalError(err)
+	}
+	env.Log.Info("event type proposal merged", "id", res.Source.ID, "into", p.Into, "by", env.Actor)
+	summary := fmt.Sprintf("Event type proposal %s (%s) merged into %s (%s).", res.Source.ID, res.Source.TypeName, res.Target.ID, res.Target.TypeName)
+	if res.CoveredBy != "" {
+		summary = fmt.Sprintf("Event type proposal %s (%s) rejected: covered by %s.", res.Source.ID, res.Source.TypeName, res.CoveredBy)
+	}
+	return action.Result{
+		Render: "object",
+		Object: map[string]any{
+			"id": res.Source.ID, "type": res.Source.TypeName, "status": string(res.Source.Status),
+			"into": p.Into, "covered_by": res.CoveredBy,
+		},
+		Summary: summary,
 	}, nil
 }
 
