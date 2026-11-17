@@ -222,8 +222,8 @@ type NormalizeReport struct {
 // NormalizeTypes folds every stored type proposal that is not applied onto
 // its slug in one transaction (see eventruleproposal.PlanTypeNormalization),
 // rejecting those covered by a known event type or action. With
-// reopenApproved a merged approval goes back to pending. A second run is a
-// no-op.
+// reopenApproved every approved type proposal goes back to pending, not only
+// merged ones. A second run with no decisions in between plans nothing.
 func NormalizeTypes(ctx context.Context, db *sql.DB, reopenApproved bool, now time.Time) (NormalizeReport, error) {
 	repo := sqliteeventruleproposal.NewRepository(db)
 	var ps []eventruleproposal.Proposal

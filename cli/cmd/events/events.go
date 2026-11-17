@@ -162,7 +162,7 @@ func newTypeCommand() *cobra.Command {
 			return nil
 		},
 	}
-	normalizeCmd.Flags().BoolVar(&reopen, "reopen-approved", false, "send a merged approval back to pending")
+	normalizeCmd.Flags().BoolVar(&reopen, "reopen-approved", false, "reset every approved type proposal to pending (use once, on the first run)")
 	typeCmd.AddCommand(normalizeCmd)
 	return typeCmd
 }

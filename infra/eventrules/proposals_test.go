@@ -158,6 +158,25 @@ func TestMergeType_IntoProposal(t *testing.T) {
 	}
 }
 
+// A concurrent decision between the read and the merge surfaces as
+// ErrAlreadyDecided with the "decided elsewhere" text. The trigger makes the
+// guarded update of the source touch no row, as a lost race does.
+func TestMergeType_DecidedElsewhere(t *testing.T) {
+	db := openTestDB(t)
+	ids := seedProposals(t, db,
+		typeProposal("kicking error", eventruleproposal.StatusPending, "a1"),
+		typeProposal("missed kick", eventruleproposal.StatusPending, "a2"),
+	)
+	if _, err := db.Exec(`CREATE TRIGGER lost_race BEFORE UPDATE ON event_rule_proposals
+		WHEN OLD.id = '` + ids[0] + `' BEGIN SELECT RAISE(IGNORE); END`); err != nil {
+		t.Fatal(err)
+	}
+	_, err := MergeType(context.Background(), db, ids[0], ids[1], time.Now())
+	if !errors.Is(err, ErrAlreadyDecided) || !strings.Contains(err.Error(), "decided elsewhere") {
+		t.Fatalf("err = %v, want ErrAlreadyDecided with decided elsewhere", err)
+	}
+}
+
 func TestMergeType_IntoKnownType(t *testing.T) {
 	db := openTestDB(t)
 	ids := seedProposals(t, db, typeProposal("contract extension", eventruleproposal.StatusApproved, "a1"))

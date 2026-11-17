@@ -81,10 +81,13 @@ func TestNextRecordsEnteredAt(t *testing.T) {
 	}
 }
 
-type fakeRuleLLM struct{ err error }
+type fakeRuleLLM struct {
+	err    error
+	topics []out.EventTopicProposal
+}
 
 func (l fakeRuleLLM) DiscoverTopics(context.Context, []out.EventRuleArticle, []string) ([]out.EventTopicProposal, error) {
-	return nil, l.err
+	return l.topics, l.err
 }
 
 func (l fakeRuleLLM) DiscoverPhrases(context.Context, []out.EventRuleArticle, []string, []string) ([]out.EventPhraseProposal, error) {
@@ -156,6 +159,14 @@ func (f *fixture) ruleStep() (string, ruleCounters) {
 		}
 	}
 	return s.Status, r
+}
+
+func TestEventRulesDiscoverReportsDropped(t *testing.T) {
+	f := eventRulesFixture(t, fakeRuleLLM{topics: []out.EventTopicProposal{{Name: "injury"}}})
+	res := f.mustRun("cycle.event_rules_discover", `{}`)
+	if !strings.Contains(res.Summary, ", 1 dropped (already an event type or action)") {
+		t.Errorf("summary = %q", res.Summary)
+	}
 }
 
 // I2: discovery, apply and finish record the CLI's counters server side.
