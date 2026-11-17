@@ -329,3 +329,37 @@ func TestEventsReview_LLMServerReachesTheEventRuleLLM(t *testing.T) {
 		t.Fatalf("event rule LLM built with %q %q, want %q m1\n%s", gotURL, gotModel, testsupport.LLMServerAURL, out)
 	}
 }
+
+func TestEventsType_MergeAndNormalize(t *testing.T) {
+	configPath := gateFixture(t, "")
+	ids := seedProposals(
+		t, configPath,
+		eventruleproposal.Proposal{Kind: eventruleproposal.KindType, TypeName: "betting odds", Description: "Lines.", EvidenceIDs: []string{"g0"}, Status: eventruleproposal.StatusPending, PromptVersion: "v1"},
+		eventruleproposal.Proposal{Kind: eventruleproposal.KindType, TypeName: "wagering lines", Description: "Lines.", EvidenceIDs: []string{"g1"}, Status: eventruleproposal.StatusPending, PromptVersion: "v1"},
+		eventruleproposal.Proposal{Kind: eventruleproposal.KindType, TypeName: "kicking error", Description: "Misses.", Status: eventruleproposal.StatusPending, PromptVersion: "v1"},
+	)
+	odds, lines, kicking := ids[0], ids[1], ids[2]
+
+	if _, err := testsupport.Execute(t, "--config", configPath, "events", "type", "merge", lines); err == nil {
+		t.Error("merge without --into must fail")
+	}
+	out, err := testsupport.Execute(t, "--config", configPath, "events", "type", "merge", lines, "--into", odds)
+	if want := "Event type proposal " + lines + " (wagering-lines) merged into " + odds + " (betting-odds).\n"; err != nil || out != want {
+		t.Fatalf("merge: %v\n%q\nwant %q", err, out, want)
+	}
+	if _, err := testsupport.Execute(t, "--config", configPath, "events", "type", "merge", lines, "--into", odds); err == nil {
+		t.Error("merging a decided proposal must fail")
+	}
+	if _, err := testsupport.Execute(t, "--config", configPath, "events", "type", "merge", kicking, "--into", "no-such-type"); err == nil {
+		t.Error("merge into an unknown name must be refused")
+	}
+	out, err = testsupport.Execute(t, "--config", configPath, "events", "type", "merge", kicking, "--into", "generic")
+	if want := "Event type proposal " + kicking + " (kicking-error) rejected: covered by generic.\n"; err != nil || out != want {
+		t.Fatalf("covered merge: %v\n%q\nwant %q", err, out, want)
+	}
+
+	out, err = testsupport.Execute(t, "--config", configPath, "events", "type", "normalize", "--reopen-approved")
+	if want := "type proposals: before=3 after=3 merged=0 covered=0 reopened=0 emptied=0\n"; err != nil || out != want {
+		t.Fatalf("normalize: %v\n%q\nwant %q", err, out, want)
+	}
+}

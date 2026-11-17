@@ -52,7 +52,7 @@ func openDB(cmd *cobra.Command, cfg *config.Config) (*sql.DB, error) {
 // newTypeCommand groups the decisions on new event type proposals, which
 // the cycle lists but never applies: a type needs a code change.
 func newTypeCommand() *cobra.Command {
-	typeCmd := &cobra.Command{Use: "type", Short: "List, approve or reject new event type proposals (applying one is a code change, see `events brief`)"}
+	typeCmd := &cobra.Command{Use: "type", Short: "List, approve, reject, merge or normalize new event type proposals (applying one is a code change, see `events brief`)"}
 	typeCmd.AddCommand(&cobra.Command{
 		Use:   "list",
 		Short: "List the pending and approved event type proposals with their ids",
@@ -107,6 +107,63 @@ func newTypeCommand() *cobra.Command {
 	}
 	typeCmd.AddCommand(decide("approve", "approved", true))
 	typeCmd.AddCommand(decide("reject", "rejected", false))
+	var into string
+	mergeCmd := &cobra.Command{
+		Use:   "merge <proposal-id> --into <proposal-id|type-name>",
+		Short: "Fold a duplicate event type proposal into another proposal or a known event type",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := config.Load(shared.ConfigPath)
+			if err != nil {
+				return err
+			}
+			db, err := openDB(cmd, cfg)
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			res, err := eventrules.MergeType(cmd.Context(), db, args[0], into, time.Now().UTC())
+			if err != nil {
+				return fmt.Errorf("events type merge: %w", err)
+			}
+			w := cmd.OutOrStdout()
+			if res.CoveredBy != "" {
+				fmt.Fprintf(w, "Event type proposal %s (%s) rejected: covered by %s.\n", res.Source.ID, res.Source.TypeName, res.CoveredBy)
+				return nil
+			}
+			fmt.Fprintf(w, "Event type proposal %s (%s) merged into %s (%s).\n", res.Source.ID, res.Source.TypeName, res.Target.ID, res.Target.TypeName)
+			return nil
+		},
+	}
+	mergeCmd.Flags().StringVar(&into, "into", "", "target proposal id or known event type name")
+	_ = mergeCmd.MarkFlagRequired("into")
+	typeCmd.AddCommand(mergeCmd)
+	var reopen bool
+	normalizeCmd := &cobra.Command{
+		Use:   "normalize",
+		Short: "Fold duplicate event type proposals onto one slug and reject those a known type already covers",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cfg, err := config.Load(shared.ConfigPath)
+			if err != nil {
+				return err
+			}
+			db, err := openDB(cmd, cfg)
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			r, err := eventrules.NormalizeTypes(cmd.Context(), db, reopen, time.Now().UTC())
+			if err != nil {
+				return fmt.Errorf("events type normalize: %w", err)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "type proposals: before=%d after=%d merged=%d covered=%d reopened=%d emptied=%d\n",
+				r.Before, r.After, r.Merged, r.Covered, r.Reopened, r.Emptied)
+			return nil
+		},
+	}
+	normalizeCmd.Flags().BoolVar(&reopen, "reopen-approved", false, "send a merged approval back to pending")
+	typeCmd.AddCommand(normalizeCmd)
 	return typeCmd
 }
 
