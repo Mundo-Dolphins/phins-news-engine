@@ -23,6 +23,9 @@ type CheckOptions struct {
 	MaxTokens        int
 	MaxClusterSpread float64
 	Stopwords        map[string]bool
+	// AllowReframe accepts phrases that retype framing-only articles (typed
+	// only by an after_action signal). Callers set it for generated types.
+	AllowReframe bool
 }
 
 // DefaultStopwords are the generic words DefaultCheckOptions never lets a
@@ -66,6 +69,9 @@ func Check(p Proposal, impact ImpactResult, totalSample int, opt CheckOptions) V
 	}
 	if impact.Retyped > 0 {
 		reasons = append(reasons, fmt.Sprintf("retypes %d already-typed articles", impact.Retyped))
+	}
+	if impact.Reframed > 0 && !opt.AllowReframe {
+		reasons = append(reasons, fmt.Sprintf("retypes %d framing-only articles", impact.Reframed))
 	}
 	phrase := strings.ToLower(strings.TrimSpace(p.Phrase))
 	tokens := strings.Fields(phrase)

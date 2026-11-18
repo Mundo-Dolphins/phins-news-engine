@@ -24,8 +24,12 @@ type ImpactResult struct {
 	Moved map[eventsignals.EventType]int
 	// Examples holds up to five titles of generic -> typed moves.
 	Examples []string
-	// Retyped counts articles whose non-generic baseline type changed.
+	// Retyped counts articles whose non-generic baseline type changed,
+	// except the framing-only moves counted in Reframed.
 	Retyped int
+	// Reframed counts articles whose baseline type came only from an
+	// after_action signal (no action) and whose type changed.
+	Reframed int
 	// DistinctClusters is the number of distinct clusters among changed articles.
 	DistinctClusters int
 	// Matches is the number of articles whose type changed.
@@ -47,7 +51,8 @@ func Impact(base eventsignals.Rules, p Proposal, sample []Sample, now time.Time)
 	with := withPhrase(base, p)
 	clusters := map[string]bool{}
 	for _, s := range sample {
-		before := eventsignals.Extract(s.Article, base, now).EventType
+		was := eventsignals.Extract(s.Article, base, now)
+		before := was.EventType
 		after := eventsignals.Extract(s.Article, with, now).EventType
 		if before == after {
 			continue
@@ -59,6 +64,8 @@ func Impact(base eventsignals.Rules, p Proposal, sample []Sample, now time.Time)
 			if len(res.Examples) < maxExamples {
 				res.Examples = append(res.Examples, s.Article.Title)
 			}
+		} else if was.Action == "" && base.Taxonomy.SignalPrecedence(was.ContentSignal) == eventsignals.PrecedenceAfterAction {
+			res.Reframed++
 		} else {
 			res.Retyped++
 		}

@@ -43,8 +43,12 @@ type ImpactReport struct {
 	// how many of them the generated rules would type.
 	Generic, Changed int
 	// Typed is the number of typed articles in the window and Retyped how
-	// many of them the generated rules would change.
+	// many of them the generated rules would change, framing-only moves
+	// excluded.
 	Typed, Retyped int
+	// Reframed is how many typed articles typed only by an after_action
+	// signal (no action) the generated rules would change.
+	Reframed int
 	// GenericTruncated and TypedTruncated report that a sample hit the
 	// article limit, so the counts are partial.
 	GenericTruncated, TypedTruncated bool
@@ -53,6 +57,9 @@ type ImpactReport struct {
 	// RetypedBy lists the titles of the changed typed articles by
 	// "old -> new".
 	RetypedBy map[string][]string
+	// ReframedBy lists the titles of the framing-only articles by
+	// "old -> new".
+	ReframedBy map[string][]string
 }
 
 // Impact compares the hand-written rules with the hand-written rules plus
@@ -98,6 +105,7 @@ func Impact(ctx context.Context, db *sql.DB, cfg *config.Config, days int, now t
 		TypedTruncated:   len(typed) >= impactListLimit,
 		Moved:            map[string][]string{},
 		RetypedBy:        map[string][]string{},
+		ReframedBy:       map[string][]string{},
 	}
 	if _, statErr := os.Stat(path); errors.Is(statErr, fs.ErrNotExist) {
 		rep.GeneratedMissing = true
@@ -121,13 +129,19 @@ func Impact(ctx context.Context, db *sql.DB, cfg *config.Config, days int, now t
 		if err := ctx.Err(); err != nil {
 			return zero, err
 		}
-		was := eventsignals.Extract(s.Article, beforeRules, now).EventType
+		before := eventsignals.Extract(s.Article, beforeRules, now)
+		was := before.EventType
 		is := eventsignals.Extract(s.Article, afterRules, now).EventType
 		if was == is {
 			continue
 		}
-		rep.Retyped++
 		key := string(was) + " -> " + string(is)
+		if before.Action == "" && beforeRules.Taxonomy.SignalPrecedence(before.ContentSignal) == eventsignals.PrecedenceAfterAction {
+			rep.Reframed++
+			rep.ReframedBy[key] = append(rep.ReframedBy[key], s.Article.Title)
+			continue
+		}
+		rep.Retyped++
 		rep.RetypedBy[key] = append(rep.RetypedBy[key], s.Article.Title)
 	}
 	return rep, nil

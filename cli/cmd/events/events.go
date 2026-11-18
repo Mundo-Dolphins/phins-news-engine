@@ -340,6 +340,10 @@ func printImpact(w io.Writer, rep eventrules.ImpactReport) {
 	}
 	fmt.Fprintf(w, "\nlast %d day(s): %d typed article(s), %d would change type\n", rep.Days, rep.Typed, rep.Retyped)
 	printGroups(w, rep.RetypedBy)
+	if rep.Reframed > 0 {
+		fmt.Fprintf(w, "\nframing-only articles the generated rules would retype: %d\n", rep.Reframed)
+		printGroups(w, rep.ReframedBy)
+	}
 }
 
 // printGroups lists each key with its count and the first titles, keys

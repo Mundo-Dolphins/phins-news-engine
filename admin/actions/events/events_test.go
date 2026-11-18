@@ -455,7 +455,7 @@ func TestImpactReport(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, _ := json.Marshal(res.Object)
-	for _, want := range []string{`"days":14`, `"generated_missing":true`, `"generic":0`, `"moved":[]`, `"retyped_by":[]`} {
+	for _, want := range []string{`"days":14`, `"generated_missing":true`, `"generic":0`, `"moved":[]`, `"retyped_by":[]`, `"reframed":0`, `"reframed_by":[]`} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("object = %s, missing %s", b, want)
 		}

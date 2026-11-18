@@ -235,6 +235,20 @@ func TestEventsImpact_ReportsTypedArticlesThatWouldChangeType(t *testing.T) {
 	}
 }
 
+func TestEventsImpact_ReportsFramingOnlyArticlesSeparately(t *testing.T) {
+	configPath := gateFixture(t, impactGenerated)
+	seedArticles(t, configPath, "a", eventsignals.EventTypeAnalysis, "Isotopes breakdown amid zzqx whispers")
+	out, err := testsupport.Execute(t, "--config", configPath, "events", "impact")
+	if err != nil {
+		t.Fatalf("Execute() error = %v\n%s", err, out)
+	}
+	for _, want := range []string{"1 typed article(s), 0 would change type", "framing-only articles the generated rules would retype: 1", "analysis -> rumor: 1"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestEventsType_ListApproveReject(t *testing.T) {
 	configPath := gateFixture(t, "")
 	seedGeneric(t, configPath, "Isotopes extend Ezo")

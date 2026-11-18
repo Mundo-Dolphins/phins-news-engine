@@ -44,6 +44,31 @@ func TestImpactCountsMovedAndRetyped(t *testing.T) {
 	}
 }
 
+func TestImpactSeparatesFramingOnlyMoves(t *testing.T) {
+	db := openTestDB(t)
+	cfg := enabledConfig(t)
+	cfg.Clustering.GeneratedRulesPath = filepath.Join(t.TempDir(), "generated.yml")
+	if err := os.WriteFile(cfg.Clustering.GeneratedRulesPath, []byte(impactGenerated), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	seedArticles(t, db, "t", eventsignals.EventTypeTransaction, "Isotopes sign veteran linebacker amid zzqx whispers")
+	seedArticles(t, db, "a", eventsignals.EventTypeAnalysis, "Isotopes breakdown amid zzqx whispers")
+
+	rep, err := Impact(context.Background(), db, cfg, 7, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Typed != 2 || rep.Retyped != 1 || rep.Reframed != 1 {
+		t.Fatalf("counts = %+v", rep)
+	}
+	if want := map[string][]string{"analysis -> rumor": {"Isotopes breakdown amid zzqx whispers"}}; !reflect.DeepEqual(rep.ReframedBy, want) {
+		t.Fatalf("ReframedBy = %v, want %v", rep.ReframedBy, want)
+	}
+	if _, ok := rep.RetypedBy["analysis -> rumor"]; ok {
+		t.Fatalf("RetypedBy holds a framing-only move: %v", rep.RetypedBy)
+	}
+}
+
 func TestImpactMissingGeneratedFileChangesNothing(t *testing.T) {
 	db := openTestDB(t)
 	cfg := enabledConfig(t)
