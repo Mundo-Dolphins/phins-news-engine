@@ -281,14 +281,14 @@ func Run(ctx context.Context, configPath string, profile config.Profile, logger 
 			logger.Warn("clustering: " + w)
 		}
 		if path := cfg.Clustering.GeneratedRulesPath; path != "" {
-			missing, merged, err := generatedRulesNotice(path, genWarnings)
+			missing, merged, types, err := generatedRulesNotice(path, genWarnings)
 			if err != nil {
 				return fmt.Errorf("load generated clustering rules: %w", err)
 			}
 			if missing {
 				logger.Warn("clustering: generated rules file not found; no generated rules merged (check clustering.generated_rules_path)", "path", path)
 			} else {
-				logger.Info("generated clustering rules merged", "path", path, "phrases", merged)
+				logger.Info("generated clustering rules merged", "path", path, "phrases", merged, "types", types)
 			}
 		}
 		if cfg.Clustering.RulesVersion != "" && cfg.Clustering.RulesVersion != rulesFile.Version {

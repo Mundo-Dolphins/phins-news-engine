@@ -97,9 +97,13 @@ func newTypeCommand() *cobra.Command {
 					return err
 				}
 				defer db.Close()
-				known, err := eventrules.KnownTypeNames(cfg)
-				if err != nil {
-					return fmt.Errorf("events type %s: %w", verb, err)
+				// Only a rejection needs the known names (to keep a declared
+				// action's phrases), so approving works without clustering config.
+				var known []string
+				if !approve {
+					if known, err = eventrules.KnownTypeNames(cfg); err != nil {
+						return fmt.Errorf("events type %s: %w", verb, err)
+					}
 				}
 				decided, err := eventrules.DecideType(cmd.Context(), db, args[0], approve, opts, known, time.Now().UTC())
 				if err != nil {

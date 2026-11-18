@@ -271,6 +271,17 @@ func TestEventsType_ListApproveReject(t *testing.T) {
 	}
 }
 
+func TestEventsType_ApproveNeedsNoClusteringConfig(t *testing.T) {
+	// The default fixture has no clustering rules_path, so the known names
+	// cannot load; approving must not need them.
+	configPath := testsupport.WriteFixture(t)
+	ids := seedProposals(t, configPath,
+		eventruleproposal.Proposal{Kind: eventruleproposal.KindType, TypeName: "kicking error", Description: "Misses.", Status: eventruleproposal.StatusPending, PromptVersion: "v1"})
+	if out, err := testsupport.Execute(t, "--config", configPath, "events", "type", "approve", ids[0]); err != nil || !strings.Contains(out, "approved") {
+		t.Fatalf("approve without clustering config: %v\n%s", err, out)
+	}
+}
+
 func TestEventsType_ApproveFlagsAndAddPhrase(t *testing.T) {
 	configPath := gateFixture(t, "")
 	ids := seedProposals(

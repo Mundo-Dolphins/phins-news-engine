@@ -534,7 +534,8 @@ func Apply(ctx context.Context, d Deps, toApply []eventruleproposal.Proposal, no
 // types that one of them targets (returned as gatedTypes; the ones with no
 // phrase in r.Waiting). An approved type already in the generated file is
 // only marked; one whose name taxonomy declares otherwise is not a type to
-// add: its phrases are those of that action.
+// add: its phrases are those of that action (or orphans when it has none),
+// the same filter withApprovedTypes uses.
 func buildCandidate(r *ApplyResult, taxonomy eventsignals.Taxonomy, existing AppliedSet, toApply, types []eventruleproposal.Proposal) (AppliedSet, []eventruleproposal.Proposal) {
 	actions := map[string]bool{}
 	for _, a := range taxonomy.ActionPriority() {
@@ -548,9 +549,10 @@ func buildCandidate(r *ApplyResult, taxonomy eventsignals.Taxonomy, existing App
 	for _, s := range taxonomy.SignalPriority() {
 		signals[string(s)] = true
 	}
+	declared := declaredNames(taxonomy)
 	approved := map[string]bool{}
 	for _, p := range types {
-		if !actions[p.TypeName] {
+		if !declared[p.TypeName] && !inFile[p.TypeName] {
 			approved[p.TypeName] = true
 		}
 	}

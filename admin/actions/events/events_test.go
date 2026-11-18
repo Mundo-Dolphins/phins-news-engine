@@ -19,6 +19,7 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/admin/actions/events"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventruleproposal"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
+	"github.com/Mundo-Dolphins/phins-news-engine/infra/eventrules"
 	infrasqlite "github.com/Mundo-Dolphins/phins-news-engine/infra/sqlite"
 	"github.com/Mundo-Dolphins/phins-news-engine/migrations"
 	"github.com/Mundo-Dolphins/phins-news-engine/testsupport/repofs"
@@ -539,6 +540,18 @@ func TestImpactReport(t *testing.T) {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("object = %s, missing %s", b, want)
 		}
+	}
+}
+
+func TestImpactSummaryNamesFramingOnlyArticles(t *testing.T) {
+	rep := eventrules.ImpactReport{Days: 7, Generic: 4, Changed: 1, Typed: 5, Retyped: 2}
+	base := "last 7 day(s): 1 of 4 generic article(s) would change type, 2 of 5 typed article(s) would change"
+	if got := events.ImpactSummary(rep); got != base {
+		t.Errorf("summary = %q, want %q", got, base)
+	}
+	rep.Reframed = 3
+	if got, want := events.ImpactSummary(rep), base+", 3 framing-only"; got != want {
+		t.Errorf("summary = %q, want %q", got, want)
 	}
 }
 

@@ -376,7 +376,17 @@ func runImpact(ctx context.Context, env action.Env, params any) (action.Result, 
 			"moved": buckets(rep.Moved), "retyped_by": buckets(rep.RetypedBy),
 			"reframed": rep.Reframed, "reframed_by": buckets(rep.ReframedBy),
 		},
-		Summary: fmt.Sprintf("last %d day(s): %d of %d generic article(s) would change type, %d of %d typed article(s) would change",
-			rep.Days, rep.Changed, rep.Generic, rep.Retyped, rep.Typed),
+		Summary: impactSummary(rep),
 	}, nil
+}
+
+// impactSummary is the one-line result of an impact report; framing-only
+// articles (typed by an after_action only) are named when there are any.
+func impactSummary(rep eventrules.ImpactReport) string {
+	s := fmt.Sprintf("last %d day(s): %d of %d generic article(s) would change type, %d of %d typed article(s) would change",
+		rep.Days, rep.Changed, rep.Generic, rep.Retyped, rep.Typed)
+	if rep.Reframed > 0 {
+		s += fmt.Sprintf(", %d framing-only", rep.Reframed)
+	}
+	return s
 }

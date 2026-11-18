@@ -158,6 +158,22 @@ func TestApply_PhraseOfARejectedTypeIsAnOrphan(t *testing.T) {
 	}
 }
 
+func TestApply_TypeNamedLikeAHandWrittenEventTypeIsNotAdded(t *testing.T) {
+	h := newHarness(t)
+	// "analysis" is a hand-written event type with no action of that name.
+	h.approvedType(t, "analysis", "")
+	orphan := h.approvedPhrase(t, "analysis", "a deep dive", "a4")
+
+	r := h.applyApproved(t)
+
+	if got := idsOf(r.Orphans); !slices.Equal(got, []string{orphan.ID}) {
+		t.Errorf("Orphans %v", got)
+	}
+	if len(r.Types) != 0 || len(r.Gated) != 0 || len(h.written) != 0 {
+		t.Errorf("types %+v gated %+v written %+v, want nothing written", r.Types, r.Gated, h.written)
+	}
+}
+
 func TestApply_GateBlockedKeepsTypeAndPhraseApproved(t *testing.T) {
 	h := newHarness(t)
 	typ := h.approvedType(t, "kicking-error", "")
