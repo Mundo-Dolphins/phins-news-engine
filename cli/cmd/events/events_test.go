@@ -271,6 +271,58 @@ func TestEventsType_ListApproveReject(t *testing.T) {
 	}
 }
 
+func TestEventsType_ApproveFlagsAndAddPhrase(t *testing.T) {
+	configPath := gateFixture(t, "")
+	ids := seedProposals(
+		t, configPath,
+		eventruleproposal.Proposal{Kind: eventruleproposal.KindType, TypeName: "kicking error", Description: "Misses.", Status: eventruleproposal.StatusPending, PromptVersion: "v1"},
+		eventruleproposal.Proposal{Kind: eventruleproposal.KindType, TypeName: "betting odds", Description: "Lines.", Status: eventruleproposal.StatusPending, PromptVersion: "v1"},
+	)
+	kicking, odds := ids[0], ids[1]
+
+	if _, err := testsupport.Execute(t, "--config", configPath, "events", "type", "add-phrase", kicking, "misses a kick"); err == nil || !strings.Contains(err.Error(), "approve it before adding phrases") {
+		t.Errorf("add-phrase on a pending type: err = %v", err)
+	}
+	if _, err := testsupport.Execute(t, "--config", configPath, "events", "type", "approve", odds, "--window", "0s"); err == nil || !strings.Contains(err.Error(), "window") {
+		t.Errorf("approve with a bad window: err = %v", err)
+	}
+	if out, err := testsupport.Execute(t, "--config", configPath, "events", "type", "approve", kicking, "--window", "72h", "--referential"); err != nil || !strings.Contains(out, "approved") {
+		t.Fatalf("approve: %v\n%s", err, out)
+	}
+	out, err := testsupport.Execute(t, "--config", configPath, "events", "type", "add-phrase", kicking, "Misses A Kick")
+	if want := "Phrase \"misses a kick\" proposed for kicking-error"; err != nil || !strings.Contains(out, want) {
+		t.Fatalf("add-phrase: %v\n%q, want it to contain %q", err, out, want)
+	}
+	if _, err := testsupport.Execute(t, "--config", configPath, "events", "type", "reject", odds, "--window", "72h"); err == nil {
+		t.Error("reject takes no --window")
+	}
+
+	db, err := infrasqlite.Open(filepath.Join(filepath.Dir(configPath), "operational.db"), 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := sqliteeventruleproposal.NewRepository(db)
+	p, err := repo.Get(context.Background(), kicking)
+	if err != nil || p.Status != eventruleproposal.StatusApproved || p.TypeWindow != "72h" || !p.TypeReferential {
+		t.Errorf("approved type = %+v, %v; want 72h and referential", p, err)
+	}
+	if p, _ := repo.Get(context.Background(), odds); p.Status != eventruleproposal.StatusPending {
+		t.Errorf("odds is %s, want pending after a bad window", p.Status)
+	}
+	pending, err := repo.ListByStatus(context.Background(), eventruleproposal.StatusPending)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, q := range pending {
+		found = found || (q.Kind == eventruleproposal.KindPhrase && q.Target == "kicking-error" && q.Phrase == "misses a kick" && q.PromptVersion == "manual")
+	}
+	if !found {
+		t.Errorf("no pending manual phrase for kicking-error in %+v", pending)
+	}
+}
+
 type noopEventRuleLLM struct{}
 
 func (noopEventRuleLLM) DiscoverTopics(context.Context, []appout.EventRuleArticle, []appout.KnownEventKind) ([]appout.EventTopicProposal, error) {

@@ -52,7 +52,7 @@ func openDB(cmd *cobra.Command, cfg *config.Config) (*sql.DB, error) {
 // newTypeCommand groups the decisions on new event type proposals. The
 // cycle applies an approved type together with its first approved phrase.
 func newTypeCommand() *cobra.Command {
-	typeCmd := &cobra.Command{Use: "type", Short: "List, approve, reject, merge or normalize new event type proposals (an approved type is applied with its first approved phrase)"}
+	typeCmd := &cobra.Command{Use: "type", Short: "List, approve, reject, merge or normalize new event type proposals and add phrases to approved ones (an approved type is applied with its first approved phrase)"}
 	typeCmd.AddCommand(&cobra.Command{
 		Use:   "list",
 		Short: "List the pending and approved event type proposals with their ids",
@@ -82,7 +82,8 @@ func newTypeCommand() *cobra.Command {
 		},
 	})
 	decide := func(verb, past string, approve bool) *cobra.Command {
-		return &cobra.Command{
+		var opts eventrules.TypeApproval
+		cmd := &cobra.Command{
 			Use:   verb + " <proposal-id>",
 			Short: "Mark an event type proposal as " + past + " (nothing is applied here; an approved type is applied with its first approved phrase)",
 			Args:  cobra.ExactArgs(1),
@@ -96,7 +97,11 @@ func newTypeCommand() *cobra.Command {
 					return err
 				}
 				defer db.Close()
-				decided, err := eventrules.DecideType(cmd.Context(), db, args[0], approve, eventrules.TypeApproval{}, time.Now().UTC())
+				known, err := eventrules.KnownTypeNames(cfg)
+				if err != nil {
+					return fmt.Errorf("events type %s: %w", verb, err)
+				}
+				decided, err := eventrules.DecideType(cmd.Context(), db, args[0], approve, opts, known, time.Now().UTC())
 				if err != nil {
 					return fmt.Errorf("events type %s: %w", verb, err)
 				}
@@ -104,9 +109,37 @@ func newTypeCommand() *cobra.Command {
 				return nil
 			},
 		}
+		if approve {
+			cmd.Use += " [--window 72h] [--referential]"
+			cmd.Flags().StringVar(&opts.Window, "window", "", "match window of the approved type, a positive duration (default 48h)")
+			cmd.Flags().BoolVar(&opts.Referential, "referential", false, "the type is a framing (such as analysis or a quote), not a concrete event")
+		}
+		return cmd
 	}
 	typeCmd.AddCommand(decide("approve", "approved", true))
 	typeCmd.AddCommand(decide("reject", "rejected", false))
+	typeCmd.AddCommand(&cobra.Command{
+		Use:   "add-phrase <proposal-id> <phrase>",
+		Short: "Propose a trigger phrase for an approved event type (stored pending; review it with `events review` or the panel)",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := config.Load(shared.ConfigPath)
+			if err != nil {
+				return err
+			}
+			db, err := openDB(cmd, cfg)
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			added, err := eventrules.AddTypePhrase(cmd.Context(), db, args[0], args[1], time.Now().UTC())
+			if err != nil {
+				return fmt.Errorf("events type add-phrase: %w", err)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Phrase %q proposed for %s (%s); review it in the queue.\n", added.Phrase, added.Target, added.ID)
+			return nil
+		},
+	})
 	var into string
 	mergeCmd := &cobra.Command{
 		Use:   "merge <proposal-id> --into <proposal-id|type-name>",

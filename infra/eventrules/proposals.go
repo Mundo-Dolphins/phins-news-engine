@@ -30,7 +30,16 @@ var (
 	// ErrBadTypeApproval reports an approval whose window is not a positive
 	// duration; errors.Is matches it.
 	ErrBadTypeApproval = errors.New("bad type approval")
+	// ErrTypeNotApproved reports a phrase added to a type proposal that is
+	// not approved; errors.Is matches it.
+	ErrTypeNotApproved = errors.New("type proposal not approved")
+	// ErrEmptyPhrase reports a blank phrase; errors.Is matches it.
+	ErrEmptyPhrase = errors.New("empty phrase")
 )
+
+// ManualPromptVersion is the prompt version of a phrase proposal the
+// operator wrote (AddTypePhrase).
+const ManualPromptVersion = "manual"
 
 // textError carries a fixed message and matches a sentinel through errors.Is.
 type textError struct {
@@ -73,8 +82,10 @@ type TypeApproval struct {
 // the repository's not-found error (errors.Is(err, sql.ErrNoRows)). An
 // approval stores opts with the decision; a window that is not a positive
 // duration returns ErrBadTypeApproval. A rejection also rejects the pending
-// and approved phrase proposals targeting the type. Nothing is applied here.
-func DecideType(ctx context.Context, db *sql.DB, id string, approve bool, opts TypeApproval, now time.Time) (eventruleproposal.Proposal, error) {
+// and approved phrase proposals targeting the type, unless its name is in
+// known, the known event type and action names (KnownTypeNames): those
+// phrases belong to that declared action. Nothing is applied here.
+func DecideType(ctx context.Context, db *sql.DB, id string, approve bool, opts TypeApproval, known []string, now time.Time) (eventruleproposal.Proposal, error) {
 	repo := sqliteeventruleproposal.NewRepository(db)
 	p, err := repo.Get(ctx, id)
 	if err != nil {
@@ -107,13 +118,78 @@ func DecideType(ctx context.Context, db *sql.DB, id string, approve bool, opts T
 		}
 		return eventruleproposal.Proposal{}, err
 	}
-	if !approve {
+	if !approve && !slices.Contains(known, decided.TypeName) {
 		// A rejected type takes its phrases with it.
 		if _, err := repo.RejectPhrasesFor(ctx, decided.TypeName, now); err != nil {
 			return decided, err
 		}
 	}
 	return decided, nil
+}
+
+// AddTypePhrase stores phrase, written by the operator, as a pending phrase
+// proposal for the approved type proposal typeID at now: target kind action,
+// target the type name, prompt version ManualPromptVersion and no evidence.
+// It is then reviewed in the phrase queue like any other. A blank phrase
+// returns ErrEmptyPhrase, a phrase proposal ErrNotTypeProposal, a type
+// proposal that is not approved ErrTypeNotApproved, the same phrase already
+// rejected ErrAlreadyDecided, and an unknown id the repository's not-found
+// error. The same phrase still pending, approved or applied is returned as
+// it is.
+func AddTypePhrase(ctx context.Context, db *sql.DB, typeID, phrase string, now time.Time) (eventruleproposal.Proposal, error) {
+	if strings.TrimSpace(phrase) == "" {
+		return eventruleproposal.Proposal{}, &textError{msg: "the phrase is empty", sentinel: ErrEmptyPhrase}
+	}
+	repo := sqliteeventruleproposal.NewRepository(db)
+	t, err := repo.Get(ctx, typeID)
+	if err != nil {
+		return eventruleproposal.Proposal{}, err
+	}
+	if t.Kind != eventruleproposal.KindType {
+		return eventruleproposal.Proposal{}, &textError{
+			msg:      fmt.Sprintf("proposal %s is a %s proposal, not a type proposal", t.ID, t.Kind),
+			sentinel: ErrNotTypeProposal,
+		}
+	}
+	if t.Status != eventruleproposal.StatusApproved {
+		return eventruleproposal.Proposal{}, &textError{
+			msg:      fmt.Sprintf("event type proposal %s (%s) is %s; approve it before adding phrases", t.ID, t.TypeName, t.Status),
+			sentinel: ErrTypeNotApproved,
+		}
+	}
+	p, err := repo.Upsert(ctx, eventruleproposal.Proposal{
+		Kind: eventruleproposal.KindPhrase, TargetKind: eventruleproposal.TargetAction, Target: t.TypeName,
+		Phrase: phrase, Status: eventruleproposal.StatusPending, PromptVersion: ManualPromptVersion, CreatedAt: now.UTC(),
+	})
+	if err != nil {
+		return eventruleproposal.Proposal{}, err
+	}
+	if p.Status == eventruleproposal.StatusRejected {
+		return eventruleproposal.Proposal{}, &textError{
+			msg:      fmt.Sprintf("phrase %q for %s was already rejected (%s)", p.Phrase, t.TypeName, p.ID),
+			sentinel: ErrAlreadyDecided,
+		}
+	}
+	return p, nil
+}
+
+// TypePhraseCounts counts the pending and approved action phrase proposals
+// by target, the names of the types they would apply to.
+func TypePhraseCounts(ctx context.Context, db *sql.DB) (map[string]int, error) {
+	repo := sqliteeventruleproposal.NewRepository(db)
+	counts := map[string]int{}
+	for _, st := range []eventruleproposal.Status{eventruleproposal.StatusPending, eventruleproposal.StatusApproved} {
+		ps, err := repo.ListByStatus(ctx, st)
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range ps {
+			if p.Kind == eventruleproposal.KindPhrase && p.TargetKind == eventruleproposal.TargetAction {
+				counts[p.Target]++
+			}
+		}
+	}
+	return counts, nil
 }
 
 // MergeResult is the outcome of MergeType: the rejected Source and either the
@@ -133,7 +209,8 @@ type MergeResult struct {
 // known, the known event type and action names (KnownTypeNames). Either way
 // the source is rejected. The pending and approved phrase proposals of an
 // approved source follow it: they are retargeted to the target proposal's
-// name, or rejected when it is merged into a known name. A phrase source
+// name, or rejected when it is merged into a known name (kept when the
+// source's own name is in known: they belong to that action). A phrase source
 // returns ErrNotTypeProposal, a
 // decided one ErrAlreadyDecided, a refused target ErrBadMergeTarget, and an
 // unknown id the repository's not-found error.
@@ -171,8 +248,10 @@ func MergeType(ctx context.Context, db *sql.DB, id, into string, known []string,
 		if err := repo.Transition(ctx, rejected, src.Status); err != nil {
 			return MergeResult{}, decidedElsewhere(err)
 		}
-		if _, err := repo.RejectPhrasesFor(ctx, src.TypeName, now); err != nil {
-			return MergeResult{}, err
+		if !slices.Contains(known, src.TypeName) {
+			if _, err := repo.RejectPhrasesFor(ctx, src.TypeName, now); err != nil {
+				return MergeResult{}, err
+			}
 		}
 		return MergeResult{Source: rejected, CoveredBy: name}, nil
 	}

@@ -609,12 +609,12 @@ func (s *session) apply() error {
 }
 
 // printOrphans lists the approved phrases whose target is neither a declared
-// action nor an approved type proposal; they stay approved.
+// action or signal nor an approved type proposal; they stay approved.
 func printOrphans(w io.Writer, orphans []eventruleproposal.Proposal) {
 	if len(orphans) == 0 {
 		return
 	}
-	fmt.Fprintf(w, "%d approved phrase(s) target an event type that is gone; they stay approved (reject them):\n", len(orphans))
+	fmt.Fprintf(w, "%d approved phrase(s) have a target that is neither a declared action or signal nor an approved event type; they stay approved (reject them):\n", len(orphans))
 	for _, p := range orphans {
 		fmt.Fprintf(w, "  - %s %s %s %q\n", p.ID, p.TargetKind, p.Target, p.Phrase)
 	}

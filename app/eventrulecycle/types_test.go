@@ -253,3 +253,13 @@ func TestRun_CountsApprovedTypesWaitingForPhrases(t *testing.T) {
 		t.Errorf("no waiting count:\n%s", out)
 	}
 }
+
+func TestPrintOrphansSaysTheTargetIsNeitherDeclaredNorApproved(t *testing.T) {
+	var b strings.Builder
+	eventrulecycle.PrintOrphans(&b, []eventruleproposal.Proposal{{ID: "evr_1", TargetKind: eventruleproposal.TargetAction, Target: "kicking-error", Phrase: "misses a kick"}})
+	want := "1 approved phrase(s) have a target that is neither a declared action or signal nor an approved event type; they stay approved (reject them):\n" +
+		"  - evr_1 action kicking-error \"misses a kick\"\n"
+	if b.String() != want {
+		t.Errorf("printOrphans =\n%q\nwant\n%q", b.String(), want)
+	}
+}

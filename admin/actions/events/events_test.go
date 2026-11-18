@@ -126,7 +126,7 @@ func TestMetadata(t *testing.T) {
 		"events.type_list": {action.KindRead, 2, false}, "events.gate": {action.KindRead, 2, false},
 		"events.impact":       {action.KindRead, 2, true},
 		"events.type_approve": {action.KindWrite, 1, false}, "events.type_reject": {action.KindWrite, 1, false},
-		"events.type_merge": {action.KindWrite, 1, false},
+		"events.type_merge": {action.KindWrite, 1, false}, "events.type_add_phrase": {action.KindWrite, 1, false},
 	}
 	var as []action.Action
 	for _, a := range events.Actions() {
@@ -323,6 +323,98 @@ func TestTypeDecideAlreadyDecidedIsConflict(t *testing.T) {
 
 func TestTypeDecideMissingIsNotFound(t *testing.T) {
 	_, err := newFixture(t).run("events.type_approve", `{"id":"nope"}`)
+	wantCode(t, err, action.CodeNotFound)
+}
+
+func TestTypeApproveStoresWindowAndReferential(t *testing.T) {
+	f := newFixture(t)
+	a := f.seed(typeProposal("a", eventruleproposal.StatusPending))
+	b := f.seed(typeProposal("b", eventruleproposal.StatusPending))
+	res, err := f.run("events.type_approve", `{"id":"`+a+`","window":"72h","referential":true}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if obj, _ := res.Object.(map[string]any); obj["window"] != "72h" || obj["referential"] != true {
+		t.Errorf("object = %v", res.Object)
+	}
+	got, err := sqliteeventruleproposal.NewRepository(f.db).Get(context.Background(), a)
+	if err != nil || got.Status != eventruleproposal.StatusApproved || got.TypeWindow != "72h" || !got.TypeReferential {
+		t.Fatalf("stored = %+v, %v", got, err)
+	}
+	_, err = f.run("events.type_approve", `{"id":"`+b+`","window":"0s"}`)
+	wantCode(t, err, action.CodeInvalidParams)
+	if f.status(b) != eventruleproposal.StatusPending {
+		t.Errorf("status = %s, want pending after a bad window", f.status(b))
+	}
+}
+
+func TestTypeListCarriesWindowReferentialAndPhrases(t *testing.T) {
+	f := newFixture(t)
+	f.seed(typeProposal("waiting", eventruleproposal.StatusApproved))
+	withPhrase := typeProposal("kicking-error", eventruleproposal.StatusApproved)
+	withPhrase.TypeWindow, withPhrase.TypeReferential = "72h", true
+	f.seed(withPhrase)
+	ph := phraseProposal()
+	ph.Target, ph.Phrase = "kicking-error", "misses a kick"
+	f.seed(ph)
+	res, err := f.run("events.type_list", `{}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byType := map[string]map[string]any{}
+	for _, r := range res.Rows {
+		name, _ := r["type"].(string)
+		byType[name] = r
+	}
+	if r := byType["waiting"]; r["window"] != "48h" || r["referential"] != false || r["phrases"] != 0 {
+		t.Errorf("waiting row = %v", r)
+	}
+	if r := byType["kicking-error"]; r["window"] != "72h" || r["referential"] != true || r["phrases"] != 1 {
+		t.Errorf("kicking-error row = %v", r)
+	}
+}
+
+func TestTypeRejectKeepsThePhrasesOfADeclaredAction(t *testing.T) {
+	f := newFixture(t)
+	a := f.seed(typeProposal("sign", eventruleproposal.StatusApproved))
+	ph := f.seed(phraseProposal())
+	if _, err := f.run("events.type_reject", `{"id":"`+a+`"}`); err != nil {
+		t.Fatal(err)
+	}
+	if f.status(ph) != eventruleproposal.StatusPending {
+		t.Errorf("phrase of the declared action sign is %s, want pending", f.status(ph))
+	}
+}
+
+func TestTypeAddPhrase(t *testing.T) {
+	f := newFixture(t)
+	a := f.seed(typeProposal("kicking-error", eventruleproposal.StatusApproved))
+	b := f.seed(typeProposal("betting-odds", eventruleproposal.StatusPending))
+	res, err := f.run("events.type_add_phrase", `{"id":"`+a+`","phrase":"Misses a kick"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	obj, _ := res.Object.(map[string]any)
+	id, _ := obj["id"].(string)
+	if obj["phrase"] != "misses a kick" || obj["target"] != "kicking-error" || obj["status"] != "pending" || id == "" {
+		t.Fatalf("object = %v", res.Object)
+	}
+	if want := `Phrase "misses a kick" proposed for kicking-error; review it in the queue.`; res.Summary != want {
+		t.Errorf("summary = %q, want %q", res.Summary, want)
+	}
+	p, err := sqliteeventruleproposal.NewRepository(f.db).Get(context.Background(), id)
+	if err != nil || p.Status != eventruleproposal.StatusPending || p.PromptVersion != "manual" || p.TargetKind != eventruleproposal.TargetAction {
+		t.Errorf("stored = %+v, %v", p, err)
+	}
+
+	_, err = f.run("events.type_add_phrase", `{"id":"`+b+`","phrase":"posts the line"}`)
+	wantCode(t, err, action.CodeConflict)
+	if !strings.Contains(err.Error(), "approve it before adding phrases") {
+		t.Errorf("err = %v", err)
+	}
+	_, err = f.run("events.type_add_phrase", `{"id":"`+a+`","phrase":"  "}`)
+	wantCode(t, err, action.CodeInvalidParams)
+	_, err = f.run("events.type_add_phrase", `{"id":"nope","phrase":"x y"}`)
 	wantCode(t, err, action.CodeNotFound)
 }
 

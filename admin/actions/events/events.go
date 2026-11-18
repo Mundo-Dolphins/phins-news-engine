@@ -1,6 +1,6 @@
 // Package events holds the admin actions over event rule discovery: the new
 // event type proposals, the clustering gate and the impact report of the
-// generated rules. They mirror the `events type list|approve|reject|merge`,
+// generated rules. They mirror the `events type list|approve|reject|merge|add-phrase`,
 // `events gate` and `events impact` CLI commands. Reads are
 // available in both modes; deciding a type proposal is local-only.
 package events
@@ -38,6 +38,17 @@ type idParams struct {
 	ID string `json:"id" help:"event type proposal id" required:"true"`
 }
 
+type approveParams struct {
+	ID          string `json:"id" help:"event type proposal id" required:"true"`
+	Window      string `json:"window" help:"match window of the approved type, a positive duration such as 72h (blank means 48h)"`
+	Referential bool   `json:"referential" help:"the type is a framing (such as analysis or a quote), not a concrete event"`
+}
+
+type addPhraseParams struct {
+	ID     string `json:"id" help:"approved event type proposal id" required:"true"`
+	Phrase string `json:"phrase" help:"trigger phrase for the type; it is proposed pending and reviewed in the queue" required:"true"`
+}
+
 type mergeParams struct {
 	ID   string `json:"id" help:"event type proposal id to fold away" required:"true"`
 	Into string `json:"into" help:"id of the pending or approved type proposal that gains its evidence, or the name of a known event type or action that already covers it" required:"true"`
@@ -52,13 +63,13 @@ type impactParams struct {
 }
 
 // Actions returns events.type_list, .gate, .impact, .type_approve,
-// .type_reject and .type_merge, and the rule review actions events.rules_discover,
+// .type_reject, .type_merge and .type_add_phrase, and the rule review actions events.rules_discover,
 // .rules_queue, .rules_decide, .rules_reject_failing and .rules_apply.
 func Actions() []action.Action {
 	return append([]action.Action{
 		{
 			Name: "events.type_list", Group: group, Title: "List event type proposals",
-			Description: "Lists the pending and approved new event type proposals with their evidence article ids.",
+			Description: "Lists the pending and approved new event type proposals with their evidence article ids, approval window, referential choice and count of pending or approved phrases.",
 			Kind:        action.KindRead, Modes: bothModes, Params: noParams{}, Run: runTypeList,
 		},
 		{
@@ -73,24 +84,23 @@ func Actions() []action.Action {
 		},
 		{
 			Name: "events.type_approve", Group: group, Title: "Approve event type proposal",
-			Description: "Marks a pending new event type proposal as approved. Nothing is applied here: an approved type is applied with its first approved phrase by events.rules_apply.",
-			Kind:        action.KindWrite, Modes: localOnly, Params: idParams{},
-			Run: func(ctx context.Context, env action.Env, params any) (action.Result, error) {
-				return runDecide(ctx, env, params, true)
-			},
+			Description: "Marks a pending new event type proposal as approved with its match window (default 48h) and whether it is referential. Nothing is applied here: an approved type is applied with its first approved phrase by events.rules_apply.",
+			Kind:        action.KindWrite, Modes: localOnly, Params: approveParams{}, Run: runApprove,
 		},
 		{
 			Name: "events.type_reject", Group: group, Title: "Reject event type proposal",
-			Description: "Marks a pending or approved new event type proposal as rejected.",
-			Kind:        action.KindWrite, Modes: localOnly, Params: idParams{},
-			Run: func(ctx context.Context, env action.Env, params any) (action.Result, error) {
-				return runDecide(ctx, env, params, false)
-			},
+			Description: "Marks a pending or approved new event type proposal as rejected, with its pending and approved phrases.",
+			Kind:        action.KindWrite, Modes: localOnly, Params: idParams{}, Run: runReject,
 		},
 		{
 			Name: "events.type_merge", Group: group, Title: "Merge event type proposal",
 			Description: "Folds a pending or approved new event type proposal into another proposal (which gains its evidence) or into a known event type or action that already covers it. The source is rejected.",
 			Kind:        action.KindWrite, Modes: localOnly, Params: mergeParams{}, Run: runMerge,
+		},
+		{
+			Name: "events.type_add_phrase", Group: group, Title: "Add a phrase to an event type",
+			Description: "Proposes a trigger phrase for an approved new event type: it is stored pending (prompt version manual, no evidence) and reviewed in the phrase queue with its impact.",
+			Kind:        action.KindWrite, Modes: localOnly, Params: addPhraseParams{}, Run: runAddPhrase,
 		},
 	}, ruleActions()...)
 }
@@ -105,9 +115,9 @@ func proposalError(err error) error {
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return action.NotFound(err)
-	case errors.Is(err, eventrules.ErrBadMergeTarget):
+	case errors.Is(err, eventrules.ErrBadMergeTarget), errors.Is(err, eventrules.ErrBadTypeApproval), errors.Is(err, eventrules.ErrEmptyPhrase):
 		return &action.Error{Code: action.CodeInvalidParams, Message: err.Error()}
-	case errors.Is(err, eventrules.ErrNotTypeProposal), errors.Is(err, eventrules.ErrAlreadyDecided):
+	case errors.Is(err, eventrules.ErrNotTypeProposal), errors.Is(err, eventrules.ErrAlreadyDecided), errors.Is(err, eventrules.ErrTypeNotApproved):
 		return action.Conflict(err)
 	}
 	return err
@@ -131,11 +141,16 @@ func runTypeList(ctx context.Context, env action.Env, _ any) (action.Result, err
 	if err != nil {
 		return action.Result{}, err
 	}
+	phrases, err := eventrules.TypePhraseCounts(ctx, env.DB)
+	if err != nil {
+		return action.Result{}, err
+	}
 	rows := make([]map[string]any, 0, len(ps))
 	for _, p := range ps {
 		rows = append(rows, map[string]any{
 			"id": p.ID, "status": string(p.Status), "type": p.TypeName, "description": p.Description,
 			"evidence": strings.Join(p.EvidenceIDs, ", "),
+			"window":   p.TypeWindow, "referential": p.TypeReferential, "phrases": phrases[p.TypeName],
 		})
 	}
 	summary := fmt.Sprintf("%d event type proposal(s)", len(rows))
@@ -148,29 +163,69 @@ func runTypeList(ctx context.Context, env action.Env, _ any) (action.Result, err
 		Columns: []action.Column{
 			{Key: "id", Label: "ID"}, {Key: "status", Label: "Status"}, {Key: "type", Label: "Type"},
 			{Key: "description", Label: "Description"}, {Key: "evidence", Label: "Evidence"},
+			{Key: "window", Label: "Window"}, {Key: "referential", Label: "Referential"}, {Key: "phrases", Label: "Phrases"},
 		},
 		Rows: rows, Summary: summary,
 	}, nil
 }
 
-func runDecide(ctx context.Context, env action.Env, params any, approve bool) (action.Result, error) {
+func runApprove(ctx context.Context, env action.Env, params any) (action.Result, error) {
+	p, ok := params.(*approveParams)
+	if !ok {
+		return action.Result{}, errBadParams
+	}
+	return runDecide(ctx, env, p.ID, true, eventrules.TypeApproval{Window: p.Window, Referential: p.Referential})
+}
+
+func runReject(ctx context.Context, env action.Env, params any) (action.Result, error) {
 	p, ok := params.(*idParams)
 	if !ok {
 		return action.Result{}, errBadParams
+	}
+	return runDecide(ctx, env, p.ID, false, eventrules.TypeApproval{})
+}
+
+func runDecide(ctx context.Context, env action.Env, id string, approve bool, opts eventrules.TypeApproval) (action.Result, error) {
+	known, err := knownTypeNames(env)
+	if err != nil {
+		return action.Result{}, err
 	}
 	past := "rejected"
 	if approve {
 		past = "approved"
 	}
-	decided, err := eventrules.DecideType(ctx, env.DB, p.ID, approve, eventrules.TypeApproval{}, env.Now().UTC())
+	decided, err := eventrules.DecideType(ctx, env.DB, id, approve, opts, known, env.Now().UTC())
 	if err != nil {
 		return action.Result{}, proposalError(err)
 	}
 	env.Log.Info("event type proposal decided", "id", decided.ID, "type", decided.TypeName, "status", string(decided.Status), "by", env.Actor)
 	return action.Result{
-		Render:  "object",
-		Object:  map[string]any{"id": decided.ID, "type": decided.TypeName, "status": string(decided.Status)},
+		Render: "object",
+		Object: map[string]any{
+			"id": decided.ID, "type": decided.TypeName, "status": string(decided.Status),
+			"window": decided.TypeWindow, "referential": decided.TypeReferential,
+		},
 		Summary: fmt.Sprintf("Event type proposal %s (%s) %s.", decided.ID, decided.TypeName, past),
+	}, nil
+}
+
+func runAddPhrase(ctx context.Context, env action.Env, params any) (action.Result, error) {
+	p, ok := params.(*addPhraseParams)
+	if !ok {
+		return action.Result{}, errBadParams
+	}
+	added, err := eventrules.AddTypePhrase(ctx, env.DB, p.ID, p.Phrase, env.Now().UTC())
+	if err != nil {
+		return action.Result{}, proposalError(err)
+	}
+	env.Log.Info("event type phrase proposed", "type_id", p.ID, "id", added.ID, "target", added.Target, "by", env.Actor)
+	return action.Result{
+		Render: "object",
+		Object: map[string]any{
+			"id": added.ID, "target_kind": string(added.TargetKind), "target": added.Target,
+			"phrase": added.Phrase, "status": string(added.Status),
+		},
+		Summary: fmt.Sprintf("Phrase %q proposed for %s; review it in the queue.", added.Phrase, added.Target),
 	}, nil
 }
 
