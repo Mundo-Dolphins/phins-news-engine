@@ -460,6 +460,28 @@ func TestDecideTypeAndMergeKeepThePhrasesOfADeclaredAction(t *testing.T) {
 	}
 }
 
+func TestMergeType_IntoProposalKeepsThePhrasesOfADeclaredAction(t *testing.T) {
+	// An approved type proposal named like a declared action, merged into
+	// another proposal: that action's phrases must not move to the target.
+	db := openTestDB(t)
+	ids := seedProposals(t, db,
+		typeProposal("sign", eventruleproposal.StatusApproved),
+		typeProposal("kicking-error", eventruleproposal.StatusPending),
+		phraseProposal(),
+	)
+	res, err := MergeType(context.Background(), db, ids[0], ids[1], knownNames(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Retargeted) != 0 {
+		t.Errorf("Retargeted = %+v, want none", res.Retargeted)
+	}
+	p, err := sqliteeventruleproposal.NewRepository(db).Get(context.Background(), ids[2])
+	if err != nil || p.Target != "sign" || p.Status != eventruleproposal.StatusPending {
+		t.Errorf("phrase = %+v, %v; want it untouched (sign, pending)", p, err)
+	}
+}
+
 func TestAddTypePhrase(t *testing.T) {
 	db := openTestDB(t)
 	ids := seedProposals(t, db,

@@ -386,6 +386,18 @@ func TestTypeRejectKeepsThePhrasesOfADeclaredAction(t *testing.T) {
 	}
 }
 
+func TestTypeApproveNeedsNoConfiguration(t *testing.T) {
+	f := newFixture(t)
+	a := f.seed(typeProposal("a", eventruleproposal.StatusPending))
+	f.cfg = nil
+	if _, err := f.run("events.type_approve", `{"id":"`+a+`"}`); err != nil {
+		t.Fatalf("approve without a configuration: %v", err)
+	}
+	if f.status(a) != eventruleproposal.StatusApproved {
+		t.Errorf("status = %s, want approved", f.status(a))
+	}
+}
+
 func TestTypeAddPhrase(t *testing.T) {
 	f := newFixture(t)
 	a := f.seed(typeProposal("kicking-error", eventruleproposal.StatusApproved))

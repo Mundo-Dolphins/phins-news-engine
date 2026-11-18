@@ -209,8 +209,9 @@ type MergeResult struct {
 // known, the known event type and action names (KnownTypeNames). Either way
 // the source is rejected. The pending and approved phrase proposals of an
 // approved source follow it: they are retargeted to the target proposal's
-// name, or rejected when it is merged into a known name (kept when the
-// source's own name is in known: they belong to that action). A phrase source
+// name, or rejected when it is merged into a known name (either way kept as
+// they are when the source's own name is in known: they belong to that
+// action). A phrase source
 // returns ErrNotTypeProposal, a
 // decided one ErrAlreadyDecided, a refused target ErrBadMergeTarget, and an
 // unknown id the repository's not-found error.
@@ -267,7 +268,9 @@ func MergeType(ctx context.Context, db *sql.DB, id, into string, known []string,
 		return MergeResult{}, &textError{msg: fmt.Sprintf("merge target %s is %s; only pending or approved type proposals take a merge", dst.ID, dst.Status), sentinel: ErrBadMergeTarget}
 	}
 	var retargeted []eventruleproposal.Proposal
-	if src.Status == eventruleproposal.StatusApproved && src.TypeName != dst.TypeName {
+	// A source named like a declared action does not own that action's
+	// phrases: they stay where they are.
+	if src.Status == eventruleproposal.StatusApproved && src.TypeName != dst.TypeName && !slices.Contains(known, src.TypeName) {
 		if retargeted, err = repo.RetargetPhrases(ctx, src.TypeName, dst.TypeName); err != nil {
 			return MergeResult{}, err
 		}

@@ -186,9 +186,14 @@ func runReject(ctx context.Context, env action.Env, params any) (action.Result, 
 }
 
 func runDecide(ctx context.Context, env action.Env, id string, approve bool, opts eventrules.TypeApproval) (action.Result, error) {
-	known, err := knownTypeNames(env)
-	if err != nil {
-		return action.Result{}, err
+	// Only a rejection needs the known names (to keep a declared action's
+	// phrases), so approving works without a loaded configuration.
+	var known []string
+	if !approve {
+		var err error
+		if known, err = knownTypeNames(env); err != nil {
+			return action.Result{}, err
+		}
 	}
 	past := "rejected"
 	if approve {
