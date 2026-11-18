@@ -346,3 +346,36 @@ func TestMergeLocalOwnedTables_CarriesSessionCandidatesForward(t *testing.T) {
 		t.Errorf("candidates = %v, want [cycle-1/art-1] (frozen set carried forward, incoming rows replaced)", got)
 	}
 }
+
+// A local database from before migration 0049 has no type_window or
+// type_referential columns; the merge copies by explicit column names, so the
+// incoming defaults apply instead of failing the sync.
+func TestMergeLocalOwnedTables_PreviousWithoutTypeApprovalColumns(t *testing.T) {
+	now := time.Now().UTC()
+	previous, previousPath := openMergeTestDB(t, "previous.db")
+	for _, col := range []string{"type_window", "type_referential"} {
+		if _, err := previous.Exec(`ALTER TABLE event_rule_proposals DROP COLUMN ` + col); err != nil {
+			t.Fatalf("drop %s: %v", col, err)
+		}
+	}
+	if _, err := previous.Exec(
+		`INSERT INTO event_rule_proposals (id, kind, type_name, evidence_json, status, prompt_version, created_at, decided_at) VALUES ('evr_old', 'type', 'kicking-error', '[]', 'approved', 'event-rules-v4', ?, ?)`,
+		now, now,
+	); err != nil {
+		t.Fatalf("seed previous: %v", err)
+	}
+	previous.Close()
+
+	incoming, _ := openMergeTestDB(t, "incoming.db")
+	if _, err := sqlite.MergeLocalOwnedTables(context.Background(), incoming, previousPath); err != nil {
+		t.Fatalf("MergeLocalOwnedTables() error = %v, want a pre-0049 local database to merge", err)
+	}
+	var window string
+	var referential int
+	if err := incoming.QueryRow(`SELECT type_window, type_referential FROM event_rule_proposals WHERE id = 'evr_old'`).Scan(&window, &referential); err != nil {
+		t.Fatalf("read evr_old: %v", err)
+	}
+	if window != "48h" || referential != 0 {
+		t.Errorf("evr_old = (%q, %d), want (48h, 0)", window, referential)
+	}
+}

@@ -179,7 +179,7 @@ func runDecide(ctx context.Context, env action.Env, params any, approve bool) (a
 	if approve {
 		past = "approved"
 	}
-	decided, err := eventrules.DecideType(ctx, env.DB, p.ID, approve, env.Now().UTC())
+	decided, err := eventrules.DecideType(ctx, env.DB, p.ID, approve, eventrules.TypeApproval{}, env.Now().UTC())
 	if err != nil {
 		return action.Result{}, proposalError(err)
 	}

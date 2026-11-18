@@ -35,6 +35,9 @@ var (
 	// or a name that is not a known event type or action; errors.Is matches
 	// it.
 	ErrBadMergeTarget = errors.New("bad merge target")
+	// ErrBadTypeApproval reports an approval whose window is not a positive
+	// duration; errors.Is matches it.
+	ErrBadTypeApproval = errors.New("bad type approval")
 )
 
 // textError carries a fixed message and matches a sentinel through errors.Is.
@@ -64,12 +67,21 @@ func ListTypes(ctx context.Context, db *sql.DB) ([]eventruleproposal.Proposal, e
 	return out, nil
 }
 
+// TypeApproval holds the operator's choices when approving a type proposal:
+// the match window (blank means 48h) and whether the type is referential.
+// They are ignored when rejecting.
+type TypeApproval struct {
+	Window      string
+	Referential bool
+}
+
 // DecideType approves or rejects the type proposal id at now and stores the
 // result. A phrase proposal returns ErrNotTypeProposal, an already decided
 // one ErrAlreadyDecided (carrying the domain error text), and an unknown id
-// the repository's not-found error (errors.Is(err, sql.ErrNoRows)). Nothing is applied: a type needs a code
-// change, see Brief.
-func DecideType(ctx context.Context, db *sql.DB, id string, approve bool, now time.Time) (eventruleproposal.Proposal, error) {
+// the repository's not-found error (errors.Is(err, sql.ErrNoRows)). An
+// approval stores opts with the decision; a window that is not a positive
+// duration returns ErrBadTypeApproval. Nothing is applied here.
+func DecideType(ctx context.Context, db *sql.DB, id string, approve bool, opts TypeApproval, now time.Time) (eventruleproposal.Proposal, error) {
 	repo := sqliteeventruleproposal.NewRepository(db)
 	p, err := repo.Get(ctx, id)
 	if err != nil {
@@ -81,17 +93,22 @@ func DecideType(ctx context.Context, db *sql.DB, id string, approve bool, now ti
 			sentinel: ErrNotTypeProposal,
 		}
 	}
-	decide := eventruleproposal.Proposal.Reject
+	var decided eventruleproposal.Proposal
 	if approve {
-		decide = eventruleproposal.Proposal.Approve
+		decided, err = p.ApproveType(opts.Window, opts.Referential, now)
+	} else {
+		decided, err = p.Reject(now)
 	}
-	decided, err := decide(p, now)
 	if err != nil {
-		return eventruleproposal.Proposal{}, &textError{msg: err.Error(), sentinel: ErrAlreadyDecided}
+		sentinel := ErrAlreadyDecided
+		if approve && p.Status == eventruleproposal.StatusPending {
+			sentinel = ErrBadTypeApproval // the kind was checked, so only the window can be wrong
+		}
+		return eventruleproposal.Proposal{}, &textError{msg: err.Error(), sentinel: sentinel}
 	}
 	// Guarded by the status read above: a decision landing in between
 	// (the panel, another CLI) is reported, never overwritten.
-	if err := repo.Transition(ctx, decided, p.Status); err != nil {
+	if err := repo.TransitionType(ctx, decided, p.Status); err != nil {
 		if errors.Is(err, eventruleproposalport.ErrStatusChanged) {
 			return eventruleproposal.Proposal{}, &textError{msg: fmt.Sprintf("proposal %s was decided elsewhere since it was read; reload it", p.ID), sentinel: ErrAlreadyDecided}
 		}
@@ -230,11 +247,21 @@ func NormalizeTypes(ctx context.Context, db *sql.DB, reopenApproved bool, known 
 			}
 		}
 	}
+	applied, err := repo.ListByStatus(ctx, eventruleproposal.StatusApplied)
+	if err != nil {
+		return NormalizeReport{}, err
+	}
+	appliedSlugs := map[string]bool{}
+	for _, p := range applied {
+		if p.Kind == eventruleproposal.KindType {
+			appliedSlugs[eventruleproposal.Slug(p.TypeName)] = true
+		}
+	}
 	covered := make(map[string]bool, len(known))
 	for _, k := range known {
 		covered[k] = true
 	}
-	plan := eventruleproposal.PlanTypeNormalization(ps, covered, reopenApproved, now)
+	plan := eventruleproposal.PlanTypeNormalization(ps, covered, appliedSlugs, reopenApproved, now)
 	if len(plan.Delete) > 0 || len(plan.Insert) > 0 {
 		if err := repo.ReplaceTypes(ctx, plan.Delete, plan.Insert); err != nil {
 			return NormalizeReport{}, err

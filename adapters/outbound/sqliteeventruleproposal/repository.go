@@ -32,7 +32,7 @@ var _ eventruleproposalport.Repository = (*Repository)(nil)
 const timeFormat = time.RFC3339Nano
 
 const selectColumns = `id, kind, target_kind, target, phrase, type_name, description,
-	evidence_json, status, prompt_version, created_at, decided_at`
+	evidence_json, status, prompt_version, created_at, decided_at, type_window, type_referential`
 
 // normalize returns p with phrase and type name trimmed and lowercased, so
 // every consumer (impact, checks, loader) sees identical strings. A type
@@ -44,6 +44,9 @@ func normalize(p eventruleproposal.Proposal) eventruleproposal.Proposal {
 		p.TypeName = eventruleproposal.Slug(p.TypeName)
 	}
 	p.Target = strings.TrimSpace(p.Target)
+	if p.Kind == eventruleproposal.KindType && strings.TrimSpace(p.TypeWindow) == "" {
+		p.TypeWindow = eventruleproposal.DefaultTypeWindow
+	}
 	return p
 }
 
@@ -67,14 +70,16 @@ func scan(s scanner) (eventruleproposal.Proposal, error) {
 		kind, targetKind, state string
 		evidence                string
 		created, decided        any
+		referential             int
 	)
 	if err := s.Scan(&p.ID, &kind, &targetKind, &p.Target, &p.Phrase, &p.TypeName, &p.Description,
-		&evidence, &state, &p.PromptVersion, &created, &decided); err != nil {
+		&evidence, &state, &p.PromptVersion, &created, &decided, &p.TypeWindow, &referential); err != nil {
 		return eventruleproposal.Proposal{}, err
 	}
 	p.Kind = eventruleproposal.Kind(kind)
 	p.TargetKind = eventruleproposal.TargetKind(targetKind)
 	p.Status = eventruleproposal.Status(state)
+	p.TypeReferential = referential != 0
 	if err := json.Unmarshal([]byte(evidence), &p.EvidenceIDs); err != nil {
 		return eventruleproposal.Proposal{}, fmt.Errorf("sqliteeventruleproposal: decode evidence of %q: %w", p.ID, err)
 	}
@@ -208,12 +213,22 @@ func (r *Repository) Upsert(ctx context.Context, p eventruleproposal.Proposal) (
 // JSON-encoded evidence set.
 func insertProposal(ctx context.Context, tx *sql.Tx, p eventruleproposal.Proposal, evidenceJSON string) error {
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO event_rule_proposals (`+selectColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO event_rule_proposals (`+selectColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.ID, string(p.Kind), string(p.TargetKind), p.Target, p.Phrase, p.TypeName, p.Description,
-		evidenceJSON, string(p.Status), p.PromptVersion, p.CreatedAt.UTC().Format(timeFormat), nullableTime(p.DecidedAt)); err != nil {
+		evidenceJSON, string(p.Status), p.PromptVersion, p.CreatedAt.UTC().Format(timeFormat), nullableTime(p.DecidedAt),
+		windowOrDefault(p.TypeWindow), p.TypeReferential); err != nil {
 		return fmt.Errorf("sqliteeventruleproposal: insert: %w", err)
 	}
 	return nil
+}
+
+// windowOrDefault keeps the NOT NULL type_window column on its default for a
+// proposal that carries no window (every phrase proposal).
+func windowOrDefault(w string) string {
+	if w == "" {
+		return eventruleproposal.DefaultTypeWindow
+	}
+	return w
 }
 
 // MergeTypes folds the type proposal srcID into dstID in one transaction: the
@@ -357,6 +372,30 @@ func (r *Repository) Transition(ctx context.Context, p eventruleproposal.Proposa
 	n, err := res.RowsAffected()
 	if err != nil {
 		return fmt.Errorf("sqliteeventruleproposal: transition: %w", err)
+	}
+	if n > 0 {
+		return nil
+	}
+	cur, err := r.Get(ctx, p.ID)
+	if err != nil {
+		return err
+	}
+	return fmt.Errorf("sqliteeventruleproposal: proposal %q is %s, not %s: %w", p.ID, cur.Status, from, eventruleproposalport.ErrStatusChanged)
+}
+
+// TransitionType is Transition for a type approval: besides status and
+// decided_at it writes the proposal's TypeWindow and TypeReferential, guarded
+// by the same expected prior status.
+func (r *Repository) TransitionType(ctx context.Context, p eventruleproposal.Proposal, from eventruleproposal.Status) error {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE event_rule_proposals SET status = ?, decided_at = ?, type_window = ?, type_referential = ? WHERE id = ? AND status = ?`,
+		string(p.Status), nullableTime(p.DecidedAt), windowOrDefault(p.TypeWindow), p.TypeReferential, p.ID, string(from))
+	if err != nil {
+		return fmt.Errorf("sqliteeventruleproposal: transition type: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("sqliteeventruleproposal: transition type: %w", err)
 	}
 	if n > 0 {
 		return nil

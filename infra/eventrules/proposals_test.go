@@ -53,11 +53,11 @@ func TestDecideTypeApprovesAndRejects(t *testing.T) {
 	db := openTestDB(t)
 	ids := seedProposals(t, db, typeProposal("a", eventruleproposal.StatusPending), typeProposal("b", eventruleproposal.StatusPending))
 	now := time.Date(2026, 5, 1, 9, 0, 0, 0, time.UTC)
-	approved, err := DecideType(context.Background(), db, ids[0], true, now)
+	approved, err := DecideType(context.Background(), db, ids[0], true, TypeApproval{}, now)
 	if err != nil || approved.Status != eventruleproposal.StatusApproved {
 		t.Fatalf("approve: %+v, %v", approved, err)
 	}
-	rejected, err := DecideType(context.Background(), db, ids[1], false, now)
+	rejected, err := DecideType(context.Background(), db, ids[1], false, TypeApproval{}, now)
 	if err != nil || rejected.Status != eventruleproposal.StatusRejected {
 		t.Fatalf("reject: %+v, %v", rejected, err)
 	}
@@ -70,7 +70,7 @@ func TestDecideTypeApprovesAndRejects(t *testing.T) {
 func TestDecideTypeRejectsPhraseProposal(t *testing.T) {
 	db := openTestDB(t)
 	ids := seedProposals(t, db, phraseProposal())
-	_, err := DecideType(context.Background(), db, ids[0], true, time.Now())
+	_, err := DecideType(context.Background(), db, ids[0], true, TypeApproval{}, time.Now())
 	if !errors.Is(err, ErrNotTypeProposal) {
 		t.Fatalf("err = %v, want ErrNotTypeProposal", err)
 	}
@@ -86,7 +86,7 @@ func TestDecideTypeRejectsPhraseProposal(t *testing.T) {
 func TestDecideTypeAlreadyDecided(t *testing.T) {
 	db := openTestDB(t)
 	ids := seedProposals(t, db, typeProposal("old", eventruleproposal.StatusRejected))
-	_, err := DecideType(context.Background(), db, ids[0], true, time.Now())
+	_, err := DecideType(context.Background(), db, ids[0], true, TypeApproval{}, time.Now())
 	if err == nil || !strings.Contains(err.Error(), "cannot move") {
 		t.Fatalf("err = %v, want the domain error", err)
 	}
@@ -97,7 +97,7 @@ func TestDecideTypeAlreadyDecided(t *testing.T) {
 
 func TestDecideTypeUnknownIDIsNotFound(t *testing.T) {
 	db := openTestDB(t)
-	_, err := DecideType(context.Background(), db, "evr_nope", true, time.Now())
+	_, err := DecideType(context.Background(), db, "evr_nope", true, TypeApproval{}, time.Now())
 	if !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("err = %v, want errors.Is sql.ErrNoRows", err)
 	}
@@ -335,5 +335,73 @@ func TestNormalizeTypes(t *testing.T) {
 	}
 	if want := (NormalizeReport{Before: 4, After: 4}); again != want {
 		t.Fatalf("second run = %+v, want %+v", again, want)
+	}
+}
+
+func TestDecideTypePersistsApprovalOptions(t *testing.T) {
+	db := openTestDB(t)
+	ids := seedProposals(t, db,
+		typeProposal("a", eventruleproposal.StatusPending),
+		typeProposal("b", eventruleproposal.StatusPending),
+		typeProposal("c", eventruleproposal.StatusPending),
+		typeProposal("d", eventruleproposal.StatusPending))
+	now := time.Date(2026, 5, 1, 9, 0, 0, 0, time.UTC)
+	ctx := context.Background()
+	repo := sqliteeventruleproposal.NewRepository(db)
+
+	if _, err := DecideType(ctx, db, ids[0], true, TypeApproval{Window: "72h", Referential: true}, now); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.Get(ctx, ids[0])
+	if err != nil || got.TypeWindow != "72h" || !got.TypeReferential {
+		t.Fatalf("stored = %+v, %v; want 72h and referential", got, err)
+	}
+	if _, err := DecideType(ctx, db, ids[1], true, TypeApproval{}, now); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = repo.Get(ctx, ids[1])
+	if got.TypeWindow != "48h" || got.TypeReferential {
+		t.Fatalf("defaults = %+v, want 48h and not referential", got)
+	}
+	// A bad window is refused and leaves the proposal pending.
+	_, err = DecideType(ctx, db, ids[2], true, TypeApproval{Window: "0s"}, now)
+	if !errors.Is(err, ErrBadTypeApproval) {
+		t.Fatalf("err = %v, want ErrBadTypeApproval", err)
+	}
+	got, _ = repo.Get(ctx, ids[2])
+	if got.Status != eventruleproposal.StatusPending {
+		t.Fatalf("status = %s, want pending", got.Status)
+	}
+	// Options are ignored when rejecting, even a bad window.
+	rejected, err := DecideType(ctx, db, ids[3], false, TypeApproval{Window: "abc", Referential: true}, now)
+	if err != nil || rejected.Status != eventruleproposal.StatusRejected {
+		t.Fatalf("reject = %+v, %v", rejected, err)
+	}
+	got, _ = repo.Get(ctx, ids[3])
+	if got.TypeWindow != "48h" || got.TypeReferential {
+		t.Fatalf("rejected row = %+v, want untouched approval choices", got)
+	}
+}
+
+func TestNormalizeTypesSkipsAppliedSlug(t *testing.T) {
+	db := openTestDB(t)
+	base := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	insertRawTypeProposal(t, db, "evr_applied", "kicking-error", eventruleproposal.StatusApplied, "", base)
+	insertRawTypeProposal(t, db, "evr_pending", "kicking_error", eventruleproposal.StatusPending, "", base.Add(time.Hour), "e1")
+
+	rep, err := NormalizeTypes(context.Background(), db, false, knownNames(), base.Add(48*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (NormalizeReport{Before: 1, After: 0, Covered: 1}); rep != want {
+		t.Fatalf("report = %+v, want %+v", rep, want)
+	}
+	repo := sqliteeventruleproposal.NewRepository(db)
+	if _, err := repo.Get(context.Background(), "evr_pending"); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("pending duplicate err = %v, want it deleted", err)
+	}
+	applied, err := repo.Get(context.Background(), "evr_applied")
+	if err != nil || applied.Status != eventruleproposal.StatusApplied {
+		t.Fatalf("applied row = %+v, %v; want it untouched", applied, err)
 	}
 }

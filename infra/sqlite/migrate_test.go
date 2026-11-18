@@ -1623,3 +1623,34 @@ func TestMigrate_0047EventClaims(t *testing.T) {
 		t.Errorf("defaults = %q, %q, %q; want claimed, {}, empty", state, data, articleID)
 	}
 }
+
+// TestMigrate_0049EventRuleTypeApproval proves the type approval columns
+// are added to an existing event_rule_proposals table: legacy rows read back
+// with the default window and not referential.
+func TestMigrate_0049EventRuleTypeApproval(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	db, err := sqlite.Open(path, 5*time.Second)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+
+	applyMigrationsThrough(t, ctx, db, "0048_outbox_thread_progress.sql")
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO event_rule_proposals (id, kind, type_name, evidence_json, status, prompt_version, created_at) VALUES ('evr_legacy', 'type', 'kicking-error', '[]', 'approved', 'event-rules-v4', CURRENT_TIMESTAMP)`); err != nil {
+		t.Fatalf("seed legacy row: %v", err)
+	}
+
+	if err := sqlite.Migrate(ctx, db, migrations.FS); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+	var window string
+	var referential int
+	if err := db.QueryRowContext(ctx, `SELECT type_window, type_referential FROM event_rule_proposals WHERE id = 'evr_legacy'`).Scan(&window, &referential); err != nil {
+		t.Fatalf("read legacy row: %v", err)
+	}
+	if window != "48h" || referential != 0 {
+		t.Errorf("legacy row = (%q, %d), want (48h, 0)", window, referential)
+	}
+}

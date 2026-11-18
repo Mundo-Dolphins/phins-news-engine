@@ -26,9 +26,11 @@ type NormalizePlan struct {
 // at now when the slug is in known; otherwise pending or approved when any
 // member is (approved only if one was approved and !reopenApproved);
 // otherwise rejected at the latest member's DecidedAt. A group with no slug
-// is deleted. A single row already named by its slug whose status would not
+// is deleted. A group whose slug is in applied (already in the generated
+// rules file) is deleted whole and counted as covered: the applied row stays
+// the one record of that type. A single row already named by its slug whose status would not
 // change is left alone, so a second run plans nothing.
-func PlanTypeNormalization(ps []Proposal, known map[string]bool, reopenApproved bool, now time.Time) NormalizePlan {
+func PlanTypeNormalization(ps []Proposal, known, applied map[string]bool, reopenApproved bool, now time.Time) NormalizePlan {
 	sorted := append([]Proposal(nil), ps...)
 	sort.SliceStable(sorted, func(i, j int) bool {
 		if !sorted[i].CreatedAt.Equal(sorted[j].CreatedAt) {
@@ -54,6 +56,13 @@ func PlanTypeNormalization(ps []Proposal, known map[string]bool, reopenApproved 
 				plan.Delete = append(plan.Delete, m.ID)
 			}
 			plan.Emptied++
+			continue
+		}
+		if applied[s] {
+			for _, m := range members {
+				plan.Delete = append(plan.Delete, m.ID)
+			}
+			plan.Covered++
 			continue
 		}
 		survivor, covered, reopened := fold(s, members, known[s], reopenApproved, now)
@@ -107,6 +116,7 @@ func fold(slug string, members []Proposal, isKnown, reopenApproved bool, now tim
 			anyOpen, anyApproved = true, true
 			if m.DecidedAt.After(lastApproved) {
 				lastApproved = m.DecidedAt
+				p.TypeWindow, p.TypeReferential = m.TypeWindow, m.TypeReferential
 			}
 		case StatusPending:
 			anyOpen = true
@@ -123,9 +133,11 @@ func fold(slug string, members []Proposal, isKnown, reopenApproved bool, now tim
 		p.Status, p.DecidedAt = StatusApproved, lastApproved
 	case anyOpen:
 		p.Status = StatusPending
+		p.TypeWindow, p.TypeReferential = "", false
 		return p, false, anyApproved
 	default:
 		p.Status, p.DecidedAt = StatusRejected, lastDecided
+		p.TypeWindow, p.TypeReferential = "", false
 	}
 	return p, false, false
 }

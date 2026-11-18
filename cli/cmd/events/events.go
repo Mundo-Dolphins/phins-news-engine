@@ -96,7 +96,7 @@ func newTypeCommand() *cobra.Command {
 					return err
 				}
 				defer db.Close()
-				decided, err := eventrules.DecideType(cmd.Context(), db, args[0], approve, time.Now().UTC())
+				decided, err := eventrules.DecideType(cmd.Context(), db, args[0], approve, eventrules.TypeApproval{}, time.Now().UTC())
 				if err != nil {
 					return fmt.Errorf("events type %s: %w", verb, err)
 				}

@@ -431,3 +431,52 @@ func TestReplaceTypes(t *testing.T) {
 		t.Fatalf("rows = %d, err = %v", n, err)
 	}
 }
+
+func TestTypeApprovalColumnsRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	repo := sqliteeventruleproposal.NewRepository(newTestDB(t))
+	created := seedType(t, repo, "kicking error", eventruleproposal.StatusPending, "a1")
+	if created.TypeWindow != "48h" || created.TypeReferential {
+		t.Fatalf("fresh proposal = %+v, want the default approval choices", created)
+	}
+	got, err := repo.Get(ctx, created.ID)
+	if err != nil || got.TypeWindow != "48h" || got.TypeReferential {
+		t.Fatalf("stored defaults = %+v, %v; want 48h and false", got, err)
+	}
+
+	approved, err := got.ApproveType("72h", true, time.Date(2026, 5, 1, 9, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.TransitionType(ctx, approved, eventruleproposal.StatusPending); err != nil {
+		t.Fatalf("TransitionType() error = %v", err)
+	}
+	got, err = repo.Get(ctx, created.ID)
+	if err != nil || got.Status != eventruleproposal.StatusApproved || got.TypeWindow != "72h" || !got.TypeReferential {
+		t.Fatalf("after approval = %+v, %v", got, err)
+	}
+	// The guard holds: a second decision from pending no longer lands.
+	if err := repo.TransitionType(ctx, approved, eventruleproposal.StatusPending); !errors.Is(err, eventruleproposalport.ErrStatusChanged) {
+		t.Fatalf("second TransitionType() error = %v, want ErrStatusChanged", err)
+	}
+
+	// ReplaceTypes writes both columns of an inserted proposal.
+	ins := typeProposal("logo change", "", "a2")
+	ins.Status, ins.TypeWindow, ins.TypeReferential = eventruleproposal.StatusApproved, "24h", true
+	if err := repo.ReplaceTypes(ctx, nil, []eventruleproposal.Proposal{ins}); err != nil {
+		t.Fatal(err)
+	}
+	approvedList, err := repo.ListByStatus(ctx, eventruleproposal.StatusApproved)
+	if err != nil || len(approvedList) != 2 {
+		t.Fatalf("approved = %+v, %v", approvedList, err)
+	}
+	var logo eventruleproposal.Proposal
+	for _, p := range approvedList {
+		if p.TypeName == "logo-change" {
+			logo = p
+		}
+	}
+	if logo.TypeWindow != "24h" || !logo.TypeReferential {
+		t.Fatalf("replaced row = %+v, want 24h and referential", logo)
+	}
+}
