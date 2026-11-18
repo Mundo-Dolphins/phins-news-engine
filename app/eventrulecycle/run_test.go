@@ -126,9 +126,9 @@ type harness struct {
 	deps     eventrulecycle.Deps
 	repo     *sqliteeventruleproposal.Repository
 	llm      *fakeLLM
-	existing []eventrulecycle.AppliedRule
-	written  [][]eventrulecycle.AppliedRule
-	gateIn   [][]eventrulecycle.AppliedRule
+	existing eventrulecycle.AppliedSet
+	written  []eventrulecycle.AppliedSet
+	gateIn   []eventrulecycle.AppliedSet
 	gate     eventrulecycle.GateResult
 }
 
@@ -160,7 +160,7 @@ func newHarness(t *testing.T) *harness {
 				{TargetKind: "signal", Target: "rumor", Phrase: "inks a deal", ArticleIDs: []string{"a3"}},    // not in cited article
 			},
 		},
-		existing: []eventrulecycle.AppliedRule{{TargetKind: "action", Target: "trade", Phrase: "ships off", ProposalID: "evr_old", PromptVersion: "event-rules-v1"}},
+		existing: eventrulecycle.AppliedSet{Rules: []eventrulecycle.AppliedRule{{TargetKind: "action", Target: "trade", Phrase: "ships off", ProposalID: "evr_old", PromptVersion: "event-rules-v1"}}},
 		gate:     eventrulecycle.GateResult{OK: true},
 	}
 	h.deps = eventrulecycle.Deps{
@@ -170,22 +170,25 @@ func newHarness(t *testing.T) *harness {
 		BaseRules: func() (eventsignals.Rules, error) {
 			return eventsignals.Rules{Taxonomy: eventsignalstest.Taxonomy()}, nil
 		},
-		Gate: func(_ context.Context, c []eventrulecycle.AppliedRule) (eventrulecycle.GateResult, error) {
+		Gate: func(_ context.Context, c eventrulecycle.AppliedSet) (eventrulecycle.GateResult, error) {
 			h.gateIn = append(h.gateIn, c)
 			return h.gate, nil
 		},
-		ReadApplied: func(path string) ([]eventrulecycle.AppliedRule, error) {
+		ReadApplied: func(path string) (eventrulecycle.AppliedSet, error) {
 			if path != "generated.yaml" {
 				t.Errorf("ReadApplied path %q", path)
 			}
-			return append([]eventrulecycle.AppliedRule(nil), h.existing...), nil
+			return eventrulecycle.AppliedSet{
+				Rules: append([]eventrulecycle.AppliedRule(nil), h.existing.Rules...),
+				Types: append([]eventrulecycle.AppliedType(nil), h.existing.Types...),
+			}, nil
 		},
-		WriteApplied: func(path string, rules []eventrulecycle.AppliedRule) error {
+		WriteApplied: func(path string, s eventrulecycle.AppliedSet) error {
 			if path != "generated.yaml" {
 				t.Errorf("WriteApplied path %q", path)
 			}
-			h.written = append(h.written, rules)
-			h.existing = append([]eventrulecycle.AppliedRule(nil), rules...)
+			h.written = append(h.written, s)
+			h.existing = s
 			return nil
 		},
 		GeneratedPath: "generated.yaml",
@@ -280,7 +283,7 @@ func TestRun_ApproveOneRejectOneAndApply(t *testing.T) {
 	if len(h.gateIn) != 1 || len(h.written) != 1 {
 		t.Fatalf("gate calls %d, writes %d", len(h.gateIn), len(h.written))
 	}
-	w := h.written[0]
+	w := h.written[0].Rules
 	if len(w) != 2 || w[0].Phrase != "ships off" || w[1].Phrase != "lands on the shelf" || w[1].Target != "injure" ||
 		w[1].TargetKind != "action" || w[1].ProposalID != ps["lands on the shelf"].ID {
 		t.Errorf("written %+v", w)
@@ -358,7 +361,7 @@ func TestRun_QuitKeepsEarlierDecisions(t *testing.T) {
 	if ps["inks"].Status != eventruleproposal.StatusRejected {
 		t.Errorf("auto-reject lost: %+v", ps["inks"])
 	}
-	if len(h.written) != 1 || phrasesOf(h.written[0]) != "ships off|lands on the shelf" {
+	if len(h.written) != 1 || phrasesOf(h.written[0].Rules) != "ships off|lands on the shelf" {
 		t.Errorf("written file must exclude unreviewed phrases: %+v", h.written)
 	}
 }
@@ -388,7 +391,7 @@ func TestRun_GateFailureWritesNothing(t *testing.T) {
 	if p.Status != eventruleproposal.StatusApproved {
 		t.Errorf("status %+v", p)
 	}
-	if len(h.gateIn) != 1 || phrasesOf(h.gateIn[0]) != "ships off|lands on the shelf" {
+	if len(h.gateIn) != 1 || phrasesOf(h.gateIn[0].Rules) != "ships off|lands on the shelf" {
 		t.Errorf("gate candidate %+v", h.gateIn)
 	}
 	if !strings.Contains(out, p.ID) || !strings.Contains(out, `"lands on the shelf"`) {
@@ -415,7 +418,7 @@ func TestRun_EditPhraseNormalizesAndApproves(t *testing.T) {
 	if p := ps["lands on the shelf"]; p.Status != eventruleproposal.StatusRejected {
 		t.Errorf("original %+v", p)
 	}
-	if w := h.written[0]; w[len(w)-1].Phrase != "lands on the shelf with" {
+	if w := h.written[0].Rules; w[len(w)-1].Phrase != "lands on the shelf with" {
 		t.Errorf("written %+v", w)
 	}
 }
@@ -535,7 +538,7 @@ func TestRun_GateBlockedThenOperatorRejectsOffender(t *testing.T) {
 	if !strings.Contains(out, "approved, not yet applied") {
 		t.Errorf("carry-over not labelled:\n%s", out)
 	}
-	if len(h.gateIn) != 2 || phrasesOf(h.gateIn[1]) != "ships off|inks a deal" {
+	if len(h.gateIn) != 2 || phrasesOf(h.gateIn[1].Rules) != "ships off|inks a deal" {
 		t.Errorf("second gate candidate %+v", h.gateIn)
 	}
 	if got := statusOf(t, h, "lands on the shelf"); got != eventruleproposal.StatusRejected {
@@ -544,7 +547,7 @@ func TestRun_GateBlockedThenOperatorRejectsOffender(t *testing.T) {
 	if got := statusOf(t, h, "inks a deal"); got != eventruleproposal.StatusApplied {
 		t.Errorf("kept %s", got)
 	}
-	if len(h.written) != 1 || phrasesOf(h.written[0]) != "ships off|inks a deal" {
+	if len(h.written) != 1 || phrasesOf(h.written[0].Rules) != "ships off|inks a deal" {
 		t.Errorf("written %+v", h.written)
 	}
 }
@@ -555,14 +558,14 @@ func TestRun_ApprovedRuleAlreadyInFileIsDedupedAndMarkedApplied(t *testing.T) {
 	h.run(t, "a\nr\n")
 	id := h.byPhrase(t)["lands on the shelf"].ID
 	// Simulate a crash after the file was written but before MarkApplied.
-	h.existing = append(h.existing, eventrulecycle.AppliedRule{TargetKind: "action", Target: "injure", Phrase: "lands on the shelf", ProposalID: id, PromptVersion: eventrulecycle.EventRulesPromptVersion})
+	h.existing.Rules = append(h.existing.Rules, eventrulecycle.AppliedRule{TargetKind: "action", Target: "injure", Phrase: "lands on the shelf", ProposalID: id, PromptVersion: eventrulecycle.EventRulesPromptVersion})
 	h.gate = eventrulecycle.GateResult{OK: true}
 
 	res, out := h.run(t, "k\n")
 	if res.Applied != 1 {
 		t.Fatalf("result %+v\n%s", res, out)
 	}
-	if len(h.written) != 1 || phrasesOf(h.written[0]) != "ships off|lands on the shelf" {
+	if len(h.written) != 1 || phrasesOf(h.written[0].Rules) != "ships off|lands on the shelf" {
 		t.Errorf("written %+v", h.written)
 	}
 	if got := statusOf(t, h, "lands on the shelf"); got != eventruleproposal.StatusApplied {

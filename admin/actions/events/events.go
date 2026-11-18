@@ -1,7 +1,7 @@
 // Package events holds the admin actions over event rule discovery: the new
 // event type proposals, the clustering gate and the impact report of the
 // generated rules. They mirror the `events type list|approve|reject|merge`,
-// `events brief`, `events gate` and `events impact` CLI commands. Reads are
+// `events gate` and `events impact` CLI commands. Reads are
 // available in both modes; deciding a type proposal is local-only.
 package events
 
@@ -51,7 +51,7 @@ type impactParams struct {
 	Days int `json:"days" help:"look-back window in days (1 or more)" default:"14"`
 }
 
-// Actions returns events.type_list, .brief, .gate, .impact, .type_approve,
+// Actions returns events.type_list, .gate, .impact, .type_approve,
 // .type_reject and .type_merge, and the rule review actions events.rules_discover,
 // .rules_queue, .rules_decide, .rules_reject_failing and .rules_apply.
 func Actions() []action.Action {
@@ -60,11 +60,6 @@ func Actions() []action.Action {
 			Name: "events.type_list", Group: group, Title: "List event type proposals",
 			Description: "Lists the pending and approved new event type proposals with their evidence article ids.",
 			Kind:        action.KindRead, Modes: bothModes, Params: noParams{}, Run: runTypeList,
-		},
-		{
-			Name: "events.brief", Group: group, Title: "Event type brief",
-			Description: "Returns the implementation brief of a pending or approved new event type proposal.",
-			Kind:        action.KindRead, Modes: bothModes, Params: idParams{}, Run: runBrief,
 		},
 		{
 			Name: "events.gate", Group: group, Title: "Clustering gate",
@@ -78,7 +73,7 @@ func Actions() []action.Action {
 		},
 		{
 			Name: "events.type_approve", Group: group, Title: "Approve event type proposal",
-			Description: "Marks a pending new event type proposal as approved. Nothing is applied: an approved type is implemented through its brief.",
+			Description: "Marks a pending new event type proposal as approved. Nothing is applied here: an approved type is applied with its first approved phrase by events.rules_apply.",
 			Kind:        action.KindWrite, Modes: localOnly, Params: idParams{},
 			Run: func(ctx context.Context, env action.Env, params any) (action.Result, error) {
 				return runDecide(ctx, env, params, true)
@@ -112,7 +107,7 @@ func proposalError(err error) error {
 		return action.NotFound(err)
 	case errors.Is(err, eventrules.ErrBadMergeTarget):
 		return &action.Error{Code: action.CodeInvalidParams, Message: err.Error()}
-	case errors.Is(err, eventrules.ErrNotTypeProposal), errors.Is(err, eventrules.ErrNoBrief), errors.Is(err, eventrules.ErrAlreadyDecided):
+	case errors.Is(err, eventrules.ErrNotTypeProposal), errors.Is(err, eventrules.ErrAlreadyDecided):
 		return action.Conflict(err)
 	}
 	return err
@@ -156,18 +151,6 @@ func runTypeList(ctx context.Context, env action.Env, _ any) (action.Result, err
 		},
 		Rows: rows, Summary: summary,
 	}, nil
-}
-
-func runBrief(ctx context.Context, env action.Env, params any) (action.Result, error) {
-	p, ok := params.(*idParams)
-	if !ok {
-		return action.Result{}, errBadParams
-	}
-	brief, err := eventrules.Brief(ctx, env.DB, p.ID)
-	if err != nil {
-		return action.Result{}, proposalError(err)
-	}
-	return action.Result{Render: "text", Text: brief, Summary: "brief for event type proposal " + p.ID}, nil
 }
 
 func runDecide(ctx context.Context, env action.Env, params any, approve bool) (action.Result, error) {
@@ -271,7 +254,7 @@ func runGate(ctx context.Context, env action.Env, params any) (action.Result, er
 	return action.Result{
 		Render: "object",
 		Object: map[string]any{
-			"generated_rules": path, "phrases": len(rules),
+			"generated_rules": path, "phrases": len(rules.Rules),
 			"before": metricsOf(res.Before), "after": metricsOf(res.After),
 			"dataset": eventrulecycle.GateExercise(res.Affected),
 			"ok":      res.OK, "reason": res.Reason,

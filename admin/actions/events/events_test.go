@@ -123,8 +123,8 @@ func TestMetadata(t *testing.T) {
 		modes int
 		long  bool
 	}{
-		"events.type_list": {action.KindRead, 2, false}, "events.brief": {action.KindRead, 2, false},
-		"events.gate": {action.KindRead, 2, false}, "events.impact": {action.KindRead, 2, true},
+		"events.type_list": {action.KindRead, 2, false}, "events.gate": {action.KindRead, 2, false},
+		"events.impact":       {action.KindRead, 2, true},
 		"events.type_approve": {action.KindWrite, 1, false}, "events.type_reject": {action.KindWrite, 1, false},
 		"events.type_merge": {action.KindWrite, 1, false},
 	}
@@ -268,30 +268,6 @@ func TestTypeListEmpty(t *testing.T) {
 	if err != nil || len(res.Rows) != 0 || res.Summary != "No pending or approved event type proposals." {
 		t.Fatalf("res = %+v, err = %v", res, err)
 	}
-}
-
-func TestBrief(t *testing.T) {
-	f := newFixture(t)
-	id := f.seed(typeProposal("mega trade", eventruleproposal.StatusPending))
-	res, err := f.runIn(action.ModeProduction, "events.brief", `{"id":"`+id+`"}`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.Render != "text" || !strings.Contains(res.Text, "mega trade") {
-		t.Errorf("res = %+v", res)
-	}
-}
-
-func TestBriefErrors(t *testing.T) {
-	f := newFixture(t)
-	_, err := f.run("events.brief", `{"id":"nope"}`)
-	wantCode(t, err, action.CodeNotFound)
-	_, err = f.run("events.brief", `{}`)
-	wantCode(t, err, action.CodeInvalidParams)
-	_, err = f.run("events.brief", `{"id":"`+f.seed(phraseProposal())+`"}`)
-	wantCode(t, err, action.CodeConflict)
-	_, err = f.run("events.brief", `{"id":"`+f.seed(typeProposal("old", eventruleproposal.StatusRejected))+`"}`)
-	wantCode(t, err, action.CodeConflict)
 }
 
 func TestTypeApproveAndReject(t *testing.T) {

@@ -74,8 +74,8 @@ func TestApplyStaleWhenAProposalIsRejectedDuringTheGate(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.deps.GeneratedPath = path
-	h.deps.ReadApplied = func(string) ([]eventrulecycle.AppliedRule, error) { return nil, nil }
-	h.deps.WriteApplied = func(p string, _ []eventrulecycle.AppliedRule) error {
+	h.deps.ReadApplied = func(string) (eventrulecycle.AppliedSet, error) { return eventrulecycle.AppliedSet{}, nil }
+	h.deps.WriteApplied = func(p string, _ eventrulecycle.AppliedSet) error {
 		return os.WriteFile(p, []byte("changed\n"), 0o600)
 	}
 	shelf, err := eventrulecycle.Approve(ctx, h.deps, h.proposal(t, "lands on the shelf"), testNow)
@@ -86,7 +86,7 @@ func TestApplyStaleWhenAProposalIsRejectedDuringTheGate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.deps.Gate = func(context.Context, []eventrulecycle.AppliedRule) (eventrulecycle.GateResult, error) {
+	h.deps.Gate = func(context.Context, eventrulecycle.AppliedSet) (eventrulecycle.GateResult, error) {
 		// The owner rejects one rule while the gate runs.
 		if _, err := eventrulecycle.Reject(ctx, h.deps, deal, testNow); err != nil {
 			t.Fatal(err)
@@ -147,8 +147,9 @@ func TestApplyMarkFailureSaysTheFileWasWritten(t *testing.T) {
 type listHookRepo struct {
 	*sqliteeventruleproposal.Repository
 	afterApproved func()
-	// skip is how many approved listings pass before the hook fires: the
-	// discovery step lists them once to collect the known type names.
+	// skip is how many approved listings pass before the hook fires: Prepare
+	// lists them once for the approved types and discovery once to collect
+	// the known type names.
 	skip int
 }
 
@@ -168,7 +169,7 @@ func (r *listHookRepo) ListByStatus(ctx context.Context, s eventruleproposal.Sta
 // rejects it in the store, as a panel decision racing the CLI.
 func rejectAfterListing(t *testing.T, h *harness, phrase string) {
 	t.Helper()
-	repo := &listHookRepo{Repository: h.repo, skip: 1}
+	repo := &listHookRepo{Repository: h.repo, skip: 2}
 	repo.afterApproved = func() {
 		p := h.byPhrase(t)[phrase]
 		if _, err := eventrulecycle.Reject(context.Background(), eventrulecycle.Deps{Proposals: h.repo}, p, testNow); err != nil {

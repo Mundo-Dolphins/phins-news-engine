@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Mundo-Dolphins/phins-news-engine/app/eventrulecycle"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/config"
 	appout "github.com/Mundo-Dolphins/phins-news-engine/ports/out"
@@ -59,7 +60,7 @@ func TestCycleDepsDefaults(t *testing.T) {
 	if len(warnings) != 0 {
 		t.Errorf("warnings %v", warnings)
 	}
-	if _, err := d.Gate(ctx, nil); !errors.Is(err, ErrGateDatasetMissing) || !strings.Contains(err.Error(), "missing.yml") {
+	if _, err := d.Gate(ctx, eventrulecycle.AppliedSet{}); !errors.Is(err, ErrGateDatasetMissing) || !strings.Contains(err.Error(), "missing.yml") {
 		t.Errorf("gate err %v, want the dataset path passed in", err)
 	}
 
@@ -82,7 +83,7 @@ func TestCycleDeps_ReadAppliedRejectsUndeclaredBuckets(t *testing.T) {
 		}
 	}
 	write("action_terms:\n  sign:\n    - phrase: inks a deal\n")
-	if rules, err := d.ReadApplied(path); err != nil || len(rules) != 1 {
+	if rules, err := d.ReadApplied(path); err != nil || len(rules.Rules) != 1 {
 		t.Fatalf("ReadApplied(declared) = %+v, %v", rules, err)
 	}
 	write("action_terms:\n  teleport:\n    - phrase: beams over\n")

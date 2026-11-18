@@ -10,23 +10,15 @@ import (
 	"strings"
 	"time"
 
-	sqliteadapter "github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqlite"
 	"github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqliteeventruleproposal"
-	"github.com/Mundo-Dolphins/phins-news-engine/app/eventrulecycle"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventruleproposal"
 	"github.com/Mundo-Dolphins/phins-news-engine/ports/eventruleproposalport"
 )
-
-// maxBriefExamples bounds the evidence titles quoted in a brief.
-const maxBriefExamples = 5
 
 var (
 	// ErrNotTypeProposal reports a phrase proposal where a type proposal is
 	// required; errors.Is matches it.
 	ErrNotTypeProposal = errors.New("not a type proposal")
-	// ErrNoBrief reports a type proposal whose status is neither pending nor
-	// approved; errors.Is matches it.
-	ErrNoBrief = errors.New("proposal has no brief")
 	// ErrAlreadyDecided reports a type proposal that is not in a state the
 	// decision applies to; errors.Is matches it.
 	ErrAlreadyDecided = errors.New("proposal already decided")
@@ -80,7 +72,8 @@ type TypeApproval struct {
 // one ErrAlreadyDecided (carrying the domain error text), and an unknown id
 // the repository's not-found error (errors.Is(err, sql.ErrNoRows)). An
 // approval stores opts with the decision; a window that is not a positive
-// duration returns ErrBadTypeApproval. Nothing is applied here.
+// duration returns ErrBadTypeApproval. A rejection also rejects the pending
+// and approved phrase proposals targeting the type. Nothing is applied here.
 func DecideType(ctx context.Context, db *sql.DB, id string, approve bool, opts TypeApproval, now time.Time) (eventruleproposal.Proposal, error) {
 	repo := sqliteeventruleproposal.NewRepository(db)
 	p, err := repo.Get(ctx, id)
@@ -114,57 +107,34 @@ func DecideType(ctx context.Context, db *sql.DB, id string, approve bool, opts T
 		}
 		return eventruleproposal.Proposal{}, err
 	}
+	if !approve {
+		// A rejected type takes its phrases with it.
+		if _, err := repo.RejectPhrasesFor(ctx, decided.TypeName, now); err != nil {
+			return decided, err
+		}
+	}
 	return decided, nil
 }
 
-// Brief returns the implementation brief of the pending or approved type
-// proposal id. A phrase proposal returns ErrNotTypeProposal, any other
-// status ErrNoBrief, an unknown id the repository's not-found error.
-func Brief(ctx context.Context, db *sql.DB, id string) (string, error) {
-	p, err := sqliteeventruleproposal.NewRepository(db).Get(ctx, id)
-	if err != nil {
-		return "", err
-	}
-	if p.Kind != eventruleproposal.KindType {
-		return "", &textError{
-			msg:      fmt.Sprintf("proposal %s is a %s proposal, not a type proposal", p.ID, p.Kind),
-			sentinel: ErrNotTypeProposal,
-		}
-	}
-	if p.Status != eventruleproposal.StatusPending && p.Status != eventruleproposal.StatusApproved {
-		return "", &textError{
-			msg:      fmt.Sprintf("proposal %s is %s; only pending or approved type proposals have a brief", p.ID, p.Status),
-			sentinel: ErrNoBrief,
-		}
-	}
-	articles := sqliteadapter.NewArticleRepository(db)
-	var examples []string
-	for _, eid := range p.EvidenceIDs {
-		if len(examples) >= maxBriefExamples {
-			break
-		}
-		a, err := articles.FindByID(ctx, eid)
-		if err != nil || a.Title == "" {
-			continue // evidence may have been pruned
-		}
-		examples = append(examples, a.Title)
-	}
-	return eventrulecycle.Brief(p, examples), nil
-}
-
 // MergeResult is the outcome of MergeType: the rejected Source and either the
-// Target proposal that gained its evidence or, when merged into a known
-// event type or action, the zero Target and that name in CoveredBy.
+// Target proposal that gained its evidence (and, in Retargeted, the phrase
+// proposals moved from the source's name to the target's) or, when merged
+// into a known event type or action, the zero Target and that name in
+// CoveredBy.
 type MergeResult struct {
 	Source, Target eventruleproposal.Proposal
 	CoveredBy      string
+	Retargeted     []eventruleproposal.Proposal
 }
 
 // MergeType folds the pending or approved type proposal id into into at now.
 // An into starting with "evr_" is another pending or approved type proposal,
 // which gains the source's evidence; anything else is slugged and must be in
 // known, the known event type and action names (KnownTypeNames). Either way
-// the source is rejected. A phrase source returns ErrNotTypeProposal, a
+// the source is rejected. The pending and approved phrase proposals of an
+// approved source follow it: they are retargeted to the target proposal's
+// name, or rejected when it is merged into a known name. A phrase source
+// returns ErrNotTypeProposal, a
 // decided one ErrAlreadyDecided, a refused target ErrBadMergeTarget, and an
 // unknown id the repository's not-found error.
 func MergeType(ctx context.Context, db *sql.DB, id, into string, known []string, now time.Time) (MergeResult, error) {
@@ -201,6 +171,9 @@ func MergeType(ctx context.Context, db *sql.DB, id, into string, known []string,
 		if err := repo.Transition(ctx, rejected, src.Status); err != nil {
 			return MergeResult{}, decidedElsewhere(err)
 		}
+		if _, err := repo.RejectPhrasesFor(ctx, src.TypeName, now); err != nil {
+			return MergeResult{}, err
+		}
 		return MergeResult{Source: rejected, CoveredBy: name}, nil
 	}
 
@@ -214,11 +187,17 @@ func MergeType(ctx context.Context, db *sql.DB, id, into string, known []string,
 	if dst.Status != eventruleproposal.StatusPending && dst.Status != eventruleproposal.StatusApproved {
 		return MergeResult{}, &textError{msg: fmt.Sprintf("merge target %s is %s; only pending or approved type proposals take a merge", dst.ID, dst.Status), sentinel: ErrBadMergeTarget}
 	}
+	var retargeted []eventruleproposal.Proposal
+	if src.Status == eventruleproposal.StatusApproved && src.TypeName != dst.TypeName {
+		if retargeted, err = repo.RetargetPhrases(ctx, src.TypeName, dst.TypeName); err != nil {
+			return MergeResult{}, err
+		}
+	}
 	merged, err := repo.MergeTypes(ctx, src.ID, src.Status, dst.ID, dst.Status, now)
 	if err != nil {
 		return MergeResult{}, decidedElsewhere(err)
 	}
-	return MergeResult{Source: rejected, Target: merged}, nil
+	return MergeResult{Source: rejected, Target: merged, Retargeted: retargeted}, nil
 }
 
 // NormalizeReport counts what NormalizeTypes did: the type proposals (not

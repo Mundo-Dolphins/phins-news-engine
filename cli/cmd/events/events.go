@@ -2,7 +2,8 @@
 
 // Package events provides the `events` CLI command group for event rule
 // discovery: the standalone review of the `editorial cycle` step and the
-// read-only clustering gate and impact reports and the new-type brief.
+// read-only clustering gate and impact reports and the decisions on new
+// event type proposals.
 package events
 
 import (
@@ -30,7 +31,6 @@ func NewCommand() *cobra.Command {
 	eventsCmd := &cobra.Command{Use: "events", Short: "Event rule discovery: review proposed trigger phrases and check the clustering gate"}
 	eventsCmd.AddCommand(newReviewCommand())
 	eventsCmd.AddCommand(newGateCommand())
-	eventsCmd.AddCommand(newBriefCommand())
 	eventsCmd.AddCommand(newImpactCommand())
 	eventsCmd.AddCommand(newTypeCommand())
 	return eventsCmd
@@ -49,10 +49,10 @@ func openDB(cmd *cobra.Command, cfg *config.Config) (*sql.DB, error) {
 	return db, nil
 }
 
-// newTypeCommand groups the decisions on new event type proposals, which
-// the cycle lists but never applies: a type needs a code change.
+// newTypeCommand groups the decisions on new event type proposals. The
+// cycle applies an approved type together with its first approved phrase.
 func newTypeCommand() *cobra.Command {
-	typeCmd := &cobra.Command{Use: "type", Short: "List, approve, reject, merge or normalize new event type proposals (applying one is a code change, see `events brief`)"}
+	typeCmd := &cobra.Command{Use: "type", Short: "List, approve, reject, merge or normalize new event type proposals (an approved type is applied with its first approved phrase)"}
 	typeCmd.AddCommand(&cobra.Command{
 		Use:   "list",
 		Short: "List the pending and approved event type proposals with their ids",
@@ -84,7 +84,7 @@ func newTypeCommand() *cobra.Command {
 	decide := func(verb, past string, approve bool) *cobra.Command {
 		return &cobra.Command{
 			Use:   verb + " <proposal-id>",
-			Short: "Mark an event type proposal as " + past + " (nothing is applied; an approved type is implemented through `events brief`)",
+			Short: "Mark an event type proposal as " + past + " (nothing is applied here; an approved type is applied with its first approved phrase)",
 			Args:  cobra.ExactArgs(1),
 			RunE: func(cmd *cobra.Command, args []string) error {
 				cfg, err := config.Load(shared.ConfigPath)
@@ -239,7 +239,7 @@ func newGateCommand() *cobra.Command {
 				return fmt.Errorf("events gate: %w", err)
 			}
 			w := cmd.OutOrStdout()
-			fmt.Fprintf(w, "generated rules: %s (%d phrase(s))\n", path, len(rules))
+			fmt.Fprintf(w, "generated rules: %s (%d phrase(s))\n", path, len(rules.Rules))
 			printMetrics := func(label string, r clustereval.Report) {
 				fmt.Fprintf(w, "%s: precision=%.4f recall=%.4f purity=%.4f over_grouped=%d fragmented=%d\n",
 					label, r.Pairwise.Precision(), r.Pairwise.Recall(), r.Purity, r.OverGroupedClusters, r.FragmentedClusters)
@@ -261,34 +261,6 @@ func newGateCommand() *cobra.Command {
 
 // maxImpactExamples bounds the titles listed per type in the impact report.
 const maxImpactExamples = 5
-
-func newBriefCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "brief <proposal-id>",
-		Short: "Print the implementation brief of a new event type proposal (pending or approved)",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := config.Load(shared.ConfigPath)
-			if err != nil {
-				return err
-			}
-			db, err := infrasqlite.Open(cfg.SQLite.Path, cfg.SQLite.BusyTimeout())
-			if err != nil {
-				return err
-			}
-			defer db.Close()
-			if err := infrasqlite.Migrate(cmd.Context(), db, migrations.FS); err != nil {
-				return err
-			}
-			brief, err := eventrules.Brief(cmd.Context(), db, args[0])
-			if err != nil {
-				return fmt.Errorf("events brief: %w", err)
-			}
-			fmt.Fprint(cmd.OutOrStdout(), brief)
-			return nil
-		},
-	}
-}
 
 func newImpactCommand() *cobra.Command {
 	var days int

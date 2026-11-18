@@ -678,7 +678,7 @@ func TestCatalogStep2Batch3(t *testing.T) {
 	both := []string{
 		"audit.duplicates", "audit.quality", "config.validate", "model.validate", "clustering.rules_validate",
 		"dictionary.validate", "dictionary.inspect", "dictionary.history", "dictionary.diff",
-		"events.brief", "events.gate", "events.impact", "events.type_list",
+		"events.gate", "events.impact", "events.type_list",
 	}
 	localOnly := []string{
 		"dictionary.rollback", "dictionary.regression_check", "dictionary.mine_candidates",
@@ -707,10 +707,10 @@ func TestCatalogStep2Batch3(t *testing.T) {
 			t.Errorf("production mode offers local-only %s", n)
 		}
 	}
-	if got, want := len(both)+len(localOnly), 18; got != want {
+	if got, want := len(both)+len(localOnly), 17; got != want {
 		t.Fatalf("catalog lists %d new actions, want %d", got, want)
 	}
-	if got, want := len(both), 13; got != want {
+	if got, want := len(both), 12; got != want {
 		t.Fatalf("catalog lists %d both-mode actions, want %d", got, want)
 	}
 	// Production offers exactly these 13 actions in this batch's groups:

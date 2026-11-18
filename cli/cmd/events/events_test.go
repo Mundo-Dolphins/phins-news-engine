@@ -184,39 +184,6 @@ func seedProposals(t *testing.T, configPath string, ps ...eventruleproposal.Prop
 	return ids
 }
 
-func TestEventsBrief_PrintsBriefForTypeProposal(t *testing.T) {
-	configPath := gateFixture(t, "")
-	seedGeneric(t, configPath, "Isotopes extend Ezo", "Dale gets new deal")
-	ids := seedProposals(
-		t, configPath,
-		eventruleproposal.Proposal{Kind: eventruleproposal.KindType, TypeName: "contract extension", Description: "Re-signings.", EvidenceIDs: []string{"g0", "g1", "missing"}, Status: eventruleproposal.StatusPending, PromptVersion: "v1"},
-		eventruleproposal.Proposal{Kind: eventruleproposal.KindPhrase, TargetKind: eventruleproposal.TargetAction, Target: "sign", Phrase: "inks a deal", EvidenceIDs: []string{"g0"}, Status: eventruleproposal.StatusPending, PromptVersion: "v1"},
-	)
-	out, err := testsupport.Execute(t, "--config", configPath, "events", "brief", ids[0])
-	if err != nil {
-		t.Fatalf("Execute() error = %v\n%s", err, out)
-	}
-	for _, want := range []string{"contract-extension", "- Isotopes extend Ezo", "- Dale gets new deal", "`contract-extension`", "taxonomy.event_types"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("output lacks %q:\n%s", want, out)
-		}
-	}
-	if _, err := testsupport.Execute(t, "--config", configPath, "events", "brief", ids[1]); err == nil || !strings.Contains(err.Error(), "not a type proposal") {
-		t.Errorf("phrase proposal err = %v", err)
-	}
-	if _, err := testsupport.Execute(t, "--config", configPath, "events", "brief", "evr_nope"); err == nil {
-		t.Error("unknown proposal must fail")
-	}
-}
-
-func TestEventsBrief_RejectedProposalFails(t *testing.T) {
-	configPath := gateFixture(t, "")
-	ids := seedProposals(t, configPath, eventruleproposal.Proposal{Kind: eventruleproposal.KindType, TypeName: "x type", Status: eventruleproposal.StatusRejected, PromptVersion: "v1"})
-	if _, err := testsupport.Execute(t, "--config", configPath, "events", "brief", ids[0]); err == nil || !strings.Contains(err.Error(), "rejected") {
-		t.Errorf("err = %v", err)
-	}
-}
-
 func TestEventsImpact_ReportsTypedArticlesThatWouldChangeType(t *testing.T) {
 	configPath := gateFixture(t, impactGenerated)
 	seedGeneric(t, configPath, "Weather in Springfield is sunny")
@@ -301,9 +268,6 @@ func TestEventsType_ListApproveReject(t *testing.T) {
 		if err != nil || p.Status != want {
 			t.Errorf("%s: status %s err %v, want %s", id, p.Status, err, want)
 		}
-	}
-	if out, err := testsupport.Execute(t, "--config", configPath, "events", "brief", ext); err != nil || !strings.Contains(out, "contract-extension") {
-		t.Errorf("brief of an approved type proposal: %v\n%s", err, out)
 	}
 }
 

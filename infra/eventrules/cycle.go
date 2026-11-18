@@ -87,13 +87,13 @@ func CycleDepsSized(cfg *config.Config, db *sql.DB, datasetPath string, sampleSi
 			}
 			return f.ToEventSignalsRules(), nil
 		},
-		Gate: func(ctx context.Context, candidate []eventrulecycle.AppliedRule) (eventrulecycle.GateResult, error) {
+		Gate: func(ctx context.Context, candidate eventrulecycle.AppliedSet) (eventrulecycle.GateResult, error) {
 			return RunGate(ctx, cfg, datasetPath, candidate)
 		},
-		ReadApplied: func(path string) ([]eventrulecycle.AppliedRule, error) {
+		ReadApplied: func(path string) (eventrulecycle.AppliedSet, error) {
 			f, err := HandWrittenRules(cfg)
 			if err != nil {
-				return nil, err
+				return eventrulecycle.AppliedSet{}, err
 			}
 			return readAppliedIn(path, f.Taxonomy)
 		},

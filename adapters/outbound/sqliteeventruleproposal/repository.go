@@ -312,6 +312,101 @@ func (r *Repository) ReplaceTypes(ctx context.Context, deleteIDs []string, inser
 	return nil
 }
 
+// RetargetPhrases re-keys, in one transaction, each pending or approved
+// action phrase proposal whose target is from so it targets to. A phrase
+// proposal's ID is derived from its key, so each one is deleted and inserted
+// again under the ID of its new key, keeping its status, evidence, prompt
+// version and timestamps; when a proposal with the new key already exists,
+// the evidence is merged into it instead (its status is kept). It returns
+// the re-keyed proposals as stored.
+func (r *Repository) RetargetPhrases(ctx context.Context, from, to string) ([]eventruleproposal.Proposal, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("sqliteeventruleproposal: begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	rows, err := tx.QueryContext(ctx, `SELECT `+selectColumns+` FROM event_rule_proposals
+		WHERE kind = ? AND target_kind = ? AND target = ? AND status IN (?, ?) ORDER BY created_at, id`,
+		string(eventruleproposal.KindPhrase), string(eventruleproposal.TargetAction), from,
+		string(eventruleproposal.StatusPending), string(eventruleproposal.StatusApproved))
+	if err != nil {
+		return nil, fmt.Errorf("sqliteeventruleproposal: list phrases of %q: %w", from, err)
+	}
+	var olds []eventruleproposal.Proposal
+	for rows.Next() {
+		p, err := scan(rows)
+		if err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		olds = append(olds, p)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("sqliteeventruleproposal: list phrases of %q: %w", from, err)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sqliteeventruleproposal: list phrases of %q: %w", from, err)
+	}
+
+	out := make([]eventruleproposal.Proposal, 0, len(olds))
+	for _, old := range olds {
+		p := normalize(old)
+		p.Target = strings.TrimSpace(to)
+		p.ID = proposalID(p)
+		if _, err := tx.ExecContext(ctx, `DELETE FROM event_rule_proposals WHERE id = ?`, old.ID); err != nil {
+			return nil, fmt.Errorf("sqliteeventruleproposal: delete %q: %w", old.ID, err)
+		}
+		existing, err := scan(tx.QueryRowContext(ctx, `SELECT `+selectColumns+` FROM event_rule_proposals WHERE id = ?`, p.ID))
+		switch {
+		case err == nil:
+			existing.EvidenceIDs = mergeEvidence(existing.EvidenceIDs, p.EvidenceIDs)
+			blob, err := json.Marshal(existing.EvidenceIDs)
+			if err != nil {
+				return nil, err
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE event_rule_proposals SET evidence_json = ? WHERE id = ?`, string(blob), existing.ID); err != nil {
+				return nil, fmt.Errorf("sqliteeventruleproposal: merge evidence: %w", err)
+			}
+			out = append(out, existing)
+		case errors.Is(err, sql.ErrNoRows):
+			p.EvidenceIDs = mergeEvidence(nil, p.EvidenceIDs)
+			blob, err := json.Marshal(p.EvidenceIDs)
+			if err != nil {
+				return nil, err
+			}
+			if err := insertProposal(ctx, tx, p, string(blob)); err != nil {
+				return nil, err
+			}
+			out = append(out, p)
+		default:
+			return nil, fmt.Errorf("sqliteeventruleproposal: lookup %q: %w", p.ID, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("sqliteeventruleproposal: commit: %w", err)
+	}
+	return out, nil
+}
+
+// RejectPhrasesFor rejects (decided_at = now) every pending or approved
+// action phrase proposal whose target is target and returns how many.
+func (r *Repository) RejectPhrasesFor(ctx context.Context, target string, now time.Time) (int, error) {
+	res, err := r.db.ExecContext(ctx, `UPDATE event_rule_proposals SET status = ?, decided_at = ?
+		WHERE kind = ? AND target_kind = ? AND target = ? AND status IN (?, ?)`,
+		string(eventruleproposal.StatusRejected), nullableTime(now),
+		string(eventruleproposal.KindPhrase), string(eventruleproposal.TargetAction), target,
+		string(eventruleproposal.StatusPending), string(eventruleproposal.StatusApproved))
+	if err != nil {
+		return 0, fmt.Errorf("sqliteeventruleproposal: reject phrases of %q: %w", target, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("sqliteeventruleproposal: reject phrases of %q: %w", target, err)
+	}
+	return int(n), nil
+}
+
 // ListByStatus implements eventruleproposalport.Repository.
 func (r *Repository) ListByStatus(ctx context.Context, s eventruleproposal.Status) ([]eventruleproposal.Proposal, error) {
 	rows, err := r.db.QueryContext(ctx,

@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -478,5 +479,113 @@ func TestTypeApprovalColumnsRoundTrip(t *testing.T) {
 	}
 	if logo.TypeWindow != "24h" || !logo.TypeReferential {
 		t.Fatalf("replaced row = %+v, want 24h and referential", logo)
+	}
+}
+
+func TestRetargetPhrases_RekeysWithTheDerivedIDAndMergesIntoAnExistingKey(t *testing.T) {
+	ctx := context.Background()
+	repo := sqliteeventruleproposal.NewRepository(newTestDB(t))
+	decided := time.Date(2026, 10, 10, 8, 0, 0, 0, time.UTC)
+	kick := phraseProposal("misses a kick", "a1")
+	kick.Target = "kicking-error"
+	kick, err := repo.Upsert(ctx, kick)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kick.Status, kick.DecidedAt = eventruleproposal.StatusApproved, decided
+	if err := repo.Save(ctx, kick); err != nil {
+		t.Fatal(err)
+	}
+	shank := phraseProposal("shanks the kick", "a2")
+	shank.Target = "kicking-error"
+	if _, err := repo.Upsert(ctx, shank); err != nil {
+		t.Fatal(err)
+	}
+	existing := phraseProposal("shanks the kick", "a3")
+	existing.Target = "field-goal-miss"
+	existing, err = repo.Upsert(ctx, existing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := phraseProposal("inks a deal", "a4")
+	other, err = repo.Upsert(ctx, other)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := repo.RetargetPhrases(ctx, "kicking-error", "field-goal-miss")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("RetargetPhrases() = %+v", got)
+	}
+	byPhrase := map[string]eventruleproposal.Proposal{}
+	for _, p := range got {
+		byPhrase[p.Phrase] = p
+	}
+	moved := byPhrase["misses a kick"]
+	if moved.Target != "field-goal-miss" || moved.Status != eventruleproposal.StatusApproved || !moved.DecidedAt.Equal(decided) ||
+		!reflect.DeepEqual(moved.EvidenceIDs, []string{"a1"}) || moved.ID == kick.ID || moved.PromptVersion != "v1" {
+		t.Errorf("moved = %+v", moved)
+	}
+	if stored, err := repo.Get(ctx, moved.ID); err != nil || !reflect.DeepEqual(stored, moved) {
+		t.Errorf("stored = %+v, %v; want %+v", stored, err, moved)
+	}
+	// Re-keying keeps the derived ID: a fresh Upsert of the new key finds it.
+	again := phraseProposal("misses a kick")
+	again.Target = "field-goal-miss"
+	if up, err := repo.Upsert(ctx, again); err != nil || up.ID != moved.ID {
+		t.Errorf("Upsert of the new key = %+v, %v; want id %s", up, err, moved.ID)
+	}
+	merged := byPhrase["shanks the kick"]
+	if merged.ID != existing.ID || !reflect.DeepEqual(merged.EvidenceIDs, []string{"a3", "a2"}) {
+		t.Errorf("merged = %+v", merged)
+	}
+	if _, err := repo.Get(ctx, kick.ID); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("old key still stored: %v", err)
+	}
+	if got, err := repo.Get(ctx, other.ID); err != nil || got.Target != "signed" {
+		t.Errorf("unrelated phrase = %+v, %v", got, err)
+	}
+}
+
+func TestRejectPhrasesFor(t *testing.T) {
+	ctx := context.Background()
+	repo := sqliteeventruleproposal.NewRepository(newTestDB(t))
+	now := time.Date(2026, 10, 10, 8, 0, 0, 0, time.UTC)
+	var ids []string
+	for i, st := range []eventruleproposal.Status{eventruleproposal.StatusPending, eventruleproposal.StatusApproved, eventruleproposal.StatusApplied} {
+		p := phraseProposal(fmt.Sprintf("misses kick %d", i), "a1")
+		p.Target = "kicking-error"
+		p, err := repo.Upsert(ctx, p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p.Status = st
+		if err := repo.Save(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, p.ID)
+	}
+	other, err := repo.Upsert(ctx, phraseProposal("inks a deal", "a2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := repo.RejectPhrasesFor(ctx, "kicking-error", now)
+	if err != nil || n != 2 {
+		t.Fatalf("RejectPhrasesFor() = %d, %v; want 2", n, err)
+	}
+	for i, want := range []eventruleproposal.Status{eventruleproposal.StatusRejected, eventruleproposal.StatusRejected, eventruleproposal.StatusApplied} {
+		got, err := repo.Get(ctx, ids[i])
+		if err != nil || got.Status != want {
+			t.Errorf("proposal %d = %+v, %v; want %s", i, got, err, want)
+		}
+		if want == eventruleproposal.StatusRejected && !got.DecidedAt.Equal(now) {
+			t.Errorf("proposal %d decided at %v", i, got.DecidedAt)
+		}
+	}
+	if got, _ := repo.Get(ctx, other.ID); got.Status != eventruleproposal.StatusPending {
+		t.Errorf("unrelated phrase is %s", got.Status)
 	}
 }

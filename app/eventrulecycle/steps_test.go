@@ -303,8 +303,8 @@ func TestApplyBlockedLeavesApproved(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.deps.GeneratedPath = path
-	h.deps.ReadApplied = func(string) ([]eventrulecycle.AppliedRule, error) { return nil, nil }
-	h.deps.WriteApplied = func(p string, _ []eventrulecycle.AppliedRule) error {
+	h.deps.ReadApplied = func(string) (eventrulecycle.AppliedSet, error) { return eventrulecycle.AppliedSet{}, nil }
+	h.deps.WriteApplied = func(p string, _ eventrulecycle.AppliedSet) error {
 		return os.WriteFile(p, []byte("changed\n"), 0o600)
 	}
 	h.gate = eventrulecycle.GateResult{OK: false, Reason: "purity dropped", Affected: 2}
@@ -316,7 +316,7 @@ func TestApplyBlockedLeavesApproved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !r.Blocked || r.Reason != "purity dropped" || r.Nothing || len(r.Applied) != 0 || r.Gate.Affected != 2 || phrasesOf(r.Candidate) != "lands on the shelf" {
+	if !r.Blocked || r.Reason != "purity dropped" || r.Nothing || len(r.Applied) != 0 || r.Gate.Affected != 2 || phrasesOf(r.Candidate.Rules) != "lands on the shelf" {
 		t.Fatalf("result %+v", r)
 	}
 	if b, _ := os.ReadFile(path); !bytes.Equal(b, original) {
@@ -342,7 +342,7 @@ func TestApplyPassWritesAndMarksApplied(t *testing.T) {
 	if r.Blocked || r.Nothing || len(r.Applied) != 1 || r.Applied[0].Status != eventruleproposal.StatusApplied {
 		t.Fatalf("result %+v", r)
 	}
-	if len(h.written) != 1 || phrasesOf(h.written[0]) != "ships off|lands on the shelf" {
+	if len(h.written) != 1 || phrasesOf(h.written[0].Rules) != "ships off|lands on the shelf" {
 		t.Errorf("written %+v", h.written)
 	}
 	if got := statusOf(t, h, "lands on the shelf"); got != eventruleproposal.StatusApplied {
@@ -398,7 +398,7 @@ func TestApplySkipsProposalsNoLongerApproved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(r.Applied) != 1 || r.Applied[0].ID != shelf.ID || phrasesOf(r.Candidate) != "ships off|lands on the shelf" {
+	if len(r.Applied) != 1 || r.Applied[0].ID != shelf.ID || phrasesOf(r.Candidate.Rules) != "ships off|lands on the shelf" {
 		t.Fatalf("result %+v", r)
 	}
 	if got := statusOf(t, h, "inks a deal"); got != eventruleproposal.StatusRejected {
