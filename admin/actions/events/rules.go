@@ -74,7 +74,7 @@ func ruleActions() []action.Action {
 		},
 		{
 			Name: "events.rules_apply", Group: group, Title: "Apply approved event rule phrases",
-			Description: "Gates the generated rules plus the approved phrases against the clustering benchmark and, when it passes, writes the generated rules file and marks them applied. A blocked gate is reported in the result and leaves them approved.",
+			Description: "Gates the generated rules plus the approved phrases (and the approved event types they target) against the clustering benchmark and, when it passes, writes the generated rules file and marks them applied. A blocked gate is reported in the result and leaves them approved. The result also lists the approved types still waiting for a phrase and the phrases without a declared or approved target.",
 			Kind:        action.KindWrite, Modes: localOnly, LongRunning: true, Exclusive: true, Params: noParams{}, Run: runRulesApply,
 		},
 	}
@@ -452,7 +452,34 @@ func runRulesApply(ctx context.Context, env action.Env, _ any) (action.Result, e
 	for _, p := range r.Applied {
 		applied = append(applied, map[string]any{"id": p.ID, "target_kind": string(p.TargetKind), "target": p.Target, "phrase": p.Phrase})
 	}
-	obj := map[string]any{"nothing": r.Nothing, "blocked": r.Blocked, "reason": r.Reason, "applied": applied, "generated_rules": generated}
+	types := make([]map[string]any, 0, len(r.Types))
+	for _, p := range r.Types {
+		types = append(types, map[string]any{"id": p.ID, "type": p.TypeName, "window": p.TypeWindow, "referential": p.TypeReferential})
+	}
+	waiting := make([]map[string]any, 0, len(r.Waiting))
+	for _, p := range r.Waiting {
+		waiting = append(waiting, map[string]any{"id": p.ID, "type": p.TypeName})
+	}
+	orphans := make([]map[string]any, 0, len(r.Orphans))
+	for _, p := range r.Orphans {
+		orphans = append(orphans, map[string]any{"id": p.ID, "target_kind": string(p.TargetKind), "target": p.Target, "phrase": p.Phrase})
+	}
+	obj := map[string]any{
+		"nothing": r.Nothing, "blocked": r.Blocked, "reason": r.Reason, "applied": applied, "generated_rules": generated,
+		"types_applied": types, "types_waiting": waiting, "orphans": orphans,
+	}
+	// clauses counts the types applied, those waiting for phrases and the
+	// phrases left without a target.
+	var clauses strings.Builder
+	if len(types) > 0 {
+		fmt.Fprintf(&clauses, ", %d new event type(s)", len(types))
+	}
+	if len(waiting) > 0 {
+		fmt.Fprintf(&clauses, ", %d type(s) waiting for phrases", len(waiting))
+	}
+	if len(orphans) > 0 {
+		fmt.Fprintf(&clauses, ", %d phrase(s) without a declared or approved target", len(orphans))
+	}
 	if r.Candidate != nil {
 		obj["before"], obj["after"] = metricsOf(r.Gate.Before), metricsOf(r.Gate.After)
 		obj["dataset"] = eventrulecycle.GateExercise(r.Gate.Affected)
@@ -460,10 +487,10 @@ func runRulesApply(ctx context.Context, env action.Env, _ any) (action.Result, e
 	}
 	switch {
 	case r.Nothing:
-		return action.Result{Render: "object", Object: obj, Summary: "Nothing to apply."}, nil
+		return action.Result{Render: "object", Object: obj, Summary: "Nothing to apply" + clauses.String() + "."}, nil
 	case r.Blocked:
 		return action.Result{Render: "object", Object: obj, Summary: "BLOCKED: " + r.Reason}, nil
 	}
 	env.Log.Info("event rules applied", "count", len(applied), "path", generated, "by", env.Actor)
-	return action.Result{Render: "object", Object: obj, Summary: fmt.Sprintf("PASS: %d rule(s) applied to %s", len(applied), generated)}, nil
+	return action.Result{Render: "object", Object: obj, Summary: fmt.Sprintf("PASS: %d rule(s) applied to %s", len(applied), generated) + clauses.String()}, nil
 }

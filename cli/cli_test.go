@@ -264,6 +264,8 @@ func TestSQLiteMergeLocal_MigratesLaggingSnapshotBeforeMerging(t *testing.T) {
 	for _, stmt := range []string{
 		`DROP TABLE event_rule_proposals`,
 		`DELETE FROM schema_migrations WHERE version = '0045_event_rule_proposals.sql'`,
+		// 0049 only alters the dropped table, so a snapshot without it lags too.
+		`DELETE FROM schema_migrations WHERE version = '0049_event_rule_type_approval.sql'`,
 	} {
 		if _, err := targetDB.Exec(stmt); err != nil {
 			t.Fatalf("make target lag (%s): %v", stmt, err)

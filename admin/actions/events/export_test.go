@@ -27,3 +27,6 @@ func SetAfterRejectFailingListed(f func()) func() {
 	afterRejectFailingListed = f
 	return func() { afterRejectFailingListed = nil }
 }
+
+// ImpactSummary exposes impactSummary.
+var ImpactSummary = impactSummary

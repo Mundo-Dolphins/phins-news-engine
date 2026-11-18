@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -24,13 +25,28 @@ type GeneratedEntry struct {
 	PromptVersion string `yaml:"prompt_version"`
 }
 
+// GeneratedType is one operator-approved event type with its provenance.
+// It declares an event type and one action of the same name; its trigger
+// phrases live in the action_terms bucket of that name. Window is a
+// duration string ("48h"); Flags may only hold "referential".
+type GeneratedType struct {
+	Name          string   `yaml:"name"`
+	Description   string   `yaml:"description"`
+	Flags         []string `yaml:"flags,omitempty"`
+	Window        string   `yaml:"window"`
+	ProposalID    string   `yaml:"proposal_id"`
+	PromptVersion string   `yaml:"prompt_version"`
+}
+
 // GeneratedRules is the content of configs/event_rules_generated.yml.
 type GeneratedRules struct {
+	Types       []GeneratedType
 	ActionTerms map[eventsignals.Action][]GeneratedEntry
 	ContentCues map[eventsignals.ContentSignal][]GeneratedEntry
 }
 
-// Len is the number of phrases in g, across every bucket.
+// Len is the number of phrases in g, across every bucket. Types are not
+// counted.
 func (g GeneratedRules) Len() int {
 	n := 0
 	for _, es := range g.ActionTerms {
@@ -44,6 +60,7 @@ func (g GeneratedRules) Len() int {
 
 type yamlGenerated struct {
 	Meta        map[string]any              `yaml:"meta"`
+	Types       []GeneratedType             `yaml:"event_types,omitempty"`
 	ActionTerms map[string][]GeneratedEntry `yaml:"action_terms"`
 	ContentCues map[string][]GeneratedEntry `yaml:"content_cues"`
 }
@@ -65,7 +82,10 @@ func ParseGenerated(path string) (GeneratedRules, error) {
 	if err := dec.Decode(&yg); err != nil && !errors.Is(err, io.EOF) {
 		return GeneratedRules{}, fmt.Errorf("clusteringrules: parse %s: %w", path, err)
 	}
-	g := GeneratedRules{}
+	if err := checkTypes(path, yg.Types); err != nil {
+		return GeneratedRules{}, err
+	}
+	g := GeneratedRules{Types: yg.Types}
 	for k, entries := range yg.ActionTerms {
 		a := eventsignals.Action(k)
 		if err := checkEntries(path, "action_terms."+k, entries); err != nil {
@@ -89,6 +109,44 @@ func ParseGenerated(path string) (GeneratedRules, error) {
 	return g, nil
 }
 
+// checkTypes checks each generated event type's structure: a slug name,
+// unique across the file, a positive window, a proposal id, and no flag
+// but referential.
+func checkTypes(path string, types []GeneratedType) error {
+	seen := make(map[string]bool, len(types))
+	for _, t := range types {
+		if err := checkName("event_types", t.Name, seen[t.Name]); err != nil {
+			return fmt.Errorf("clusteringrules: %s: %w", path, err)
+		}
+		seen[t.Name] = true
+		section := fmt.Sprintf("event_types[%s]", t.Name)
+		if _, err := generatedWindow(t); err != nil {
+			return fmt.Errorf("clusteringrules: %s: %s: %w", path, section, err)
+		}
+		if strings.TrimSpace(t.ProposalID) == "" {
+			return fmt.Errorf("clusteringrules: %s: %s: proposal_id is required", path, section)
+		}
+		for _, fl := range t.Flags {
+			if eventsignals.TypeFlag(fl) != eventsignals.FlagReferential {
+				return fmt.Errorf("clusteringrules: %s: %s: flag %q is not allowed (only %q)", path, section, fl, eventsignals.FlagReferential)
+			}
+		}
+	}
+	return nil
+}
+
+// generatedWindow parses t's window, which must be a positive duration.
+func generatedWindow(t GeneratedType) (time.Duration, error) {
+	d, err := time.ParseDuration(t.Window)
+	if err != nil {
+		return 0, fmt.Errorf("invalid window %q: %w", t.Window, err)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("window must be a positive duration, got %q", t.Window)
+	}
+	return d, nil
+}
+
 func checkEntries(path, section string, entries []GeneratedEntry) error {
 	for _, e := range entries {
 		if strings.TrimSpace(e.Phrase) == "" {
@@ -98,10 +156,16 @@ func checkEntries(path, section string, entries []GeneratedEntry) error {
 	return nil
 }
 
-// WriteGenerated writes g deterministically (sorted buckets and phrases) and
-// atomically (temp file + rename).
+// WriteGenerated writes g deterministically (types sorted by name, sorted
+// buckets and phrases) and atomically (temp file + rename). It refuses a
+// type with no phrase in its action_terms bucket.
 func WriteGenerated(path string, g GeneratedRules) error {
-	yg := yamlGenerated{Meta: map[string]any{"version": 1}, ActionTerms: map[string][]GeneratedEntry{}, ContentCues: map[string][]GeneratedEntry{}}
+	for _, t := range g.Types {
+		if len(g.ActionTerms[eventsignals.Action(t.Name)]) == 0 {
+			return fmt.Errorf("clusteringrules: generated event type %q has no phrase", t.Name)
+		}
+	}
+	yg := yamlGenerated{Meta: map[string]any{"version": 1}, Types: sortedTypes(g.Types), ActionTerms: map[string][]GeneratedEntry{}, ContentCues: map[string][]GeneratedEntry{}}
 	for a, es := range g.ActionTerms {
 		yg.ActionTerms[string(a)] = sortedEntries(es)
 	}
@@ -134,13 +198,42 @@ func sortedEntries(in []GeneratedEntry) []GeneratedEntry {
 	return out
 }
 
-// MergeGenerated returns a copy of f with g's phrases appended. A phrase that
-// already exists anywhere in the hand-written vocabulary (action terms or
-// content cues, any bucket, case-insensitive) is skipped and reported.
+func sortedTypes(in []GeneratedType) []GeneratedType {
+	out := append([]GeneratedType(nil), in...)
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// MergeGenerated returns a copy of f with g's types and phrases appended.
+// Each generated type adds an event type, then an action of the same name
+// after every hand-written action (never body fallback), and its window.
+// A phrase that already exists anywhere in the hand-written vocabulary
+// (action terms or content cues, any bucket, case-insensitive) is skipped
+// and reported. A type left with no phrase is kept and reported as inert.
+// It assumes g passed ParseGenerated and CheckGeneratedBuckets.
 func MergeGenerated(f RulesFile, g GeneratedRules) (RulesFile, []string) {
 	out := f
 	out.ActionTerms = cloneBuckets(f.ActionTerms)
 	out.ContentCues = cloneSignalBuckets(f.ContentCues)
+	types := sortedTypes(g.Types)
+	if len(types) > 0 {
+		out.Taxonomy.EventTypes = append([]eventsignals.EventTypeDef(nil), f.Taxonomy.EventTypes...)
+		out.Taxonomy.Actions = append([]eventsignals.ActionDef(nil), f.Taxonomy.Actions...)
+		out.EventWindows = make(map[eventsignals.EventType]time.Duration, len(f.EventWindows)+len(types))
+		for k, v := range f.EventWindows {
+			out.EventWindows[k] = v
+		}
+	}
+	for _, t := range types {
+		name := eventsignals.EventType(t.Name)
+		flags := make([]eventsignals.TypeFlag, 0, len(t.Flags))
+		for _, fl := range t.Flags {
+			flags = append(flags, eventsignals.TypeFlag(fl))
+		}
+		out.Taxonomy.EventTypes = append(out.Taxonomy.EventTypes, eventsignals.EventTypeDef{Name: name, Description: t.Description, Flags: flags})
+		out.Taxonomy.Actions = append(out.Taxonomy.Actions, eventsignals.ActionDef{Name: eventsignals.Action(t.Name), EventType: name})
+		out.EventWindows[name], _ = generatedWindow(t) // checked by ParseGenerated
+	}
 
 	taken := map[string]string{}
 	for a, ps := range f.ActionTerms {
@@ -172,6 +265,11 @@ func MergeGenerated(f RulesFile, g GeneratedRules) (RulesFile, []string) {
 			add("content_cues."+string(s), e.Phrase, func() { out.ContentCues[s] = append(out.ContentCues[s], e.Phrase) })
 		}
 	}
+	for _, t := range types {
+		if len(out.ActionTerms[eventsignals.Action(t.Name)]) == 0 {
+			warnings = append(warnings, fmt.Sprintf("generated event type %q has no phrase; it is inert", t.Name))
+		}
+	}
 	return out, warnings
 }
 
@@ -196,10 +294,24 @@ func LoadWithGenerated(f RulesFile, generatedPath string) (RulesFile, []string, 
 	return merged, warnings, nil
 }
 
-// CheckGeneratedBuckets rejects a bucket of g (read from path) naming an
-// action or content signal the taxonomy does not declare.
+// CheckGeneratedBuckets rejects a generated type whose name the
+// hand-written taxonomy already declares (as a type or an action), and a
+// bucket of g (read from path) naming an action or content signal that
+// neither the taxonomy nor g's types declare.
 func CheckGeneratedBuckets(path string, g GeneratedRules, taxonomy eventsignals.Taxonomy) error {
 	actions := declaredActions(taxonomy)
+	handTypes := make(map[eventsignals.EventType]bool, len(taxonomy.EventTypes))
+	for _, et := range taxonomy.EventTypes {
+		handTypes[et.Name] = true
+	}
+	for _, t := range sortedTypes(g.Types) {
+		if handTypes[eventsignals.EventType(t.Name)] || actions[eventsignals.Action(t.Name)] {
+			return fmt.Errorf("clusteringrules: %s: generated event type %q is already declared in the hand-written taxonomy", path, t.Name)
+		}
+	}
+	for _, t := range g.Types {
+		actions[eventsignals.Action(t.Name)] = true
+	}
 	for _, a := range sortedActions(g.ActionTerms) {
 		if !actions[a] {
 			return fmt.Errorf("clusteringrules: %s: unknown action %q", path, a)

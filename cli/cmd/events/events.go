@@ -2,7 +2,8 @@
 
 // Package events provides the `events` CLI command group for event rule
 // discovery: the standalone review of the `editorial cycle` step and the
-// read-only clustering gate and impact reports and the new-type brief.
+// read-only clustering gate and impact reports and the decisions on new
+// event type proposals.
 package events
 
 import (
@@ -30,7 +31,6 @@ func NewCommand() *cobra.Command {
 	eventsCmd := &cobra.Command{Use: "events", Short: "Event rule discovery: review proposed trigger phrases and check the clustering gate"}
 	eventsCmd.AddCommand(newReviewCommand())
 	eventsCmd.AddCommand(newGateCommand())
-	eventsCmd.AddCommand(newBriefCommand())
 	eventsCmd.AddCommand(newImpactCommand())
 	eventsCmd.AddCommand(newTypeCommand())
 	return eventsCmd
@@ -49,10 +49,10 @@ func openDB(cmd *cobra.Command, cfg *config.Config) (*sql.DB, error) {
 	return db, nil
 }
 
-// newTypeCommand groups the decisions on new event type proposals, which
-// the cycle lists but never applies: a type needs a code change.
+// newTypeCommand groups the decisions on new event type proposals. The
+// cycle applies an approved type together with its first approved phrase.
 func newTypeCommand() *cobra.Command {
-	typeCmd := &cobra.Command{Use: "type", Short: "List, approve, reject, merge or normalize new event type proposals (applying one is a code change, see `events brief`)"}
+	typeCmd := &cobra.Command{Use: "type", Short: "List, approve, reject, merge or normalize new event type proposals and add phrases to approved ones (an approved type is applied with its first approved phrase)"}
 	typeCmd.AddCommand(&cobra.Command{
 		Use:   "list",
 		Short: "List the pending and approved event type proposals with their ids",
@@ -82,9 +82,10 @@ func newTypeCommand() *cobra.Command {
 		},
 	})
 	decide := func(verb, past string, approve bool) *cobra.Command {
-		return &cobra.Command{
+		var opts eventrules.TypeApproval
+		cmd := &cobra.Command{
 			Use:   verb + " <proposal-id>",
-			Short: "Mark an event type proposal as " + past + " (nothing is applied; an approved type is implemented through `events brief`)",
+			Short: "Mark an event type proposal as " + past + " (nothing is applied here; an approved type is applied with its first approved phrase)",
 			Args:  cobra.ExactArgs(1),
 			RunE: func(cmd *cobra.Command, args []string) error {
 				cfg, err := config.Load(shared.ConfigPath)
@@ -96,7 +97,15 @@ func newTypeCommand() *cobra.Command {
 					return err
 				}
 				defer db.Close()
-				decided, err := eventrules.DecideType(cmd.Context(), db, args[0], approve, time.Now().UTC())
+				// Only a rejection needs the known names (to keep a declared
+				// action's phrases), so approving works without clustering config.
+				var known []string
+				if !approve {
+					if known, err = eventrules.KnownTypeNames(cfg); err != nil {
+						return fmt.Errorf("events type %s: %w", verb, err)
+					}
+				}
+				decided, err := eventrules.DecideType(cmd.Context(), db, args[0], approve, opts, known, time.Now().UTC())
 				if err != nil {
 					return fmt.Errorf("events type %s: %w", verb, err)
 				}
@@ -104,9 +113,37 @@ func newTypeCommand() *cobra.Command {
 				return nil
 			},
 		}
+		if approve {
+			cmd.Use += " [--window 72h] [--referential]"
+			cmd.Flags().StringVar(&opts.Window, "window", "", "match window of the approved type, a positive duration (default 48h)")
+			cmd.Flags().BoolVar(&opts.Referential, "referential", false, "the type is a framing (such as analysis or a quote), not a concrete event")
+		}
+		return cmd
 	}
 	typeCmd.AddCommand(decide("approve", "approved", true))
 	typeCmd.AddCommand(decide("reject", "rejected", false))
+	typeCmd.AddCommand(&cobra.Command{
+		Use:   "add-phrase <proposal-id> <phrase>",
+		Short: "Propose a trigger phrase for an approved event type (stored pending; review it with `events review` or the panel)",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := config.Load(shared.ConfigPath)
+			if err != nil {
+				return err
+			}
+			db, err := openDB(cmd, cfg)
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			added, err := eventrules.AddTypePhrase(cmd.Context(), db, args[0], args[1], time.Now().UTC())
+			if err != nil {
+				return fmt.Errorf("events type add-phrase: %w", err)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Phrase %q proposed for %s (%s); review it in the queue.\n", added.Phrase, added.Target, added.ID)
+			return nil
+		},
+	})
 	var into string
 	mergeCmd := &cobra.Command{
 		Use:   "merge <proposal-id> --into <proposal-id|type-name>",
@@ -239,7 +276,7 @@ func newGateCommand() *cobra.Command {
 				return fmt.Errorf("events gate: %w", err)
 			}
 			w := cmd.OutOrStdout()
-			fmt.Fprintf(w, "generated rules: %s (%d phrase(s))\n", path, len(rules))
+			fmt.Fprintf(w, "generated rules: %s (%d phrase(s))\n", path, len(rules.Rules))
 			printMetrics := func(label string, r clustereval.Report) {
 				fmt.Fprintf(w, "%s: precision=%.4f recall=%.4f purity=%.4f over_grouped=%d fragmented=%d\n",
 					label, r.Pairwise.Precision(), r.Pairwise.Recall(), r.Purity, r.OverGroupedClusters, r.FragmentedClusters)
@@ -261,34 +298,6 @@ func newGateCommand() *cobra.Command {
 
 // maxImpactExamples bounds the titles listed per type in the impact report.
 const maxImpactExamples = 5
-
-func newBriefCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "brief <proposal-id>",
-		Short: "Print the implementation brief of a new event type proposal (pending or approved)",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := config.Load(shared.ConfigPath)
-			if err != nil {
-				return err
-			}
-			db, err := infrasqlite.Open(cfg.SQLite.Path, cfg.SQLite.BusyTimeout())
-			if err != nil {
-				return err
-			}
-			defer db.Close()
-			if err := infrasqlite.Migrate(cmd.Context(), db, migrations.FS); err != nil {
-				return err
-			}
-			brief, err := eventrules.Brief(cmd.Context(), db, args[0])
-			if err != nil {
-				return fmt.Errorf("events brief: %w", err)
-			}
-			fmt.Fprint(cmd.OutOrStdout(), brief)
-			return nil
-		},
-	}
-}
 
 func newImpactCommand() *cobra.Command {
 	var days int
@@ -340,6 +349,10 @@ func printImpact(w io.Writer, rep eventrules.ImpactReport) {
 	}
 	fmt.Fprintf(w, "\nlast %d day(s): %d typed article(s), %d would change type\n", rep.Days, rep.Typed, rep.Retyped)
 	printGroups(w, rep.RetypedBy)
+	if rep.Reframed > 0 {
+		fmt.Fprintf(w, "\nframing-only articles the generated rules would retype: %d\n", rep.Reframed)
+		printGroups(w, rep.ReframedBy)
+	}
 }
 
 // printGroups lists each key with its count and the first titles, keys

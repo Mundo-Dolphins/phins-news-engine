@@ -29,6 +29,23 @@ type AppliedRule struct {
 	PromptVersion string
 }
 
+// AppliedType is one operator-approved event type in the generated rules
+// file: an event type plus an action of the same name, whose phrases are the
+// AppliedRules targeting that action. Window is a duration ("48h").
+type AppliedType struct {
+	Name, Description string
+	Referential       bool
+	Window            string
+	ProposalID        string
+	PromptVersion     string
+}
+
+// AppliedSet is the content of the generated rules file.
+type AppliedSet struct {
+	Rules []AppliedRule
+	Types []AppliedType
+}
+
 // Deps are the collaborators of the cycle.
 type Deps struct {
 	Sampler func(ctx context.Context) ([]eventruleproposal.Sample, error)
@@ -40,13 +57,13 @@ type Deps struct {
 	Proposals eventruleproposalport.Repository
 	// BaseRules returns the hand-written rules plus the current generated ones.
 	BaseRules func() (eventsignals.Rules, error)
-	// Gate evaluates the full candidate generated rule set (already applied
+	// Gate evaluates the full candidate generated set (already applied
 	// plus newly approved) against the clustering benchmark.
-	Gate func(ctx context.Context, candidate []AppliedRule) (GateResult, error)
-	// ReadApplied returns the rules in the generated file (empty when the
-	// file does not exist); WriteApplied replaces the file with rules.
-	ReadApplied   func(path string) ([]AppliedRule, error)
-	WriteApplied  func(path string, rules []AppliedRule) error
+	Gate func(ctx context.Context, candidate AppliedSet) (GateResult, error)
+	// ReadApplied returns the generated file's content (empty when the file
+	// does not exist); WriteApplied replaces the file with s.
+	ReadApplied   func(path string) (AppliedSet, error)
+	WriteApplied  func(path string, s AppliedSet) error
 	GeneratedPath string
 	Now           func() time.Time
 }
@@ -568,8 +585,10 @@ func (s *session) apply() error {
 	if err != nil {
 		return err
 	}
+	printOrphans(s.in.Out, r.Orphans)
 	if r.Nothing {
-		// Every listed proposal was decided elsewhere before the gate.
+		// Every listed proposal was decided elsewhere before the gate, or
+		// none of them has a target to apply.
 		return nil
 	}
 	if r.Blocked {
@@ -583,7 +602,22 @@ func (s *session) apply() error {
 		return nil
 	}
 	fmt.Fprintf(s.in.Out, "Clustering gate passed; %d rule(s) applied to %s\n", s.res.Applied, s.d.GeneratedPath)
+	for _, p := range r.Types {
+		fmt.Fprintf(s.in.Out, "  new event type %s (window %s)\n", p.TypeName, p.TypeWindow)
+	}
 	return nil
+}
+
+// printOrphans lists the approved phrases whose target is neither a declared
+// action or signal nor an approved type proposal; they stay approved.
+func printOrphans(w io.Writer, orphans []eventruleproposal.Proposal) {
+	if len(orphans) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "%d approved phrase(s) have a target that is neither a declared action or signal nor an approved event type; they stay approved (reject them):\n", len(orphans))
+	for _, p := range orphans {
+		fmt.Fprintf(w, "  - %s %s %s %q\n", p.ID, p.TargetKind, p.Target, p.Phrase)
+	}
 }
 
 // GateExercise describes how many gold dataset articles a candidate changed.
@@ -595,8 +629,8 @@ func GateExercise(affected int) string {
 }
 
 // listTypes prints the type proposals stored or updated in this run (ids in
-// typesNow) and counts the older pending and the approved ones; they are
-// never applied here.
+// typesNow) and counts the older pending ones and the approved ones still
+// waiting for a phrase (an approved type is applied with its first phrase).
 func listTypes(ctx context.Context, repo eventruleproposalport.Repository, w io.Writer, typesNow map[string]bool) error {
 	count := func(st eventruleproposal.Status) ([]eventruleproposal.Proposal, error) {
 		ps, err := repo.ListByStatus(ctx, st)
@@ -638,7 +672,7 @@ func listTypes(ctx context.Context, repo eventruleproposalport.Repository, w io.
 		fmt.Fprintf(w, "%d older pending type proposal(s) not shown; see `events type list`.\n", older)
 	}
 	if len(approved) > 0 {
-		fmt.Fprintf(w, "%d approved type proposal(s) await a taxonomy change; see `events brief <id>`.\n", len(approved))
+		fmt.Fprintf(w, "%d approved type proposal(s) wait for phrases; add one with Add phrase in the panel or \"events type add-phrase\".\n", len(approved))
 	}
 	return nil
 }

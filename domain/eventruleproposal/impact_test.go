@@ -69,3 +69,40 @@ func TestImpact_ReportsPhraseAlreadyInAnyBucket(t *testing.T) {
 		}
 	}
 }
+
+func reframeSample() (eventsignals.Rules, []Sample, Proposal) {
+	rules := eventsignals.Rules{
+		Taxonomy:    eventsignalstest.Taxonomy(),
+		ActionTerms: map[eventsignals.Action][]string{eventsignals.ActionSign: {"signed"}},
+		ContentCues: map[eventsignals.ContentSignal][]string{eventsignals.ContentSignalAnalysis: {"breakdown"}},
+	}
+	sample := []Sample{
+		{Article: article.Article{ID: "1", Title: "Isotopes zzqx whispers"}, ClusterID: "c1"},
+		{Article: article.Article{ID: "2", Title: "Isotopes breakdown zzqx whispers"}, ClusterID: "c2"},
+		{Article: article.Article{ID: "3", Title: "Isotopes signed zzqx whispers"}, ClusterID: "c3"},
+	}
+	p := Proposal{Kind: KindPhrase, TargetKind: TargetSignal, Target: "rumor", Phrase: "zzqx whispers"}
+	return rules, sample, p
+}
+
+func TestImpact_SeparatesFramingOnlyMoves(t *testing.T) {
+	rules, sample, p := reframeSample()
+	got := Impact(rules, p, sample, time.Unix(0, 0))
+	if got.Moved[eventsignals.EventTypeRumor] != 1 || got.Reframed != 1 || got.Retyped != 1 || got.Matches != 3 {
+		t.Fatalf("%+v", got)
+	}
+}
+
+func TestCheck_AllowReframe(t *testing.T) {
+	rules, sample, p := reframeSample()
+	got := Impact(rules, p, sample, time.Unix(0, 0))
+	opt := DefaultCheckOptions()
+	if v := Check(p, got, 100, opt); len(v.Reasons) != 2 {
+		t.Fatalf("reasons = %v", v.Reasons)
+	}
+	opt.AllowReframe = true
+	v := Check(p, got, 100, opt)
+	if len(v.Reasons) != 1 || v.Reasons[0] != "retypes 1 already-typed articles" {
+		t.Fatalf("reasons = %v", v.Reasons)
+	}
+}

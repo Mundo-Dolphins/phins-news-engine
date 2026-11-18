@@ -321,6 +321,35 @@ describe("ReviewEvents", () => {
     expect(await screen.findByText("Nothing to apply.")).toBeTruthy();
   });
 
+  it("shows the new event types the gate applied and the phrases left without a target", async () => {
+    await open({}, { "events.rules_apply": () => ({ job: job("j6", "events.rules_apply") }) });
+    events.mockImplementation((_id, _line, onEnd) => {
+      onEnd(
+        job("j6", "events.rules_apply", "succeeded", {
+          render: "object",
+          summary: "PASS: 1 rule(s) applied to g.yml, 1 new event type(s), 1 phrase(s) without a declared or approved target",
+          object: {
+            nothing: false,
+            blocked: false,
+            reason: "",
+            applied: [{ id: "r7", target_kind: "action", target: "kicking-error", phrase: "misses a kick" }],
+            generated_rules: "g.yml",
+            types_applied: [{ id: "t1", type: "kicking-error", window: "72h", referential: true }],
+            types_waiting: [],
+            orphans: [{ id: "r8", target_kind: "action", target: "gone-type", phrase: "posts the line" }],
+          },
+        }),
+      );
+      return () => {};
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Run gate and apply" }));
+    const applied = await screen.findByRole("list", { name: "New event types applied" });
+    expect(within(applied).getByText("kicking-error")).toBeTruthy();
+    expect(within(applied).getByText(/window 72h, referential/)).toBeTruthy();
+    expect(screen.getByText(/1 approved phrase without a declared or approved target/)).toBeTruthy();
+    expect(screen.getByText(/“posts the line” \(gone-type\)/)).toBeTruthy();
+  });
+
   it("starts discovery as a job and reloads the queue when it ends", async () => {
     const s = await open({}, { "events.rules_discover": () => ({ job: job("j1", "events.rules_discover") }) });
     expect(await screen.findByText(/Nothing to review/)).toBeTruthy();
@@ -364,16 +393,133 @@ describe("ReviewEvents", () => {
     expect(await within(zone).findByText("No event type proposal pending.")).toBeTruthy();
   });
 
-  it("approves a type proposal and lists it as awaiting a code change", async () => {
-    await open({}, { "events.type_approve": () => obj({ id: "t1", type: "kicking error", status: "approved" }, "Event type proposal t1 (kicking error) approved.") }, [typeRow()]);
+  it("approves a type proposal through its form with a window and the referential choice", async () => {
+    await open(
+      {},
+      { "events.type_approve": () => obj({ id: "t1", type: "kicking error", status: "approved", window: "72h", referential: true }, "Event type proposal t1 (kicking error) approved.") },
+      [typeRow()],
+    );
     const zone = screen.getByRole("region", { name: /New event types/ });
     await within(zone).findByText("kicking error");
     fireEvent.click(within(zone).getByRole("button", { name: "Approve kicking error" }));
-    await waitFor(() => expect(run).toHaveBeenCalledWith("events.type_approve", { id: "t1" }, false));
+    const windowField = within(zone).getByRole("textbox", { name: "Window for kicking error" }) as HTMLInputElement;
+    expect(windowField.value).toBe("48h");
+    const referential = within(zone).getByRole("checkbox", { name: "Referential (a framing such as analysis or quote, not a concrete event)" }) as HTMLInputElement;
+    expect(referential.checked).toBe(false);
+    expect(calls("events.type_approve")).toHaveLength(0);
+    fireEvent.input(windowField, { target: { value: "72h" } });
+    fireEvent.click(referential);
+    fireEvent.click(within(zone).getByRole("button", { name: "Confirm" }));
+    await waitFor(() => expect(run).toHaveBeenCalledWith("events.type_approve", { id: "t1", window: "72h", referential: true }, false));
     expect(await within(zone).findByText("Event type proposal t1 (kicking error) approved.")).toBeTruthy();
-    expect(within(zone).getByText(/approved · awaits a code change/)).toBeTruthy();
+    expect(within(zone).getByText(/approved · waiting for phrases/)).toBeTruthy();
+    expect(within(zone).queryByRole("textbox", { name: "Window for kicking error" })).toBeNull();
     expect(within(zone).queryByRole("button", { name: "Approve kicking error" })).toBeNull();
     expect(within(zone).getByRole("button", { name: "Reject kicking error" })).toBeTruthy();
+    expect(within(zone).getByRole("button", { name: "Add phrase kicking error" })).toBeTruthy();
+  });
+
+  it("shows why a window is refused and keeps the approve form", async () => {
+    await open(
+      {},
+      {
+        "events.type_approve": () => {
+          throw new ApiError(400, "invalid_params", 'eventruleproposal: window "0s" is not a positive duration');
+        },
+      },
+      [typeRow()],
+    );
+    const zone = screen.getByRole("region", { name: /New event types/ });
+    await within(zone).findByText("kicking error");
+    fireEvent.click(within(zone).getByRole("button", { name: "Approve kicking error" }));
+    fireEvent.input(within(zone).getByRole("textbox", { name: "Window for kicking error" }), { target: { value: "0s" } });
+    fireEvent.click(within(zone).getByRole("button", { name: "Confirm" }));
+    expect(await within(zone).findByText(/is not a positive duration/)).toBeTruthy();
+    expect((within(zone).getByRole("textbox", { name: "Window for kicking error" }) as HTMLInputElement).value).toBe("0s");
+    expect(within(zone).getByText(/1 pending/)).toBeTruthy();
+  });
+
+  it("cancels the approve form without calling the action", async () => {
+    await open({}, {}, [typeRow()]);
+    const zone = screen.getByRole("region", { name: /New event types/ });
+    await within(zone).findByText("kicking error");
+    fireEvent.click(within(zone).getByRole("button", { name: "Approve kicking error" }));
+    fireEvent.click(within(zone).getByRole("button", { name: "Cancel" }));
+    expect(within(zone).queryByRole("textbox", { name: "Window for kicking error" })).toBeNull();
+    expect(calls("events.type_approve")).toHaveLength(0);
+  });
+
+  it("labels an approved type by its phrases: waiting, or how many", async () => {
+    await open({}, {}, [
+      typeRow({ status: "approved", phrases: 0 }),
+      typeRow({ id: "t2", type: "betting odds", status: "approved", phrases: 2 }),
+      typeRow({ id: "t3", type: "stadium works", status: "approved", phrases: 1 }),
+    ]);
+    const zone = screen.getByRole("region", { name: /New event types/ });
+    const item = (name: string) => within(zone).getByText(name).closest("li")!;
+    await within(zone).findByText("kicking error");
+    expect(within(item("kicking error")).getByText(/approved · waiting for phrases/)).toBeTruthy();
+    expect(within(item("betting odds")).getByText(/approved · 2 phrases/)).toBeTruthy();
+    expect(within(item("stadium works")).getByText(/approved · 1 phrase\b/)).toBeTruthy();
+  });
+
+  it("adds a phrase to an approved type and reloads the queue, where it appears", async () => {
+    const s = await open(
+      {},
+      {
+        "events.type_add_phrase": () => {
+          s.setQueue({ items: [rule({ id: "r9", target: "kicking-error", phrase: "misses a kick", prompt_version: "manual" })] });
+          s.setTypes([typeRow({ type: "kicking-error", status: "approved", phrases: 1 })]);
+          return obj({ id: "r9", target_kind: "action", target: "kicking-error", phrase: "misses a kick", status: "pending" }, 'Phrase "misses a kick" proposed for kicking-error; review it in the queue.');
+        },
+      },
+      [typeRow({ type: "kicking-error", status: "approved", phrases: 0 })],
+    );
+    const zone = screen.getByRole("region", { name: /New event types/ });
+    await within(zone).findByText(/waiting for phrases/);
+    fireEvent.click(within(zone).getByRole("button", { name: "Add phrase kicking-error" }));
+    const field = within(zone).getByRole("textbox", { name: "Phrase for kicking-error" });
+    fireEvent.input(field, { target: { value: "misses a kick" } });
+    fireEvent.click(within(zone).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(run).toHaveBeenCalledWith("events.type_add_phrase", { id: "t1", phrase: "misses a kick" }, false));
+    expect(await within(zone).findByText('Phrase "misses a kick" proposed for kicking-error; review it in the queue.')).toBeTruthy();
+    await waitFor(() => expect(calls("events.rules_queue").length).toBe(2));
+    const review = screen.getByRole("region", { name: /Review/ });
+    expect((await within(review).findAllByText(/misses a kick/)).length).toBeGreaterThan(0);
+    expect(await within(zone).findByText(/approved · 1 phrase\b/)).toBeTruthy();
+    expect(within(zone).queryByRole("textbox", { name: "Phrase for kicking-error" })).toBeNull();
+  });
+
+  it("shows why a phrase could not be added and keeps its field", async () => {
+    await open(
+      {},
+      {
+        "events.type_add_phrase": () => {
+          throw new ApiError(400, "invalid_params", "the phrase is empty");
+        },
+      },
+      [typeRow({ status: "approved", phrases: 0 })],
+    );
+    const zone = screen.getByRole("region", { name: /New event types/ });
+    await within(zone).findByText("kicking error");
+    fireEvent.click(within(zone).getByRole("button", { name: "Add phrase kicking error" }));
+    fireEvent.click(within(zone).getByRole("button", { name: "Save" }));
+    expect(await within(zone).findByText(/the phrase is empty/)).toBeTruthy();
+    expect(within(zone).getByRole("textbox", { name: "Phrase for kicking error" })).toBeTruthy();
+    expect(calls("events.rules_queue")).toHaveLength(1);
+  });
+
+  it("lists in the apply zone the approved types that have an approved phrase", async () => {
+    const approved = [{ id: "r7", target_kind: "action", target: "kicking-error", phrase: "misses a kick", decided_at: "2026-11-09T10:00:00Z" }];
+    await open({ approved }, {}, [
+      typeRow({ type: "kicking-error", status: "approved", phrases: 1, window: "72h", referential: false }),
+      typeRow({ id: "t2", type: "betting-odds", status: "approved", phrases: 0 }),
+    ]);
+    const apply = screen.getByRole("region", { name: /Apply/ });
+    const types = await within(apply).findByRole("list", { name: "New event types to apply" });
+    expect(within(types).getByText("kicking-error")).toBeTruthy();
+    expect(within(types).getByText(/window 72h/)).toBeTruthy();
+    expect(within(types).queryByText("betting-odds")).toBeNull();
   });
 
   it("rejects a type proposal and removes it", async () => {
@@ -399,6 +545,7 @@ describe("ReviewEvents", () => {
     const zone = screen.getByRole("region", { name: /New event types/ });
     await within(zone).findByText("kicking error");
     fireEvent.click(within(zone).getByRole("button", { name: "Approve kicking error" }));
+    fireEvent.click(within(zone).getByRole("button", { name: "Confirm" }));
     expect(await within(zone).findByText(/is not pending/)).toBeTruthy();
     expect(within(zone).getByText("kicking error")).toBeTruthy();
   });
@@ -469,13 +616,11 @@ describe("ReviewEvents", () => {
     expect(within(zone).getByText("kicking error")).toBeTruthy();
   });
 
-  it("shows the implementation brief of a type proposal on demand", async () => {
-    await open({}, { "events.brief": () => ({ result: { render: "text", text: "Brief: add kicking error", summary: "" } }) }, [typeRow()]);
+  it("offers no Brief button", async () => {
+    await open({}, {}, [typeRow(), typeRow({ id: "t2", type: "betting odds", status: "approved", phrases: 0 })]);
     const zone = screen.getByRole("region", { name: /New event types/ });
     await within(zone).findByText("kicking error");
-    fireEvent.click(within(zone).getByRole("button", { name: "Brief kicking error" }));
-    await waitFor(() => expect(run).toHaveBeenCalledWith("events.brief", { id: "t1" }, false));
-    expect(await within(zone).findByText("Brief: add kicking error")).toBeTruthy();
+    expect(within(zone).queryByRole("button", { name: /Brief/ })).toBeNull();
   });
 
   it("reloads the type proposals when discovery ends", async () => {

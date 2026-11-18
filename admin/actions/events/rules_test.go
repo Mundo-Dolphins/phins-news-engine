@@ -635,3 +635,41 @@ func TestRulesEntityCatalogUnsetIsConflictWithReason(t *testing.T) {
 		}
 	}
 }
+
+func TestRulesApplyReportsTypesWaitingAndOrphans(t *testing.T) {
+	f := newFixture(t)
+	defer events.SetGateDataset(repofs.Path(t, "testdata", "clustering_groups.yml"))()
+	newType := typeProposal("kicking-error", eventruleproposal.StatusApproved)
+	newType.TypeWindow, newType.TypeReferential = "72h", true
+	typeID := f.seed(newType)
+	f.seed(typeProposal("betting-odds", eventruleproposal.StatusApproved))
+	for _, target := range []string{"kicking-error", "no-such-type"} {
+		p := rulePhrase("zzqx "+target, "art-1")
+		p.Target, p.Status = target, eventruleproposal.StatusApproved
+		f.seed(p)
+	}
+
+	res, err := f.run("events.rules_apply", `{}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "PASS: 1 rule(s) applied to " + f.cfg.Clustering.GeneratedRulesPath +
+		", 1 new event type(s), 1 type(s) waiting for phrases, 1 phrase(s) without a declared or approved target"
+	if res.Summary != want {
+		t.Errorf("summary = %q\nwant %q", res.Summary, want)
+	}
+	m := asMap(t, res.Object)
+	types, waiting, orphans := list(t, m, "types_applied"), list(t, m, "types_waiting"), list(t, m, "orphans")
+	if len(types) != 1 || len(waiting) != 1 || len(orphans) != 1 {
+		t.Fatalf("object = %v", m)
+	}
+	if ty, _ := types[0].(map[string]any); ty["id"] != typeID || ty["type"] != "kicking-error" || ty["window"] != "72h" || ty["referential"] != true {
+		t.Errorf("types_applied = %v", types)
+	}
+	if w, _ := waiting[0].(map[string]any); w["type"] != "betting-odds" {
+		t.Errorf("types_waiting = %v", waiting)
+	}
+	if o, _ := orphans[0].(map[string]any); o["target"] != "no-such-type" || o["phrase"] != "zzqx no-such-type" {
+		t.Errorf("orphans = %v", orphans)
+	}
+}

@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -38,16 +40,21 @@ var (
 )
 
 // Context is what the review of one cycle is judged against: the base rules
-// (hand-written plus current generated), the generic sample, the typed
-// control sample and the lowercased title + summary of each sampled article.
+// (hand-written plus current generated, extended with the approved type
+// proposals not yet applied), the generic sample, the typed control sample
+// and the lowercased title + summary of each sampled article. TypeTargets
+// holds the names of the approved type proposals and of the generated
+// file's types: the actions a framing-only retype is allowed for.
 type Context struct {
-	Base    eventsignals.Rules
-	Sample  []eventruleproposal.Sample
-	Control []eventruleproposal.Sample
-	Text    map[string]string // article ID -> lowercased title + summary
+	Base        eventsignals.Rules
+	Sample      []eventruleproposal.Sample
+	Control     []eventruleproposal.Sample
+	Text        map[string]string // article ID -> lowercased title + summary
+	TypeTargets map[eventsignals.Action]bool
 }
 
-// Prepare draws the sample, then loads the base rules and the typed control
+// Prepare draws the sample, then loads the base rules (extended with the
+// approved type proposals, see withApprovedTypes) and the typed control
 // sample. An empty sample returns a Context with an empty sample and no
 // error, without loading the rest: nothing is discovered or reviewed then.
 func Prepare(ctx context.Context, d Deps) (Context, error) {
@@ -62,13 +69,103 @@ func Prepare(ctx context.Context, d Deps) (Context, error) {
 	if err != nil {
 		return Context{}, fmt.Errorf("eventrulecycle: base rules: %w", err)
 	}
+	base, targets, err := withApprovedTypes(ctx, d, base)
+	if err != nil {
+		return Context{}, err
+	}
 	var control []eventruleproposal.Sample
 	if d.Control != nil {
 		if control, err = d.Control(ctx); err != nil {
 			return Context{}, fmt.Errorf("eventrulecycle: typed control sample: %w", err)
 		}
 	}
-	return Context{Base: base, Sample: sample, Control: control, Text: sampleText(sample)}, nil
+	return Context{Base: base, Sample: sample, Control: control, Text: sampleText(sample), TypeTargets: targets}, nil
+}
+
+// withApprovedTypes returns a copy of base with each approved type proposal
+// whose name base does not declare appended as an event type, an action of
+// the same name after the existing ones and its window, so impact, the
+// target check and the LLM's lists see it. It also returns the names of
+// those proposals plus the generated file's types (read when ReadApplied is
+// set).
+func withApprovedTypes(ctx context.Context, d Deps, base eventsignals.Rules) (eventsignals.Rules, map[eventsignals.Action]bool, error) {
+	targets := map[eventsignals.Action]bool{}
+	if d.ReadApplied != nil {
+		set, err := d.ReadApplied(d.GeneratedPath)
+		if err != nil {
+			return base, nil, fmt.Errorf("eventrulecycle: read generated rules: %w", err)
+		}
+		for _, t := range set.Types {
+			targets[eventsignals.Action(t.Name)] = true
+		}
+	}
+	types, err := approvedTypes(ctx, d.Proposals)
+	if err != nil {
+		return base, nil, err
+	}
+	declared := declaredNames(base.Taxonomy)
+	out := base
+	extended := false
+	for _, p := range types {
+		name := p.TypeName
+		if declared[name] {
+			continue
+		}
+		targets[eventsignals.Action(name)] = true
+		if !extended {
+			extended = true
+			out.Taxonomy.EventTypes = slices.Clone(base.Taxonomy.EventTypes)
+			out.Taxonomy.Actions = slices.Clone(base.Taxonomy.Actions)
+			out.EventWindows = maps.Clone(base.EventWindows)
+			if out.EventWindows == nil {
+				out.EventWindows = map[eventsignals.EventType]time.Duration{}
+			}
+		}
+		et := eventsignals.EventType(name)
+		def := eventsignals.EventTypeDef{Name: et, Description: p.Description}
+		if p.TypeReferential {
+			def.Flags = []eventsignals.TypeFlag{eventsignals.FlagReferential}
+		}
+		out.Taxonomy.EventTypes = append(out.Taxonomy.EventTypes, def)
+		out.Taxonomy.Actions = append(out.Taxonomy.Actions, eventsignals.ActionDef{Name: eventsignals.Action(name), EventType: et})
+		out.EventWindows[et] = typeWindow(p)
+	}
+	return out, targets, nil
+}
+
+// typeWindow parses p's approval window; a blank or invalid one (the
+// approval checks it) is DefaultTypeWindow.
+func typeWindow(p eventruleproposal.Proposal) time.Duration {
+	if w, err := time.ParseDuration(p.TypeWindow); err == nil && w > 0 {
+		return w
+	}
+	w, _ := time.ParseDuration(eventruleproposal.DefaultTypeWindow)
+	return w
+}
+
+// declaredNames returns t's event type and action names.
+func declaredNames(t eventsignals.Taxonomy) map[string]bool {
+	out := map[string]bool{}
+	for _, n := range KnownTypeNames(t) {
+		out[n] = true
+	}
+	return out
+}
+
+// approvedTypes returns the approved type proposals sorted by name.
+func approvedTypes(ctx context.Context, repo eventruleproposalport.Repository) ([]eventruleproposal.Proposal, error) {
+	all, err := repo.ListByStatus(ctx, eventruleproposal.StatusApproved)
+	if err != nil {
+		return nil, fmt.Errorf("eventrulecycle: list approved proposals: %w", err)
+	}
+	var out []eventruleproposal.Proposal
+	for _, p := range all {
+		if p.Kind == eventruleproposal.KindType {
+			out = append(out, p)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].TypeName < out[j].TypeName })
+	return out, nil
 }
 
 // DiscoverResult summarises one discovery pass. Unavailable is true when
@@ -157,6 +254,8 @@ func Assess(d Deps, c Context, p eventruleproposal.Proposal, opts eventrulepropo
 
 func assessAt(c Context, p eventruleproposal.Proposal, opts eventruleproposal.CheckOptions, now time.Time) Assessment {
 	p.Phrase = normalizePhrase(p.Phrase)
+	// Framing-only retypes are allowed for generated types only.
+	opts.AllowReframe = c.TypeTargets[eventsignals.Action(p.Target)] && p.TargetKind == eventruleproposal.TargetAction
 	impact := impactOf(c, p, now)
 	verdict := eventruleproposal.Check(p, impact, len(c.Sample), opts)
 	return Assessment{Proposal: p, Impact: impact, Verdict: verdict, NoEvidence: onlyNoMatches(verdict)}
@@ -305,28 +404,39 @@ func Edit(ctx context.Context, d Deps, c Context, p eventruleproposal.Proposal, 
 	return a, nil
 }
 
-// ApplyResult is the outcome of Apply. Candidate is the full rule set the
-// gate scored (nil when the gate did not score one); Gated the proposals
-// still approved when re-read, whose rules it added; Applied the proposals
-// marked applied; Blocked and Reason report a gate refusal, after which the
-// proposals stay approved and no file is written; Nothing means there was
-// nothing to apply and the gate did not run.
+// ApplyResult is the outcome of Apply. Candidate is the full generated set
+// the gate scored (nil when the gate did not score one); Gated the phrase
+// proposals still approved when re-read whose target is known, whose rules
+// it added; Applied the phrase proposals and Types the type proposals marked
+// applied; Waiting the approved type proposals with no phrase to apply;
+// Orphans the approved phrases whose target is neither a declared action
+// nor an approved type proposal, which stay approved. Blocked and Reason
+// report a gate refusal, after which the proposals stay approved and no file
+// is written; Nothing means there was nothing to apply and the gate did not
+// run.
 type ApplyResult struct {
 	Applied   []eventruleproposal.Proposal
+	Types     []eventruleproposal.Proposal
+	Waiting   []eventruleproposal.Proposal
+	Orphans   []eventruleproposal.Proposal
 	Gated     []eventruleproposal.Proposal
-	Candidate []AppliedRule
+	Candidate *AppliedSet
 	Gate      GateResult
 	Blocked   bool
 	Reason    string
 	Nothing   bool
 }
 
-// Apply gates the rules already in the generated file plus toApply (sorted
-// and deduplicated) against the clustering benchmark. When the gate passes it
-// writes the generated file and marks toApply applied at now. Each proposal
-// is re-read first and skipped unless still approved, so a decision taken
-// since toApply was listed is neither overwritten nor written to the file;
-// when none is left the result is Nothing. After a passing gate each one is
+// Apply gates the generated file's rules and types plus toApply (sorted and
+// deduplicated) and the approved type proposals they target against the
+// clustering benchmark. A phrase is applied when its target is an action or
+// signal of the base rules (hand-written plus already applied) or an
+// approved type proposal; an approved type proposal is applied with its
+// first phrase. When the gate passes it writes the generated file and marks
+// those phrases and types applied at now. Each proposal is re-read first and
+// skipped unless still approved, so a decision taken since toApply was
+// listed is neither overwritten nor written to the file; when none is left
+// the result is Nothing. After a passing gate each one (types included) is
 // re-read again: if any is no longer approved, ErrApplyStale is returned
 // and nothing is written. A failure marking them applied after the file was
 // written returns an error saying so; running Apply again finishes it.
@@ -342,46 +452,45 @@ func Apply(ctx context.Context, d Deps, toApply []eventruleproposal.Proposal, no
 			current = append(current, cur)
 		}
 	}
+	types, err := approvedTypes(ctx, d.Proposals)
+	if err != nil {
+		return r, err
+	}
 	if len(current) == 0 {
-		r.Nothing = true
+		r.Nothing, r.Waiting = true, types
 		return r, nil
 	}
 	toApply = current
 	sortProposals(toApply)
-	r.Gated = toApply
-	if d.Gate == nil || d.ReadApplied == nil || d.WriteApplied == nil {
-		return r, errors.New("eventrulecycle: Gate, ReadApplied and WriteApplied are required to apply approved rules")
+	if d.Gate == nil || d.ReadApplied == nil || d.WriteApplied == nil || d.BaseRules == nil {
+		return r, errors.New("eventrulecycle: Gate, ReadApplied, WriteApplied and BaseRules are required to apply approved rules")
+	}
+	base, err := d.BaseRules()
+	if err != nil {
+		return r, fmt.Errorf("eventrulecycle: base rules: %w", err)
 	}
 	existing, err := d.ReadApplied(d.GeneratedPath)
 	if err != nil {
 		return r, fmt.Errorf("eventrulecycle: read generated rules: %w", err)
 	}
-	candidate := make([]AppliedRule, 0, len(existing)+len(toApply))
-	candidate = append(candidate, existing...)
-	seen := make(map[string]bool, len(candidate))
-	for _, rule := range candidate {
-		seen[ruleKey(rule)] = true
-	}
-	for _, p := range toApply {
-		rule := AppliedRule{TargetKind: string(p.TargetKind), Target: p.Target, Phrase: normalizePhrase(p.Phrase), ProposalID: p.ID, PromptVersion: p.PromptVersion}
-		if seen[ruleKey(rule)] {
-			continue
-		}
-		seen[ruleKey(rule)] = true
-		candidate = append(candidate, rule)
+	candidate, gatedTypes := buildCandidate(&r, base.Taxonomy, existing, toApply, types)
+	if len(r.Gated) == 0 {
+		r.Nothing = true
+		return r, nil
 	}
 
 	gate, err := d.Gate(ctx, candidate)
 	if err != nil {
 		return r, fmt.Errorf("eventrulecycle: clustering gate: %w", err)
 	}
-	r.Candidate, r.Gate = candidate, gate
+	r.Candidate, r.Gate = &candidate, gate
 	if !gate.OK {
 		r.Blocked, r.Reason = true, gate.Reason
 		return r, nil
 	}
-	// The gate can take minutes: a rule rejected meanwhile must not be written.
-	for _, p := range toApply {
+	// The gate can take minutes: a rule or type rejected meanwhile must not
+	// be written.
+	for _, p := range append(slices.Clone(r.Gated), gatedTypes...) {
 		cur, err := d.Proposals.Get(ctx, p.ID)
 		if err != nil {
 			return r, fmt.Errorf("eventrulecycle: reload %s: %w", p.ID, err)
@@ -393,17 +502,113 @@ func Apply(ctx context.Context, d Deps, toApply []eventruleproposal.Proposal, no
 	if err := d.WriteApplied(d.GeneratedPath, candidate); err != nil {
 		return r, fmt.Errorf("eventrulecycle: write generated rules: %w", err)
 	}
-	for _, p := range toApply {
+	mark := func(p eventruleproposal.Proposal) (eventruleproposal.Proposal, error) {
 		applied, err := p.MarkApplied(now.UTC())
 		if err == nil {
 			err = d.Proposals.Transition(ctx, applied, eventruleproposal.StatusApproved)
 		}
 		if err != nil {
-			return r, fmt.Errorf("eventrulecycle: the rules file %s was written but marking %s applied failed (%w); run apply again to finish marking", d.GeneratedPath, p.ID, err)
+			return applied, fmt.Errorf("eventrulecycle: the rules file %s was written but marking %s applied failed (%w); run apply again to finish marking", d.GeneratedPath, p.ID, err)
+		}
+		return applied, nil
+	}
+	for _, p := range gatedTypes {
+		applied, err := mark(p)
+		if err != nil {
+			return r, err
+		}
+		r.Types = append(r.Types, applied)
+	}
+	for _, p := range r.Gated {
+		applied, err := mark(p)
+		if err != nil {
+			return r, err
 		}
 		r.Applied = append(r.Applied, applied)
 	}
 	return r, nil
+}
+
+// buildCandidate returns existing plus the phrases of toApply whose target
+// is known (recorded in r.Gated; the others in r.Orphans) and the approved
+// types that one of them targets (returned as gatedTypes; the ones with no
+// phrase in r.Waiting). An approved type already in the generated file is
+// only marked; one whose name taxonomy declares otherwise is not a type to
+// add: its phrases are those of that action (or orphans when it has none),
+// the same filter withApprovedTypes uses.
+func buildCandidate(r *ApplyResult, taxonomy eventsignals.Taxonomy, existing AppliedSet, toApply, types []eventruleproposal.Proposal) (AppliedSet, []eventruleproposal.Proposal) {
+	actions := map[string]bool{}
+	for _, a := range taxonomy.ActionPriority() {
+		actions[string(a)] = true
+	}
+	inFile := map[string]bool{}
+	for _, t := range existing.Types {
+		actions[t.Name], inFile[t.Name] = true, true
+	}
+	signals := map[string]bool{}
+	for _, s := range taxonomy.SignalPriority() {
+		signals[string(s)] = true
+	}
+	declared := declaredNames(taxonomy)
+	approved := map[string]bool{}
+	for _, p := range types {
+		if !declared[p.TypeName] && !inFile[p.TypeName] {
+			approved[p.TypeName] = true
+		}
+	}
+
+	candidate := AppliedSet{
+		Rules: slices.Clone(existing.Rules),
+		Types: slices.Clone(existing.Types),
+	}
+	seen := make(map[string]bool, len(candidate.Rules))
+	for _, rule := range candidate.Rules {
+		seen[ruleKey(rule)] = true
+	}
+	withPhrase := map[string]bool{}
+	for _, p := range toApply {
+		known := false
+		switch p.TargetKind {
+		case eventruleproposal.TargetAction:
+			known = actions[p.Target] || approved[p.Target]
+			withPhrase[p.Target] = withPhrase[p.Target] || approved[p.Target]
+		case eventruleproposal.TargetSignal:
+			known = signals[p.Target]
+		}
+		if !known {
+			r.Orphans = append(r.Orphans, p)
+			continue
+		}
+		r.Gated = append(r.Gated, p)
+		rule := AppliedRule{TargetKind: string(p.TargetKind), Target: p.Target, Phrase: normalizePhrase(p.Phrase), ProposalID: p.ID, PromptVersion: p.PromptVersion}
+		if seen[ruleKey(rule)] {
+			continue
+		}
+		seen[ruleKey(rule)] = true
+		candidate.Rules = append(candidate.Rules, rule)
+	}
+	var gatedTypes []eventruleproposal.Proposal
+	for _, p := range types {
+		switch {
+		case inFile[p.TypeName]:
+			// Written by an apply that failed to mark it: finish marking.
+			gatedTypes = append(gatedTypes, p)
+		case !approved[p.TypeName]:
+		case withPhrase[p.TypeName]:
+			gatedTypes = append(gatedTypes, p)
+			window := strings.TrimSpace(p.TypeWindow)
+			if window == "" {
+				window = eventruleproposal.DefaultTypeWindow
+			}
+			candidate.Types = append(candidate.Types, AppliedType{
+				Name: p.TypeName, Description: p.Description, Referential: p.TypeReferential, Window: window,
+				ProposalID: p.ID, PromptVersion: p.PromptVersion,
+			})
+		default:
+			r.Waiting = append(r.Waiting, p)
+		}
+	}
+	return candidate, gatedTypes
 }
 
 func nowOf(d Deps) func() time.Time {

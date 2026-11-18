@@ -48,7 +48,7 @@ func survivors(plan NormalizePlan) map[string]Proposal {
 func TestPlanTypeNormalization(t *testing.T) {
 	now := normalizeBase.Add(48 * time.Hour)
 	ps := normalizeFixture()
-	plan := PlanTypeNormalization(ps, normalizeKnown, true, now)
+	plan := PlanTypeNormalization(ps, normalizeKnown, nil, true, now)
 
 	deleted := append([]string(nil), plan.Delete...)
 	sort.Strings(deleted)
@@ -87,7 +87,7 @@ func TestPlanTypeNormalization(t *testing.T) {
 }
 
 func TestPlanTypeNormalization_KeepsApprovedWithoutReopen(t *testing.T) {
-	plan := PlanTypeNormalization(normalizeFixture(), normalizeKnown, false, normalizeBase.Add(48*time.Hour))
+	plan := PlanTypeNormalization(normalizeFixture(), normalizeKnown, nil, false, normalizeBase.Add(48*time.Hour))
 	if pis := survivors(plan)["player-injury-status"]; pis.Status != StatusApproved {
 		t.Fatalf("player-injury-status = %s, want approved", pis.Status)
 	}
@@ -100,7 +100,7 @@ func TestPlanTypeNormalization_Idempotent(t *testing.T) {
 	for _, reopen := range []bool{true, false} {
 		now := normalizeBase.Add(48 * time.Hour)
 		ps := normalizeFixture()
-		plan := PlanTypeNormalization(ps, normalizeKnown, reopen, now)
+		plan := PlanTypeNormalization(ps, normalizeKnown, nil, reopen, now)
 
 		deleted := map[string]bool{}
 		for _, id := range plan.Delete {
@@ -117,9 +117,34 @@ func TestPlanTypeNormalization_Idempotent(t *testing.T) {
 			after = append(after, p)
 		}
 
-		again := PlanTypeNormalization(after, normalizeKnown, reopen, now.Add(time.Hour))
+		again := PlanTypeNormalization(after, normalizeKnown, nil, reopen, now.Add(time.Hour))
 		if len(again.Delete) != 0 || len(again.Insert) != 0 {
 			t.Fatalf("reopen=%v: second plan = %+v, want nothing to do", reopen, again)
 		}
+	}
+}
+
+func TestPlanTypeNormalization_SkipsAppliedSlugs(t *testing.T) {
+	now := normalizeBase.Add(48 * time.Hour)
+	ps := []Proposal{
+		{ID: "evr_x", Kind: KindType, TypeName: "kicking error", Status: StatusPending, CreatedAt: normalizeBase, EvidenceIDs: []string{"e1"}},
+		{ID: "evr_y", Kind: KindType, TypeName: "kicking_error", Status: StatusApproved, CreatedAt: normalizeBase.Add(time.Hour), DecidedAt: normalizeBase.Add(2 * time.Hour)},
+	}
+	plan := PlanTypeNormalization(ps, nil, map[string]bool{"kicking-error": true}, false, now)
+	if !reflect.DeepEqual(plan.Delete, []string{"evr_x", "evr_y"}) || len(plan.Insert) != 0 || plan.Covered != 1 || plan.Merged != 0 {
+		t.Fatalf("plan = %+v, want both rows deleted, nothing inserted, Covered 1", plan)
+	}
+}
+
+func TestPlanTypeNormalization_KeepsApprovalChoices(t *testing.T) {
+	now := normalizeBase.Add(48 * time.Hour)
+	ps := []Proposal{
+		{ID: "evr_x", Kind: KindType, TypeName: "kicking error", Status: StatusPending, CreatedAt: normalizeBase},
+		{ID: "evr_y", Kind: KindType, TypeName: "kicking_error", Status: StatusApproved, CreatedAt: normalizeBase.Add(time.Hour), DecidedAt: normalizeBase.Add(2 * time.Hour), TypeWindow: "72h", TypeReferential: true},
+	}
+	plan := PlanTypeNormalization(ps, nil, nil, false, now)
+	got := survivors(plan)["kicking-error"]
+	if got.Status != StatusApproved || got.TypeWindow != "72h" || !got.TypeReferential {
+		t.Fatalf("survivor = %+v, want approved with window 72h and referential", got)
 	}
 }

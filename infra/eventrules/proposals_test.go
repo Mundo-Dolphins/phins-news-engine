@@ -15,7 +15,6 @@ import (
 	"github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqliteeventruleproposal"
 	"github.com/Mundo-Dolphins/phins-news-engine/app/eventrulecycle"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventruleproposal"
-	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals/eventsignalstest"
 )
 
@@ -53,11 +52,11 @@ func TestDecideTypeApprovesAndRejects(t *testing.T) {
 	db := openTestDB(t)
 	ids := seedProposals(t, db, typeProposal("a", eventruleproposal.StatusPending), typeProposal("b", eventruleproposal.StatusPending))
 	now := time.Date(2026, 5, 1, 9, 0, 0, 0, time.UTC)
-	approved, err := DecideType(context.Background(), db, ids[0], true, now)
+	approved, err := DecideType(context.Background(), db, ids[0], true, TypeApproval{}, knownNames(), now)
 	if err != nil || approved.Status != eventruleproposal.StatusApproved {
 		t.Fatalf("approve: %+v, %v", approved, err)
 	}
-	rejected, err := DecideType(context.Background(), db, ids[1], false, now)
+	rejected, err := DecideType(context.Background(), db, ids[1], false, TypeApproval{}, knownNames(), now)
 	if err != nil || rejected.Status != eventruleproposal.StatusRejected {
 		t.Fatalf("reject: %+v, %v", rejected, err)
 	}
@@ -70,7 +69,7 @@ func TestDecideTypeApprovesAndRejects(t *testing.T) {
 func TestDecideTypeRejectsPhraseProposal(t *testing.T) {
 	db := openTestDB(t)
 	ids := seedProposals(t, db, phraseProposal())
-	_, err := DecideType(context.Background(), db, ids[0], true, time.Now())
+	_, err := DecideType(context.Background(), db, ids[0], true, TypeApproval{}, knownNames(), time.Now())
 	if !errors.Is(err, ErrNotTypeProposal) {
 		t.Fatalf("err = %v, want ErrNotTypeProposal", err)
 	}
@@ -86,7 +85,7 @@ func TestDecideTypeRejectsPhraseProposal(t *testing.T) {
 func TestDecideTypeAlreadyDecided(t *testing.T) {
 	db := openTestDB(t)
 	ids := seedProposals(t, db, typeProposal("old", eventruleproposal.StatusRejected))
-	_, err := DecideType(context.Background(), db, ids[0], true, time.Now())
+	_, err := DecideType(context.Background(), db, ids[0], true, TypeApproval{}, knownNames(), time.Now())
 	if err == nil || !strings.Contains(err.Error(), "cannot move") {
 		t.Fatalf("err = %v, want the domain error", err)
 	}
@@ -97,45 +96,77 @@ func TestDecideTypeAlreadyDecided(t *testing.T) {
 
 func TestDecideTypeUnknownIDIsNotFound(t *testing.T) {
 	db := openTestDB(t)
-	_, err := DecideType(context.Background(), db, "evr_nope", true, time.Now())
+	_, err := DecideType(context.Background(), db, "evr_nope", true, TypeApproval{}, knownNames(), time.Now())
 	if !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("err = %v, want errors.Is sql.ErrNoRows", err)
 	}
-	if _, err := Brief(context.Background(), db, "evr_nope"); !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("Brief err = %v, want errors.Is sql.ErrNoRows", err)
-	}
 }
 
-func TestBriefQuotesEvidenceAndSkipsPruned(t *testing.T) {
-	db := openTestDB(t)
-	seedArticles(t, db, "g", eventsignals.EventTypeGeneric, "Isotopes extend Ezo", "Dale gets new deal")
-	ids := seedProposals(t, db, typeProposal("contract extension", eventruleproposal.StatusPending, "g0", "g1", "missing"))
-	got, err := Brief(context.Background(), db, ids[0])
+// typePhrase is a phrase proposal targeting the action of the type name.
+func typePhrase(name, phrase string, status eventruleproposal.Status, evidence ...string) eventruleproposal.Proposal {
+	return eventruleproposal.Proposal{Kind: eventruleproposal.KindPhrase, TargetKind: eventruleproposal.TargetAction, Target: name, Phrase: phrase, EvidenceIDs: evidence, Status: status, PromptVersion: "v1"}
+}
+
+func statusOf(t *testing.T, db *sql.DB, id string) eventruleproposal.Status {
+	t.Helper()
+	p, err := sqliteeventruleproposal.NewRepository(db).Get(context.Background(), id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"contract-extension", "- Isotopes extend Ezo", "- Dale gets new deal"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("brief lacks %q:\n%s", want, got)
+	return p.Status
+}
+
+func TestDecideTypeRejectRejectsItsPhrases(t *testing.T) {
+	db := openTestDB(t)
+	ids := seedProposals(t, db,
+		typeProposal("kicking-error", eventruleproposal.StatusApproved),
+		typePhrase("kicking-error", "misses a kick", eventruleproposal.StatusPending, "a1"),
+		typePhrase("kicking-error", "shanks the kick", eventruleproposal.StatusApproved, "a2"),
+		typePhrase("sign", "inks a deal", eventruleproposal.StatusPending, "a3"),
+	)
+	if _, err := DecideType(context.Background(), db, ids[0], false, TypeApproval{}, knownNames(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []eventruleproposal.Status{eventruleproposal.StatusRejected, eventruleproposal.StatusRejected, eventruleproposal.StatusRejected, eventruleproposal.StatusPending} {
+		if got := statusOf(t, db, ids[i]); got != want {
+			t.Errorf("proposal %d is %s, want %s", i, got, want)
 		}
 	}
 }
 
-func TestBriefPhraseProposal(t *testing.T) {
+func TestMergeType_ApprovedIntoProposalRetargetsPhrases(t *testing.T) {
 	db := openTestDB(t)
-	ids := seedProposals(t, db, phraseProposal())
-	_, err := Brief(context.Background(), db, ids[0])
-	if !errors.Is(err, ErrNotTypeProposal) || strings.Contains(err.Error(), "events review") {
-		t.Fatalf("err = %v, want ErrNotTypeProposal with the short brief wording", err)
+	ids := seedProposals(t, db,
+		typeProposal("kicking-error", eventruleproposal.StatusApproved, "a1"),
+		typeProposal("field-goal-miss", eventruleproposal.StatusPending, "a2"),
+		typePhrase("kicking-error", "misses a kick", eventruleproposal.StatusPending, "a1"),
+	)
+	res, err := MergeType(context.Background(), db, ids[0], ids[1], knownNames(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Retargeted) != 1 || res.Retargeted[0].Target != "field-goal-miss" || res.Retargeted[0].Phrase != "misses a kick" || res.Retargeted[0].Status != eventruleproposal.StatusPending {
+		t.Fatalf("Retargeted = %+v", res.Retargeted)
+	}
+	if _, err := sqliteeventruleproposal.NewRepository(db).Get(context.Background(), ids[2]); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("old phrase still stored: %v", err)
+	}
+	if got := statusOf(t, db, res.Retargeted[0].ID); got != eventruleproposal.StatusPending {
+		t.Errorf("retargeted phrase is %s", got)
 	}
 }
 
-func TestBriefRejectedProposal(t *testing.T) {
+func TestMergeType_IntoKnownTypeRejectsPhrases(t *testing.T) {
 	db := openTestDB(t)
-	ids := seedProposals(t, db, typeProposal("x type", eventruleproposal.StatusRejected))
-	_, err := Brief(context.Background(), db, ids[0])
-	if !errors.Is(err, ErrNoBrief) || !strings.Contains(err.Error(), "is rejected; only pending or approved type proposals have a brief") {
-		t.Fatalf("err = %v, want ErrNoBrief", err)
+	ids := seedProposals(t, db,
+		typeProposal("kicking-error", eventruleproposal.StatusApproved, "a1"),
+		typePhrase("kicking-error", "misses a kick", eventruleproposal.StatusPending, "a1"),
+	)
+	if _, err := MergeType(context.Background(), db, ids[0], "game", knownNames(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if got := statusOf(t, db, ids[1]); got != eventruleproposal.StatusRejected {
+		t.Errorf("phrase is %s, want rejected", got)
 	}
 }
 
@@ -335,5 +366,187 @@ func TestNormalizeTypes(t *testing.T) {
 	}
 	if want := (NormalizeReport{Before: 4, After: 4}); again != want {
 		t.Fatalf("second run = %+v, want %+v", again, want)
+	}
+}
+
+func TestDecideTypePersistsApprovalOptions(t *testing.T) {
+	db := openTestDB(t)
+	ids := seedProposals(t, db,
+		typeProposal("a", eventruleproposal.StatusPending),
+		typeProposal("b", eventruleproposal.StatusPending),
+		typeProposal("c", eventruleproposal.StatusPending),
+		typeProposal("d", eventruleproposal.StatusPending))
+	now := time.Date(2026, 5, 1, 9, 0, 0, 0, time.UTC)
+	ctx := context.Background()
+	repo := sqliteeventruleproposal.NewRepository(db)
+
+	if _, err := DecideType(ctx, db, ids[0], true, TypeApproval{Window: "72h", Referential: true}, knownNames(), now); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.Get(ctx, ids[0])
+	if err != nil || got.TypeWindow != "72h" || !got.TypeReferential {
+		t.Fatalf("stored = %+v, %v; want 72h and referential", got, err)
+	}
+	if _, err := DecideType(ctx, db, ids[1], true, TypeApproval{}, knownNames(), now); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = repo.Get(ctx, ids[1])
+	if got.TypeWindow != "48h" || got.TypeReferential {
+		t.Fatalf("defaults = %+v, want 48h and not referential", got)
+	}
+	// A bad window is refused and leaves the proposal pending.
+	_, err = DecideType(ctx, db, ids[2], true, TypeApproval{Window: "0s"}, knownNames(), now)
+	if !errors.Is(err, ErrBadTypeApproval) {
+		t.Fatalf("err = %v, want ErrBadTypeApproval", err)
+	}
+	got, _ = repo.Get(ctx, ids[2])
+	if got.Status != eventruleproposal.StatusPending {
+		t.Fatalf("status = %s, want pending", got.Status)
+	}
+	// Options are ignored when rejecting, even a bad window.
+	rejected, err := DecideType(ctx, db, ids[3], false, TypeApproval{Window: "abc", Referential: true}, knownNames(), now)
+	if err != nil || rejected.Status != eventruleproposal.StatusRejected {
+		t.Fatalf("reject = %+v, %v", rejected, err)
+	}
+	got, _ = repo.Get(ctx, ids[3])
+	if got.TypeWindow != "48h" || got.TypeReferential {
+		t.Fatalf("rejected row = %+v, want untouched approval choices", got)
+	}
+}
+
+func TestNormalizeTypesSkipsAppliedSlug(t *testing.T) {
+	db := openTestDB(t)
+	base := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	insertRawTypeProposal(t, db, "evr_applied", "kicking-error", eventruleproposal.StatusApplied, "", base)
+	insertRawTypeProposal(t, db, "evr_pending", "kicking_error", eventruleproposal.StatusPending, "", base.Add(time.Hour), "e1")
+
+	rep, err := NormalizeTypes(context.Background(), db, false, knownNames(), base.Add(48*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (NormalizeReport{Before: 1, After: 0, Covered: 1}); rep != want {
+		t.Fatalf("report = %+v, want %+v", rep, want)
+	}
+	repo := sqliteeventruleproposal.NewRepository(db)
+	if _, err := repo.Get(context.Background(), "evr_pending"); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("pending duplicate err = %v, want it deleted", err)
+	}
+	applied, err := repo.Get(context.Background(), "evr_applied")
+	if err != nil || applied.Status != eventruleproposal.StatusApplied {
+		t.Fatalf("applied row = %+v, %v; want it untouched", applied, err)
+	}
+}
+
+func TestDecideTypeAndMergeKeepThePhrasesOfADeclaredAction(t *testing.T) {
+	// A type proposal named like a declared action (added by hand since):
+	// rejecting or merging it away must not reject that action's phrases.
+	db := openTestDB(t)
+	ids := seedProposals(t, db,
+		typeProposal("sign", eventruleproposal.StatusApproved),
+		typeProposal("trade", eventruleproposal.StatusPending),
+		phraseProposal(),
+		typePhrase("trade", "ships off", eventruleproposal.StatusApproved, "a1"),
+	)
+	if _, err := DecideType(context.Background(), db, ids[0], false, TypeApproval{}, knownNames(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MergeType(context.Background(), db, ids[1], "game", knownNames(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	for _, i := range []int{2, 3} {
+		if got, want := statusOf(t, db, ids[i]), []eventruleproposal.Status{eventruleproposal.StatusPending, eventruleproposal.StatusApproved}[i-2]; got != want {
+			t.Errorf("phrase %d is %s, want %s (untouched)", i, got, want)
+		}
+	}
+}
+
+func TestMergeType_IntoProposalKeepsThePhrasesOfADeclaredAction(t *testing.T) {
+	// An approved type proposal named like a declared action, merged into
+	// another proposal: that action's phrases must not move to the target.
+	db := openTestDB(t)
+	ids := seedProposals(t, db,
+		typeProposal("sign", eventruleproposal.StatusApproved),
+		typeProposal("kicking-error", eventruleproposal.StatusPending),
+		phraseProposal(),
+	)
+	res, err := MergeType(context.Background(), db, ids[0], ids[1], knownNames(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Retargeted) != 0 {
+		t.Errorf("Retargeted = %+v, want none", res.Retargeted)
+	}
+	p, err := sqliteeventruleproposal.NewRepository(db).Get(context.Background(), ids[2])
+	if err != nil || p.Target != "sign" || p.Status != eventruleproposal.StatusPending {
+		t.Errorf("phrase = %+v, %v; want it untouched (sign, pending)", p, err)
+	}
+}
+
+func TestAddTypePhrase(t *testing.T) {
+	db := openTestDB(t)
+	ids := seedProposals(t, db,
+		typeProposal("kicking error", eventruleproposal.StatusApproved),
+		typeProposal("betting odds", eventruleproposal.StatusPending),
+		phraseProposal(),
+	)
+	now := time.Date(2026, 5, 1, 9, 0, 0, 0, time.UTC)
+	ctx := context.Background()
+
+	p, err := AddTypePhrase(ctx, db, ids[0], "  Misses A Kick ", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Kind != eventruleproposal.KindPhrase || p.TargetKind != eventruleproposal.TargetAction || p.Target != "kicking-error" ||
+		p.Phrase != "misses a kick" || p.PromptVersion != "manual" || len(p.EvidenceIDs) != 0 || p.Status != eventruleproposal.StatusPending {
+		t.Fatalf("AddTypePhrase() = %+v", p)
+	}
+	if got, err := sqliteeventruleproposal.NewRepository(db).Get(ctx, p.ID); err != nil || got.Status != eventruleproposal.StatusPending || got.Target != "kicking-error" {
+		t.Fatalf("stored = %+v, %v", got, err)
+	}
+	counts, err := TypePhraseCounts(ctx, db)
+	if err != nil || counts["kicking-error"] != 1 {
+		t.Fatalf("TypePhraseCounts() = %v, %v", counts, err)
+	}
+
+	if _, err := AddTypePhrase(ctx, db, ids[1], "posts the line", now); !errors.Is(err, ErrTypeNotApproved) {
+		t.Errorf("pending type: err = %v, want ErrTypeNotApproved", err)
+	}
+	if _, err := AddTypePhrase(ctx, db, ids[2], "posts the line", now); !errors.Is(err, ErrNotTypeProposal) {
+		t.Errorf("phrase proposal: err = %v, want ErrNotTypeProposal", err)
+	}
+	if _, err := AddTypePhrase(ctx, db, ids[0], "   ", now); !errors.Is(err, ErrEmptyPhrase) {
+		t.Errorf("blank phrase: err = %v, want ErrEmptyPhrase", err)
+	}
+	if _, err := AddTypePhrase(ctx, db, "evr_nope", "x y", now); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("unknown id: err = %v, want sql.ErrNoRows", err)
+	}
+	// The same phrase rejected earlier is not silently brought back.
+	rejected, err := p.Reject(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sqliteeventruleproposal.NewRepository(db).Transition(ctx, rejected, eventruleproposal.StatusPending); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AddTypePhrase(ctx, db, ids[0], "misses a kick", now); !errors.Is(err, ErrAlreadyDecided) {
+		t.Errorf("rejected phrase: err = %v, want ErrAlreadyDecided", err)
+	}
+}
+
+func TestTypePhraseCountsPendingAndApprovedActionPhrases(t *testing.T) {
+	db := openTestDB(t)
+	seedProposals(t, db,
+		typePhrase("kicking-error", "misses a kick", eventruleproposal.StatusPending),
+		typePhrase("kicking-error", "shanks the kick", eventruleproposal.StatusApproved),
+		typePhrase("kicking-error", "hooks it wide", eventruleproposal.StatusRejected),
+		typePhrase("kicking-error", "doinks it", eventruleproposal.StatusApplied),
+		typeProposal("kicking-error", eventruleproposal.StatusApproved),
+	)
+	counts, err := TypePhraseCounts(context.Background(), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(counts, map[string]int{"kicking-error": 2}) {
+		t.Errorf("counts = %v, want kicking-error: 2", counts)
 	}
 }

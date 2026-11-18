@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 
 	"github.com/Mundo-Dolphins/phins-news-engine/app/clustereval"
@@ -58,41 +59,50 @@ func DeployPaths(cfg *config.Config, res eventrulecycle.Result) []string {
 	return []string{path}
 }
 
-// ReadApplied adapts clusteringrules.ParseGenerated to the cycle's rules,
-// actions first, then signals, each sorted by target and phrase. A missing
-// file is the empty list.
-func ReadApplied(path string) ([]eventrulecycle.AppliedRule, error) {
+// ReadApplied adapts clusteringrules.ParseGenerated to the cycle's set: the
+// types sorted by name, then the rules, actions first, then signals, each
+// sorted by target and phrase. A missing file is the empty set.
+func ReadApplied(path string) (eventrulecycle.AppliedSet, error) {
 	g, err := clusteringrules.ParseGenerated(path)
 	if err != nil {
-		return nil, err
+		return eventrulecycle.AppliedSet{}, err
 	}
-	return appliedRules(g), nil
+	return appliedSet(g), nil
 }
 
 // readAppliedIn is ReadApplied that also rejects a bucket taxonomy does not
-// declare, as clusteringrules.LoadWithGenerated does.
-func readAppliedIn(path string, taxonomy eventsignals.Taxonomy) ([]eventrulecycle.AppliedRule, error) {
+// declare and a type it already declares, as clusteringrules.LoadWithGenerated
+// does.
+func readAppliedIn(path string, taxonomy eventsignals.Taxonomy) (eventrulecycle.AppliedSet, error) {
 	g, err := clusteringrules.ParseGenerated(path)
 	if err != nil {
-		return nil, err
+		return eventrulecycle.AppliedSet{}, err
 	}
 	if err := clusteringrules.CheckGeneratedBuckets(path, g, taxonomy); err != nil {
-		return nil, err
+		return eventrulecycle.AppliedSet{}, err
 	}
-	return appliedRules(g), nil
+	return appliedSet(g), nil
 }
 
-// appliedRules converts g to the cycle's rules, actions first, then signals,
-// each sorted by target and phrase.
-func appliedRules(g clusteringrules.GeneratedRules) []eventrulecycle.AppliedRule {
-	out := []eventrulecycle.AppliedRule{}
+// appliedSet converts g to the cycle's set: types sorted by name (a type is
+// referential when its flags are ["referential"]), then the rules, actions
+// first, then signals, each sorted by target and phrase.
+func appliedSet(g clusteringrules.GeneratedRules) eventrulecycle.AppliedSet {
+	out := eventrulecycle.AppliedSet{Rules: []eventrulecycle.AppliedRule{}, Types: []eventrulecycle.AppliedType{}}
+	for _, t := range g.Types {
+		out.Types = append(out.Types, eventrulecycle.AppliedType{
+			Name: t.Name, Description: t.Description, Referential: slices.Equal(t.Flags, []string{string(eventsignals.FlagReferential)}),
+			Window: t.Window, ProposalID: t.ProposalID, PromptVersion: t.PromptVersion,
+		})
+	}
+	sort.Slice(out.Types, func(i, j int) bool { return out.Types[i].Name < out.Types[j].Name })
 	appendAll := func(kind string, targets []string, entries func(string) []clusteringrules.GeneratedEntry) {
 		sort.Strings(targets)
 		for _, target := range targets {
 			es := append([]clusteringrules.GeneratedEntry(nil), entries(target)...)
 			sort.Slice(es, func(i, j int) bool { return es[i].Phrase < es[j].Phrase })
 			for _, e := range es {
-				out = append(out, eventrulecycle.AppliedRule{TargetKind: kind, Target: target, Phrase: e.Phrase, ProposalID: e.ProposalID, PromptVersion: e.PromptVersion})
+				out.Rules = append(out.Rules, eventrulecycle.AppliedRule{TargetKind: kind, Target: target, Phrase: e.Phrase, ProposalID: e.ProposalID, PromptVersion: e.PromptVersion})
 			}
 		}
 	}
@@ -109,21 +119,29 @@ func appliedRules(g clusteringrules.GeneratedRules) []eventrulecycle.AppliedRule
 	return out
 }
 
-// toGenerated converts the cycle's rules to the generated file model.
-func toGenerated(rules []eventrulecycle.AppliedRule) (clusteringrules.GeneratedRules, error) {
+// toGenerated converts the cycle's set to the generated file model; a
+// referential type gets the flags ["referential"].
+func toGenerated(s eventrulecycle.AppliedSet) (clusteringrules.GeneratedRules, error) {
 	g := clusteringrules.GeneratedRules{
 		ActionTerms: map[eventsignals.Action][]clusteringrules.GeneratedEntry{},
 		ContentCues: map[eventsignals.ContentSignal][]clusteringrules.GeneratedEntry{},
 	}
-	for _, r := range rules {
+	for _, t := range s.Types {
+		gt := clusteringrules.GeneratedType{Name: t.Name, Description: t.Description, Window: t.Window, ProposalID: t.ProposalID, PromptVersion: t.PromptVersion}
+		if t.Referential {
+			gt.Flags = []string{string(eventsignals.FlagReferential)}
+		}
+		g.Types = append(g.Types, gt)
+	}
+	for _, r := range s.Rules {
 		e := clusteringrules.GeneratedEntry{Phrase: r.Phrase, ProposalID: r.ProposalID, PromptVersion: r.PromptVersion}
 		switch eventruleproposal.TargetKind(r.TargetKind) {
 		case eventruleproposal.TargetAction:
 			a := eventsignals.Action(r.Target)
 			g.ActionTerms[a] = append(g.ActionTerms[a], e)
 		case eventruleproposal.TargetSignal:
-			s := eventsignals.ContentSignal(r.Target)
-			g.ContentCues[s] = append(g.ContentCues[s], e)
+			sig := eventsignals.ContentSignal(r.Target)
+			g.ContentCues[sig] = append(g.ContentCues[sig], e)
 		default:
 			return g, fmt.Errorf("events: rule %q has unknown target kind %q", r.Phrase, r.TargetKind)
 		}
@@ -131,9 +149,9 @@ func toGenerated(rules []eventrulecycle.AppliedRule) (clusteringrules.GeneratedR
 	return g, nil
 }
 
-// WriteApplied adapts clusteringrules.WriteGenerated to the cycle's rules.
-func WriteApplied(path string, rules []eventrulecycle.AppliedRule) error {
-	g, err := toGenerated(rules)
+// WriteApplied adapts clusteringrules.WriteGenerated to the cycle's set.
+func WriteApplied(path string, s eventrulecycle.AppliedSet) error {
+	g, err := toGenerated(s)
 	if err != nil {
 		return err
 	}
@@ -147,11 +165,11 @@ func HandWrittenRules(cfg *config.Config) (clusteringrules.RulesFile, error) {
 }
 
 // RunGate scores the gold dataset with the hand-written rules (baseline) and
-// with candidate merged as the generated file, and returns the verdict with
+// with candidate (rules and types) merged as the generated file, and returns the verdict with
 // the number of dataset articles whose event type, action or signal the
 // candidate changes (0: the gate was not exercised). A missing dataset
 // returns ErrGateDatasetMissing.
-func RunGate(ctx context.Context, cfg *config.Config, datasetPath string, candidate []eventrulecycle.AppliedRule) (eventrulecycle.GateResult, error) {
+func RunGate(ctx context.Context, cfg *config.Config, datasetPath string, candidate eventrulecycle.AppliedSet) (eventrulecycle.GateResult, error) {
 	var zero eventrulecycle.GateResult
 	if err := ctx.Err(); err != nil {
 		return zero, err

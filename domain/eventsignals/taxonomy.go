@@ -92,6 +92,13 @@ func (t Taxonomy) Classify(a Action, s ContentSignal) EventType {
 	return EventTypeGeneric
 }
 
+// SignalPrecedence returns the precedence declared for s, or "" when the
+// taxonomy does not declare it.
+func (t Taxonomy) SignalPrecedence(s ContentSignal) Precedence {
+	def, _ := t.signal(s)
+	return def.Precedence
+}
+
 // ActionPriority returns every declared Action in detection priority order.
 // The slice is a fresh copy.
 func (t Taxonomy) ActionPriority() []Action {

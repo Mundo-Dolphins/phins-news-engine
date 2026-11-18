@@ -55,6 +55,12 @@ interface ApplyResult {
   after?: Metrics;
   dataset?: string;
   affected?: number;
+  /** The approved event types written with their first phrase. */
+  types_applied?: { id: string; type: string; window: string; referential: boolean }[];
+  /** Approved types with no approved phrase yet. */
+  types_waiting?: { id: string; type: string }[];
+  /** Approved phrases whose target is neither declared nor an approved type; they stay approved. */
+  orphans?: RuleRef[];
 }
 
 /** JobState is a long-running action started from this page. */
@@ -254,6 +260,21 @@ function ApplyOutcome({ result }: { result: Result }) {
           ))}
         </ul>
       )}
+      {!r.blocked && (r.types_applied ?? []).length > 0 && (
+        <ul class="rule-applied" aria-label="New event types applied">
+          {r.types_applied!.map((t) => (
+            <li key={t.id}>
+              new event type <strong>{t.type}</strong> <span class="muted">(window {t.window}{t.referential ? ", referential" : ""})</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {(r.orphans ?? []).length > 0 && (
+        <p class="muted">
+          {r.orphans!.length} approved phrase{r.orphans!.length === 1 ? "" : "s"} without a declared or approved target
+          stay approved: {r.orphans!.map((o) => `“${o.phrase}” (${o.target})`).join(", ")}. Reject them.
+        </p>
+      )}
       {r.dataset && <p class="muted">{r.dataset}</p>}
       {r.before && r.after && <MetricsTable before={r.before} after={r.after} />}
     </div>
@@ -279,7 +300,7 @@ function JobLine({ state, idle }: { state: JobState; idle?: string }) {
 }
 
 /** TypeProposal is one row of `events.type_list`: a proposed new event type. */
-interface TypeProposal {
+export interface TypeProposal {
   id: string;
   /** "pending" or "approved". */
   status: string;
@@ -287,31 +308,63 @@ interface TypeProposal {
   description: string;
   /** Comma-separated evidence article ids. */
   evidence: string;
+  /** Match window of the type, e.g. "48h". */
+  window?: string;
+  /** Whether the type is a framing (analysis, quote) rather than a concrete event. */
+  referential?: boolean;
+  /** Pending and approved phrase proposals targeting the type. */
+  phrases?: number;
 }
+
+/** TypeForm is the inline form open on one type proposal. */
+type TypeForm =
+  | { id: string; kind: "merge"; into: string }
+  | { id: string; kind: "approve"; window: string; referential: boolean }
+  | { id: string; kind: "phrase"; phrase: string };
 
 /** mergeTargets lists the values a proposal can be merged into: the other proposals, then the known names. */
 const mergeTargets = (t: TypeProposal, all: TypeProposal[], known: string[]) => [...all.filter((o) => o.id !== t.id).map((o) => o.id), ...known];
 
 const evidenceCount = (t: TypeProposal) => (t.evidence ? t.evidence.split(",").filter((s) => s.trim()).length : 0);
 
+const defaultWindow = "48h";
+const referentialLabel = "Referential (a framing such as analysis or quote, not a concrete event)";
+
+/** phraseLabel says how many phrases an approved type has, or that it waits for one. */
+const phraseLabel = (t: TypeProposal) => {
+  const n = t.phrases ?? 0;
+  return n === 0 ? "waiting for phrases" : `${n} phrase${n === 1 ? "" : "s"}`;
+};
+
+interface TypeProposalsProps {
+  /** version reloads the list when it changes. */
+  version: number;
+  /** onTypes receives the list each time it changes. */
+  onTypes?(types: TypeProposal[]): void;
+  /** onPhraseAdded is called after a phrase was proposed, to reload the phrase queue. */
+  onPhraseAdded?(): void;
+}
+
 /**
  * TypeProposals lists the new event type proposals discovery stores next to
- * the phrases, for `events type approve|reject|merge`. They are never applied
- * here: an approved type is implemented through its brief. A proposal that
- * duplicates another, or a type that already exists, is merged into it.
- * version reloads the list when it changes.
+ * the phrases, for `events type approve|reject|merge|add-phrase`. Approving
+ * one sets its match window and whether it is referential; an approved type
+ * is applied by the gate with its first approved phrase, which Add phrase
+ * proposes to the review queue. A proposal that duplicates another, or a type
+ * that already exists, is merged into it.
  */
-function TypeProposals({ version }: { version: number }) {
+function TypeProposals({ version, onTypes, onPhraseAdded }: TypeProposalsProps) {
   const [types, setTypes] = useState<TypeProposal[] | null>(null);
   const [loadError, setLoadError] = useState("");
   const [notice, setNotice] = useState<Notice | undefined>();
-  const [briefs, setBriefs] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string>("");
   const [known, setKnown] = useState<string[]>([]);
-  /** merging is the proposal whose merge target is being picked, and the pick. */
-  const [merging, setMerging] = useState<{ id: string; into: string } | null>(null);
-  /** reloads counts the lists reloaded after a merge. */
+  /** form is the inline form open on one proposal: merge target, approval choices or new phrase. */
+  const [form, setForm] = useState<TypeForm | null>(null);
+  /** reloads counts the lists reloaded after a merge or a new phrase. */
   const [reloads, setReloads] = useState(0);
+  const hooks = useRef({ onTypes, onPhraseAdded });
+  hooks.current = { onTypes, onPhraseAdded };
 
   useEffect(() => {
     let live = true;
@@ -332,56 +385,59 @@ function TypeProposals({ version }: { version: number }) {
     };
   }, [version, reloads]);
 
-  const decide = async (t: TypeProposal, approve: boolean) => {
+  useEffect(() => {
+    if (types) hooks.current.onTypes?.(types);
+  }, [types]);
+
+  /** act runs one decision on t; on success it applies done, on failure it keeps the form open. */
+  const act = async (t: TypeProposal, name: string, params: Record<string, unknown>, done: (r: Result) => void) => {
     setBusy(t.id);
     setNotice(undefined);
     try {
-      const out = await runAction(approve ? "events.type_approve" : "events.type_reject", { id: t.id }, false);
-      if ("job" in out) throw new Error("unexpected job for events.type_" + (approve ? "approve" : "reject"));
+      const out = await runAction(name, params, false);
+      if ("job" in out) throw new Error("unexpected job for " + name);
+      setForm(null);
+      done(out.result);
+    } catch (e) {
+      setNotice({ kind: "error", text: errorText(e) });
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const approve = (t: TypeProposal, window: string, referential: boolean) =>
+    act(t, "events.type_approve", { id: t.id, window, referential }, (r) => {
+      const o = (r.object ?? {}) as Partial<TypeProposal>;
       setTypes((ts) =>
-        (ts ?? []).flatMap((x) => (x.id !== t.id ? [x] : approve ? [{ ...x, status: "approved" }] : [])),
+        (ts ?? []).map((x) =>
+          x.id !== t.id ? x : { ...x, status: "approved", window: o.window ?? window, referential: o.referential ?? referential, phrases: x.phrases ?? 0 },
+        ),
       );
-      setNotice({ kind: "info", text: out.result.summary || `“${t.type}” ${approve ? "approved" : "rejected"}.` });
-    } catch (e) {
-      setNotice({ kind: "error", text: errorText(e) });
-    } finally {
-      setBusy("");
-    }
-  };
+      setNotice({ kind: "info", text: r.summary || `“${t.type}” approved.` });
+    });
 
-  const merge = async (t: TypeProposal, into: string) => {
-    setBusy(t.id);
-    setNotice(undefined);
-    try {
-      const out = await runAction("events.type_merge", { id: t.id, into }, false);
-      if ("job" in out) throw new Error("unexpected job for events.type_merge");
+  const reject = (t: TypeProposal) =>
+    act(t, "events.type_reject", { id: t.id }, (r) => {
       setTypes((ts) => (ts ?? []).filter((x) => x.id !== t.id));
-      setMerging(null);
-      setNotice({ kind: "info", text: out.result.summary || `“${t.type}” merged.` });
-      setReloads((n) => n + 1);
-    } catch (e) {
-      setNotice({ kind: "error", text: errorText(e) });
-    } finally {
-      setBusy("");
-    }
-  };
+      setNotice({ kind: "info", text: r.summary || `“${t.type}” rejected.` });
+    });
 
-  const brief = async (t: TypeProposal) => {
-    if (briefs[t.id] !== undefined) {
-      setBriefs(({ [t.id]: _, ...rest }) => rest);
-      return;
-    }
-    setNotice(undefined);
-    try {
-      const out = await runAction("events.brief", { id: t.id }, false);
-      if ("job" in out) throw new Error("unexpected job for events.brief");
-      setBriefs((b) => ({ ...b, [t.id]: out.result.text ?? "" }));
-    } catch (e) {
-      setNotice({ kind: "error", text: errorText(e) });
-    }
-  };
+  const merge = (t: TypeProposal, into: string) =>
+    act(t, "events.type_merge", { id: t.id, into }, (r) => {
+      setTypes((ts) => (ts ?? []).filter((x) => x.id !== t.id));
+      setNotice({ kind: "info", text: r.summary || `“${t.type}” merged.` });
+      setReloads((n) => n + 1);
+    });
+
+  const addPhrase = (t: TypeProposal, phrase: string) =>
+    act(t, "events.type_add_phrase", { id: t.id, phrase }, (r) => {
+      setNotice({ kind: "info", text: r.summary || `“${phrase}” proposed for ${t.type}.` });
+      setReloads((n) => n + 1);
+      hooks.current.onPhraseAdded?.();
+    });
 
   const pending = (types ?? []).filter((t) => t.status === "pending").length;
+  const off = busy !== "";
   return (
     <section class="rules-zone" aria-labelledby="zone-types">
       <h2 id="zone-types">
@@ -389,8 +445,8 @@ function TypeProposals({ version }: { version: number }) {
         {types && <span class="muted zone-count"> · {pending} pending</span>}
       </h2>
       <p class="muted">
-        Kinds of event the LLM found that no current type covers. They are not phrases and are never applied from here:
-        approve the ones worth adding and implement them through their brief.
+        Kinds of event the LLM found that no current type covers. Approve the ones worth adding with their match window,
+        then give them phrases: an approved type is applied by the gate below together with its first approved phrase.
       </p>
       {notice && (
         <p class={"notice notice-" + notice.kind} role={notice.kind === "error" ? "alert" : "status"}>
@@ -411,30 +467,61 @@ function TypeProposals({ version }: { version: number }) {
         <ul class="rules-approved">
           {types.map((t) => {
             const n = evidenceCount(t);
+            const open = form?.id === t.id ? form : null;
             return (
               <li key={t.id}>
                 <span class="rules-approved-phrase">{t.type}</span>
                 <span class="muted">
                   {" "}
                   · {n} evidence article{n === 1 ? "" : "s"}
-                  {t.status === "approved" && " · approved · awaits a code change"}
+                  {t.status === "approved" && ` · approved · ${phraseLabel(t)}`}
                 </span>
                 <span class="spacer" />
-                {t.status === "pending" && (
-                  <button type="button" class="btn" disabled={busy !== ""} aria-label={"Approve " + t.type} onClick={() => decide(t, true)}>
-                    Approve
-                  </button>
+                {open ? null : (
+                  <>
+                    {t.status === "pending" && (
+                      <button
+                        type="button"
+                        class="btn"
+                        disabled={off}
+                        aria-label={"Approve " + t.type}
+                        onClick={() => setForm({ id: t.id, kind: "approve", window: defaultWindow, referential: false })}
+                      >
+                        Approve
+                      </button>
+                    )}
+                    {t.status === "approved" && (
+                      <button
+                        type="button"
+                        class="btn"
+                        disabled={off}
+                        aria-label={"Add phrase " + t.type}
+                        onClick={() => setForm({ id: t.id, kind: "phrase", phrase: "" })}
+                      >
+                        Add phrase
+                      </button>
+                    )}
+                    <button type="button" class="btn" disabled={off} aria-label={"Reject " + t.type} onClick={() => reject(t)}>
+                      Reject
+                    </button>
+                    <button
+                      type="button"
+                      class="btn"
+                      disabled={off}
+                      aria-label={"Merge " + t.type}
+                      onClick={() => setForm({ id: t.id, kind: "merge", into: mergeTargets(t, types ?? [], known)[0] ?? "" })}
+                    >
+                      Merge into…
+                    </button>
+                  </>
                 )}
-                <button type="button" class="btn" disabled={busy !== ""} aria-label={"Reject " + t.type} onClick={() => decide(t, false)}>
-                  Reject
-                </button>
-                {merging?.id === t.id ? (
+                {open?.kind === "merge" && (
                   <>
                     <select
                       aria-label={"Merge " + t.type + " into"}
-                      value={merging.into}
-                      disabled={busy !== ""}
-                      onChange={(e) => setMerging({ id: t.id, into: (e.target as HTMLSelectElement).value })}
+                      value={open.into}
+                      disabled={off}
+                      onChange={(e) => setForm({ ...open, into: (e.target as HTMLSelectElement).value })}
                     >
                       {types
                         .filter((o) => o.id !== t.id)
@@ -449,29 +536,71 @@ function TypeProposals({ version }: { version: number }) {
                         </option>
                       ))}
                     </select>
-                    <button type="button" class="btn" disabled={busy !== "" || merging.into === ""} onClick={() => merge(t, merging.into)}>
+                    <button type="button" class="btn" disabled={off || open.into === ""} onClick={() => merge(t, open.into)}>
                       Merge
                     </button>
-                    <button type="button" class="btn" disabled={busy !== ""} onClick={() => setMerging(null)}>
-                      Cancel
-                    </button>
                   </>
-                ) : (
-                  <button
-                    type="button"
-                    class="btn"
-                    disabled={busy !== ""}
-                    aria-label={"Merge " + t.type}
-                    onClick={() => setMerging({ id: t.id, into: mergeTargets(t, types ?? [], known)[0] ?? "" })}
+                )}
+                {open?.kind === "approve" && (
+                  <form
+                    class="type-form"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      approve(t, open.window.trim(), open.referential);
+                    }}
                   >
-                    Merge into…
+                    <label>
+                      Window{" "}
+                      <input
+                        type="text"
+                        size={6}
+                        aria-label={"Window for " + t.type}
+                        value={open.window}
+                        disabled={off}
+                        onInput={(e) => setForm({ ...open, window: (e.target as HTMLInputElement).value })}
+                      />
+                    </label>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={open.referential}
+                        disabled={off}
+                        onChange={(e) => setForm({ ...open, referential: (e.target as HTMLInputElement).checked })}
+                      />{" "}
+                      {referentialLabel}
+                    </label>
+                    <button type="submit" class="btn primary" disabled={off}>
+                      Confirm
+                    </button>
+                  </form>
+                )}
+                {open?.kind === "phrase" && (
+                  <form
+                    class="type-form"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      addPhrase(t, open.phrase);
+                    }}
+                  >
+                    <input
+                      type="text"
+                      aria-label={"Phrase for " + t.type}
+                      placeholder="trigger phrase"
+                      value={open.phrase}
+                      disabled={off}
+                      onInput={(e) => setForm({ ...open, phrase: (e.target as HTMLInputElement).value })}
+                    />
+                    <button type="submit" class="btn primary" disabled={off}>
+                      Save
+                    </button>
+                  </form>
+                )}
+                {open && (
+                  <button type="button" class="btn" disabled={off} onClick={() => setForm(null)}>
+                    Cancel
                   </button>
                 )}
-                <button type="button" class="btn" aria-label={"Brief " + t.type} onClick={() => brief(t)}>
-                  Brief
-                </button>
                 <span class="type-description">{t.description}</span>
-                {briefs[t.id] !== undefined && <pre class="type-brief">{briefs[t.id]}</pre>}
               </li>
             );
           })}
@@ -535,6 +664,7 @@ export function ReviewEventsScreen({
   const [applyNotice, setApplyNotice] = useState<Notice | undefined>();
   // Bumped when a job ends so the type proposals reload with the queue.
   const [typesVersion, setTypesVersion] = useState(0);
+  const [typeList, setTypeList] = useState<TypeProposal[]>([]);
   const streams = useRef<Set<() => void>>(new Set());
 
   useEffect(() => () => streams.current.forEach((close) => close()), []);
@@ -669,6 +799,10 @@ export function ReviewEventsScreen({
   const visible = (queue?.items ?? []).filter((t) => !hidden.has(keyOf(t)));
   const failingItems = visible.filter((t) => !t.passes);
   const approved = (queue?.approved ?? []).filter((t) => !hiddenApproved.has(keyOf(t)));
+  // The approved types the gate applies: those with an approved phrase.
+  const typesToApply = typeList.filter(
+    (t) => t.status === "approved" && approved.some((r) => r.target_kind === "action" && r.target === t.type),
+  );
 
   const rejectFailing = async (ids: string[]) => {
     try {
@@ -811,7 +945,7 @@ export function ReviewEventsScreen({
         )}
       </section>
 
-      <TypeProposals version={typesVersion} />
+      <TypeProposals version={typesVersion} onTypes={setTypeList} onPhraseAdded={load} />
 
       <section class="rules-zone" aria-labelledby="zone-apply">
         <h2 id="zone-apply">
@@ -825,6 +959,24 @@ export function ReviewEventsScreen({
           <p class={"notice notice-" + applyNotice.kind} role={applyNotice.kind === "error" ? "alert" : "status"}>
             {applyNotice.text}
           </p>
+        )}
+        {typesToApply.length > 0 && (
+          <>
+            <h3 id="apply-types">New event types to apply</h3>
+            <p class="muted">Approved types with an approved phrase below: the gate adds them to the generated rules with it.</p>
+            <ul class="rules-approved" aria-labelledby="apply-types">
+              {typesToApply.map((t) => (
+                <li key={t.id}>
+                  <span class="rules-approved-phrase">{t.type}</span>
+                  <span class="muted">
+                    {" "}
+                    · window {t.window || defaultWindow}
+                    {t.referential && " · referential"}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </>
         )}
         {queue &&
           (approved.length === 0 ? (
