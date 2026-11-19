@@ -543,3 +543,31 @@ websites:
 		t.Error("SkipBodyExtraction = true, want false when the yaml key is omitted")
 	}
 }
+
+func TestSourcesFileParsesKeepContent(t *testing.T) {
+	const yamlContent = `
+rss_feeds:
+  - name: "Example News"
+    url: "https://example.com/feed.xml"
+    source_type: hard_news
+    interval_minutes: 5
+    max_items_per_cycle: 20
+    max_age_hours: 24
+    keep_content: true
+    enabled: true
+  - name: "Other Feed"
+    url: "https://example.com/other.xml"
+    source_type: hard_news
+    interval_minutes: 5
+    max_items_per_cycle: 20
+    max_age_hours: 24
+    enabled: true
+`
+	s, err := sourcesfile.Load(writeFixture(t, yamlContent))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(s.RSSFeeds) != 2 || !s.RSSFeeds[0].KeepContent || s.RSSFeeds[1].KeepContent {
+		t.Errorf("RSSFeeds = %+v", s.RSSFeeds)
+	}
+}

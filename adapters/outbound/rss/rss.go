@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sourcefilter"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/article"
@@ -31,6 +32,9 @@ type FeedConfig struct {
 	BlockedKeywords  []string
 	RequiredKeywords []string
 	BlockedAuthors   []string
+	// KeepContent stores the item's full content (content:encoded) in
+	// Metadata, never in Body.
+	KeepContent bool
 }
 
 // Fetcher fetches every configured feed and returns their articles
@@ -149,6 +153,13 @@ func (f *Fetcher) fetchFeed(ctx context.Context, feed FeedConfig) ([]article.Art
 			originalURL = item.GUID
 		}
 
+		var metadata map[string]string
+		if feed.KeepContent && item.Content != "" {
+			metadata = map[string]string{
+				article.MetadataFullContent: truncateRunes(normalization.StripHTML(item.Content), maxFullContentBytes),
+			}
+		}
+
 		out = append(out, article.Article{
 			ExternalID:  externalID,
 			OriginalURL: originalURL,
@@ -167,6 +178,7 @@ func (f *Fetcher) fetchFeed(ctx context.Context, feed FeedConfig) ([]article.Art
 			FetchedAt:   now,
 			ContentType: sourcefilter.ContentTypeFor(feed.SourceType),
 			Status:      article.StatusFetched,
+			Metadata:    metadata,
 		})
 	}
 	return out, nil
@@ -178,6 +190,20 @@ func (f *Fetcher) fetchFeedViaScraper(ctx context.Context, feed FeedConfig) (*go
 		return nil, fmt.Errorf("scrape %s: %w", netguard.RedactURL(feed.URL), netguard.RedactError(err))
 	}
 	return rssclient.ParseBytes([]byte(result.HTML), f.clientCfg.ResponseLimitBytes)
+}
+
+// maxFullContentBytes caps the full content kept in Metadata.
+const maxFullContentBytes = 64 << 10
+
+// truncateRunes cuts s to at most max bytes without splitting a rune.
+func truncateRunes(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	for max > 0 && !utf8.RuneStart(s[max]) {
+		max--
+	}
+	return s[:max]
 }
 
 func hostOf(rawURL string) string {
