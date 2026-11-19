@@ -248,6 +248,14 @@ func TestKeepContentStoresStrippedContentInMetadata(t *testing.T) {
 	}
 }
 
+func TestKeepContentKeepsBlockBoundariesAsLines(t *testing.T) {
+	a := fetchContentFeed(t, "<p>Camp opens with tryouts.</p><p>The full list:</p><ul><li>A</li><li>B</li></ul>", true)
+	want := "Camp opens with tryouts.\nThe full list:\nA\nB"
+	if got := a.Metadata[article.MetadataFullContent]; got != want {
+		t.Errorf("Metadata[full_content] = %q, want %q", got, want)
+	}
+}
+
 func TestWithoutKeepContentMetadataHasNoFullContent(t *testing.T) {
 	a := fetchContentFeed(t, "<p>Uno <b>dos</b></p>", false)
 	if _, ok := a.Metadata[article.MetadataFullContent]; ok {

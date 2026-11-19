@@ -33,7 +33,8 @@ type FeedConfig struct {
 	RequiredKeywords []string
 	BlockedAuthors   []string
 	// KeepContent stores the item's full content (content:encoded) in
-	// Metadata, never in Body.
+	// Metadata, never in Body, as text with one line per block element
+	// (normalization.StripHTMLBlocks).
 	KeepContent bool
 }
 
@@ -156,7 +157,7 @@ func (f *Fetcher) fetchFeed(ctx context.Context, feed FeedConfig) ([]article.Art
 		var metadata map[string]string
 		if feed.KeepContent && item.Content != "" {
 			metadata = map[string]string{
-				article.MetadataFullContent: truncateRunes(normalization.StripHTML(item.Content), maxFullContentBytes),
+				article.MetadataFullContent: truncateRunes(normalization.StripHTMLBlocks(item.Content), maxFullContentBytes),
 			}
 		}
 
