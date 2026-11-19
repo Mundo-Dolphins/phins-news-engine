@@ -43,6 +43,10 @@ type Config struct {
 	ChatTemplateKwargs map[string]any
 	// Timeout bounds each HTTP request; zero means defaultTimeout.
 	Timeout time.Duration
+	// NoRateLimitRetry disables the internal single retry on 429/5xx, for
+	// hosts that rotate to another provider instead of waiting. The
+	// *httpStatusError stays inspectable through StatusCode.
+	NoRateLimitRetry bool
 	// Logger receives rate-limit-retry and timeout notices; optional —
 	// nil is treated as a no-op logger. Never receives API keys or
 	// prompt/response content, only status codes and durations.
@@ -295,7 +299,7 @@ func (t *transport) complete(ctx context.Context, systemPrompt, userPrompt strin
 	if !errors.As(err, &statusErr) {
 		return completion{}, fmt.Errorf("chat completion: %w", err)
 	}
-	if isRetryableStatus(statusErr.StatusCode) {
+	if isRetryableStatus(statusErr.StatusCode) && !t.cfg.NoRateLimitRetry {
 		t.logger().Info("llmclient: rate limited or server error, retrying once",
 			"status", statusErr.StatusCode, "retry_after_ms", statusErr.RetryAfter.Milliseconds())
 		if waitErr := sleepFn(ctx, boundedRetryWait(statusErr.RetryAfter)); waitErr != nil {
@@ -306,6 +310,9 @@ func (t *transport) complete(ctx context.Context, systemPrompt, userPrompt strin
 			return completion{}, fmt.Errorf("chat completion: %w", retryErr)
 		}
 		return retried, nil
+	}
+	if isRetryableStatus(statusErr.StatusCode) {
+		return completion{}, fmt.Errorf("chat completion: %w", err)
 	}
 	c, err = t.chatCompletion(ctx, systemPrompt, userPrompt, false, maxTokens)
 	if err != nil {
