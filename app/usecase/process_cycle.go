@@ -99,7 +99,12 @@ type ProcessCycle struct {
 	titleTokens   titleTokenCache
 
 	events *EventDispatcher // nil: no event handlers, today's behavior
+	tasks  out.TaskRepository
 }
+
+// SetTaskRepository wires the store EnqueueTask actions write to. Without it
+// those actions are counted as errors.
+func (p *ProcessCycle) SetTaskRepository(r out.TaskRepository) { p.tasks = r }
 
 // SetEventDispatcher is called by the composition root. Its zero value (nil)
 // is safe: no handler runs and the pipeline is unchanged.
@@ -1980,11 +1985,32 @@ func (p *ProcessCycle) runEventHandlers(ctx context.Context, a article.Article, 
 			}
 			result.Events.Enqueued++
 			p.logger.Info("event handler enqueued publication", "handler", na.Handler, "article_id", a.ID, "destination", string(act.Destination.Normalized()))
+		case out.EnqueueTask:
+			if err := p.enqueueEventTask(ctx, a.ID, act, now); err != nil {
+				result.Events.Errors++
+				p.logger.Error("event handler action failed", err, "handler", na.Handler, "article_id", a.ID, "action", "enqueue_task")
+				continue
+			}
 		default:
 			result.Events.Errors++
 			p.logger.Error("event handler returned an unknown action", fmt.Errorf("%T", na.Action), "handler", na.Handler, "article_id", a.ID)
 		}
 	}
+}
+
+func (p *ProcessCycle) enqueueEventTask(ctx context.Context, articleID string, act out.EnqueueTask, now time.Time) error {
+	if p.tasks == nil {
+		return errors.New("task storage is not wired")
+	}
+	if act.Kind == "" || act.Key == "" {
+		return errors.New("task kind and key are required")
+	}
+	created, err := p.tasks.Enqueue(ctx, act.Kind, act.Key, articleID, act.State, now)
+	if err != nil {
+		return err
+	}
+	p.logger.Info("event handler enqueued task", "article_id", articleID, "kind", act.Kind, "key", act.Key, "created", created)
+	return nil
 }
 
 func (p *ProcessCycle) enqueueEventPublication(ctx context.Context, articleID string, act out.EnqueuePublication, now time.Time) error {

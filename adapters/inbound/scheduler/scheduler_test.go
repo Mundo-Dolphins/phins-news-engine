@@ -216,3 +216,27 @@ func TestScheduler_RunsTimedEventsWhenSet(t *testing.T) {
 		t.Fatalf("timed events ran %d times, want an immediate run plus ticks", got)
 	}
 }
+
+type countingTasks struct {
+	calls atomic.Int32
+}
+
+func (c *countingTasks) Run(context.Context) (in.RunTasksResult, error) {
+	c.calls.Add(1)
+	return in.RunTasksResult{}, nil
+}
+
+func TestScheduler_RunsTaskLoopOnlyWhenSet(t *testing.T) {
+	tasks := &countingTasks{}
+	s := scheduler.New(&countingProcessCycle{}, &countingPublishOutbox{}, &countingCloseInactiveClusters{}, &countingRunRetention{}, time.Hour, time.Hour, time.Hour, nopLogger{})
+	s.SetTasks(tasks, 5*time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if err := s.Run(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Run() error = %v, want deadline exceeded", err)
+	}
+	if got := tasks.calls.Load(); got < 2 {
+		t.Fatalf("tasks ran %d times, want an immediate run plus ticks", got)
+	}
+}

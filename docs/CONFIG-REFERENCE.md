@@ -86,6 +86,7 @@ test fails if a new secret field is not covered.
 | `scheduler.cleanup_interval_hours` | `CloseInactiveClusters` then `RunRetention` | 24 |
 | `scheduler.timed_event_interval_seconds` | Tick of the timed event handlers ([ADR 0038](adr/0038-timed-event-handlers.md)); 0 means the default | 60 |
 | `scheduler.timed_event_grace_minutes` | How long after its instant a timed event still runs; later it is skipped and alerted; 0 means the default | 15 |
+| `scheduler.task_interval_seconds` | Tick of the background task runners (`Options.TaskRunners`); 0 means the default | 30 |
 | `retention.*` | `rejected_articles_days`, `duplicates_days`, `audit_events_days`, `publication_attempts_days`, `clusters_days` (see [DATABASE.md](DATABASE.md#retention)) | 14, 7, 30, 30, 14 |
 | `cluster_lifecycle.*` | `close_after_hours`, `batch_size`, `max_batches_per_run`, `time_budget_seconds`, `close_reason` | 96, 200, 50, 30, `inactivity_ttl` |
 | `seen_items.reclaim_after_minutes` | When an unfinished seen-items claim may be taken over | 10 |

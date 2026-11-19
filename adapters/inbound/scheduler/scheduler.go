@@ -29,6 +29,8 @@ type Scheduler struct {
 	logger                appout.Logger
 	timedEvents           appin.RunTimedEvents
 	timedEventInterval    time.Duration
+	tasks                 appin.RunTasks
+	taskInterval          time.Duration
 }
 
 // New builds a Scheduler.
@@ -58,6 +60,13 @@ func New(
 func (s *Scheduler) SetTimedEvents(r appin.RunTimedEvents, interval time.Duration) {
 	s.timedEvents = r
 	s.timedEventInterval = interval
+}
+
+// SetTasks adds a loop that runs the background task runners every interval.
+// Without it the scheduler behaves as before. Call it before Run.
+func (s *Scheduler) SetTasks(r appin.RunTasks, interval time.Duration) {
+	s.tasks = r
+	s.taskInterval = interval
 }
 
 // Run starts one goroutine per interval — ProcessCycle, PublishOutbox, and
@@ -104,6 +113,18 @@ func (s *Scheduler) Run(ctx context.Context) error {
 			s.runLoop(ctx, s.timedEventInterval, func(ctx context.Context) {
 				if _, err := s.timedEvents.Run(ctx); err != nil && ctx.Err() == nil {
 					s.logger.Error("run timed events failed", err)
+				}
+			})
+		}()
+	}
+
+	if s.tasks != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.runLoop(ctx, s.taskInterval, func(ctx context.Context) {
+				if _, err := s.tasks.Run(ctx); err != nil && ctx.Err() == nil {
+					s.logger.Error("run tasks failed", err)
 				}
 			})
 		}()

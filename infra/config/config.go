@@ -177,6 +177,9 @@ type SchedulerConfig struct {
 	// TimedEventGraceMinutes is how long after its instant a timed event
 	// still runs, to survive restarts. Zero means 15.
 	TimedEventGraceMinutes int `yaml:"timed_event_grace_minutes"`
+	// TaskIntervalSeconds is how often the background task runners are
+	// asked to advance due tasks. Zero means 30.
+	TaskIntervalSeconds int `yaml:"task_interval_seconds"`
 }
 
 // Validate checks SchedulerConfig has the minimum data required.
@@ -196,7 +199,19 @@ func (c SchedulerConfig) Validate() error {
 	if c.TimedEventGraceMinutes < 0 {
 		return fmt.Errorf("timed_event_grace_minutes must not be negative")
 	}
+	if c.TaskIntervalSeconds < 0 {
+		return fmt.Errorf("task_interval_seconds must not be negative")
+	}
 	return nil
+}
+
+// TaskInterval returns the background task tick interval, defaulting to
+// usecase.DefaultTaskInterval.
+func (c SchedulerConfig) TaskInterval() time.Duration {
+	if c.TaskIntervalSeconds == 0 {
+		return usecase.DefaultTaskInterval
+	}
+	return time.Duration(c.TaskIntervalSeconds) * time.Second
 }
 
 // TimedEventInterval returns the timed-event tick interval, defaulting to one

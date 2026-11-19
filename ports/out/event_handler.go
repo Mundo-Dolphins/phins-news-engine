@@ -2,6 +2,7 @@ package out
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/article"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/publishing"
@@ -85,3 +86,15 @@ type EnqueuePublication struct {
 }
 
 func (EnqueuePublication) eventAction() {}
+
+// EnqueueTask asks for a background task (see Task) tied to the article. It
+// is idempotent per (Kind, Key): asking again for an existing task changes
+// nothing. A TaskRunner with the same Kind advances it.
+type EnqueueTask struct {
+	Kind string
+	Key  string
+	// State is the optional initial state.
+	State json.RawMessage
+}
+
+func (EnqueueTask) eventAction() {}

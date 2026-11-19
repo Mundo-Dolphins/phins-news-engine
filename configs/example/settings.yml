@@ -13,6 +13,8 @@ scheduler:
   # how long after its instant an event still runs (to survive restarts).
   timed_event_interval_seconds: 60
   timed_event_grace_minutes: 15
+  # Background task runners: how often due tasks are advanced.
+  task_interval_seconds: 30
 http:
   timeout_seconds: 10
   max_response_bytes: 2097152

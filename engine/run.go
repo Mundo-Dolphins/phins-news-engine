@@ -68,6 +68,13 @@ type Options struct {
 	// reaction to an article (ADR 0038). They share events.<name>.enabled
 	// and the name space of EventHandlers.
 	TimedEventHandlers []out.TimedEventHandler
+	// TaskRunners advance background tasks (EnqueueTask actions). A runner
+	// whose Kind equals an EventHandler name shares its events.<name> block;
+	// otherwise events.<kind>.enabled turns it on. Empty means no task loop.
+	TaskRunners []out.TaskRunner
+	// TaskTimeout bounds one task runner call; zero means
+	// usecase.DefaultTaskTimeout.
+	TaskTimeout time.Duration
 	// EventHandlerTimeout bounds one handler call (article or timed); zero means
 	// usecase.DefaultEventHandlerTimeout.
 	EventHandlerTimeout time.Duration
@@ -83,6 +90,39 @@ func (o Options) serviceName() string {
 		return name
 	}
 	return DefaultServiceName
+}
+
+// articleHandlerSettings is eventSettings without the blocks that belong only
+// to timed handlers or task runners: the article dispatcher warns about
+// settings that name no handler it knows. A block shared with an article
+// handler stays.
+func articleHandlerSettings(eventSettings map[string]usecase.EventHandlerSettings, opts Options) map[string]usecase.EventHandlerSettings {
+	own := make(map[string]bool, len(opts.EventHandlers))
+	for _, h := range opts.EventHandlers {
+		if h != nil {
+			own[strings.TrimSpace(h.Name())] = true
+		}
+	}
+	res := make(map[string]usecase.EventHandlerSettings, len(eventSettings))
+	for name, es := range eventSettings {
+		res[name] = es
+	}
+	drop := func(name string) {
+		if name = strings.TrimSpace(name); !own[name] {
+			delete(res, name)
+		}
+	}
+	for _, h := range opts.TimedEventHandlers {
+		if h != nil {
+			drop(h.Name())
+		}
+	}
+	for _, r := range opts.TaskRunners {
+		if r != nil {
+			drop(r.Kind())
+		}
+	}
+	return res
 }
 
 // registerPublishers adds the host's non-Telegram publishers in a stable
@@ -377,18 +417,13 @@ func Run(ctx context.Context, configPath string, profile config.Profile, logger 
 		eventSettings[name] = usecase.EventHandlerSettings{Enabled: c.Enabled, Config: c.Config}
 	}
 	eventDeps := usecase.EventDeps{Clock: realClock, Logger: logger, MatchState: matchState, Claims: eventClaims, Media: eventMedia(mediaStore), Alerts: eventAlerts(alerter, logger)}
+	taskRepo := sqliteadapter.NewTaskRepository(db)
+	processCycle.SetTaskRepository(taskRepo)
 	if len(opts.EventHandlers) > 0 {
-		// Settings that name a timed handler belong to the timed runner; the
-		// dispatcher would otherwise warn that they are not registered.
-		articleSettings := make(map[string]usecase.EventHandlerSettings, len(eventSettings))
-		for name, es := range eventSettings {
-			articleSettings[name] = es
-		}
-		for _, h := range opts.TimedEventHandlers {
-			if h != nil {
-				delete(articleSettings, strings.TrimSpace(h.Name()))
-			}
-		}
+		// Settings that name a timed handler or a task runner belong to
+		// those runners; the dispatcher would otherwise warn that they are
+		// not registered.
+		articleSettings := articleHandlerSettings(eventSettings, opts)
 		dispatcher, err := usecase.NewEventDispatcher(opts.EventHandlers, articleSettings, eventDeps, opts.EventHandlerTimeout)
 		if err != nil {
 			return err
@@ -406,6 +441,15 @@ func Run(ctx context.Context, configPath string, profile config.Profile, logger 
 		var err error
 		timedEvents, err = usecase.NewTimedEventRunner(opts.TimedEventHandlers, articleHandlerNames, eventSettings, eventDeps,
 			articles, outbox, uow, opts.EventHandlerTimeout, cfg.Scheduler.TimedEventGrace())
+		if err != nil {
+			return err
+		}
+	}
+	var taskLoop *usecase.TaskRunnerLoop
+	if len(opts.TaskRunners) > 0 {
+		var err error
+		taskLoop, err = usecase.NewTaskRunner(opts.TaskRunners, eventSettings, eventDeps,
+			taskRepo, outbox, uow, opts.TaskTimeout, usecase.DefaultTaskBatch)
 		if err != nil {
 			return err
 		}
@@ -437,6 +481,11 @@ func Run(ctx context.Context, configPath string, profile config.Profile, logger 
 
 	if timedEvents.Len() > 0 {
 		sched.SetTimedEvents(timedEvents, cfg.Scheduler.TimedEventInterval())
+	}
+
+	if taskLoop.Len() > 0 {
+		sched.SetTasks(taskLoop, cfg.Scheduler.TaskInterval())
+		logger.Info("task loop enabled", "runners", taskLoop.Len(), "interval", cfg.Scheduler.TaskInterval().String())
 	}
 
 	logger.Info(
