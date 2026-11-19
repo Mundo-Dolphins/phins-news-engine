@@ -26,7 +26,8 @@ func TestCompleteJSONReturnsUnfencedJSON(t *testing.T) {
 }
 
 func TestCompleteJSONRetriesOnceOnInvalidJSON(t *testing.T) {
-	srv := newScriptedServer(t,
+	srv := newScriptedServer(
+		t,
 		scriptedCompletion{content: "no json", finishReason: "stop"},
 		scriptedCompletion{content: `{"ok":true}`, finishReason: "stop"},
 	)
