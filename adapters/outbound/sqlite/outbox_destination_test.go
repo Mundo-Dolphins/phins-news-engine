@@ -35,6 +35,23 @@ func TestOutboxRepository_EnqueueDestination_OneRowPerArticleAndDestination(t *t
 	}
 }
 
+func TestOutboxRepository_TryEnqueueDestination_ReportsInsert(t *testing.T) {
+	db := newTestDB(t)
+	mustSaveArticle(t, sqliteadapter.NewArticleRepository(db), "a1")
+	repo := sqliteadapter.NewOutboxRepository(db)
+	ctx := context.Background()
+	now := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i, want := range []bool{true, false} {
+		got, err := repo.TryEnqueueDestination(ctx, "a1", "{}", publishing.LaneNormal, publishing.DestinationBluesky, now)
+		if err != nil || got != want {
+			t.Fatalf("call %d: inserted = %v, %v; want %v", i+1, got, err, want)
+		}
+	}
+	if got, err := repo.TryEnqueueDestination(ctx, "missing", "{}", publishing.LaneNormal, publishing.DestinationBluesky, now); err != nil || got {
+		t.Fatalf("missing article: inserted = %v, %v; want false", got, err)
+	}
+}
+
 func TestOutboxRepository_ClaimBatch_ReturnsDestinationAndRowsAreIndependent(t *testing.T) {
 	db := newTestDB(t)
 	mustSaveArticle(t, sqliteadapter.NewArticleRepository(db), "a1")

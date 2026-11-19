@@ -135,6 +135,16 @@ fetcher keeps a desktop-browser User-Agent, because some publishers reject
 library agents. The ESPN scoreboard and Wikidata clients use the
 User-Agent from their configuration.
 
+## Telegram updates
+
+`Options.TelegramUpdates` makes the engine read updates with the bot token
+(`TELEGRAM_BOT_TOKEN`). An update is served only when its sender is
+`AllowedUserID` AND its chat is `AllowedChatID`; both are required and every
+other update is dropped before it reaches the router. A panic in the host's
+router is recovered and logged with the update id only, never its content. The stored offset uses the numeric bot id, never the token. Telegram
+allows one `getUpdates` consumer per token, so do not share the token with
+another poller ([ADR 0041](adr/0041-background-tasks-and-telegram-updates.md)).
+
 ## Files written for the host
 
 Data that the library writes for the host is private to the account that

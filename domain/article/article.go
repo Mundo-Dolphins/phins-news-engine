@@ -24,6 +24,11 @@ var ErrNotFound = errors.New("article: not found")
 // it; it is absent when there is none.
 const MetadataMediaImages = "media_images"
 
+// MetadataFullContent is the Metadata key holding an article's full text
+// (HTML stripped) when its source was configured to keep it. It is never
+// copied to Body, so classification inputs stay unchanged.
+const MetadataFullContent = "full_content"
+
 // ContentType classifies the shape of the content behind an Article.
 type ContentType string
 

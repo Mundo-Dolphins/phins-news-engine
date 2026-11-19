@@ -25,6 +25,7 @@ today.
 | [0038](0038-timed-event-handlers.md) | Timed event handlers: run a handler at a scheduled instant |
 | [0039](0039-admin-panel.md) | Admin panel: REST, MCP and web UI over operator actions |
 | [0040](0040-bluesky-threads.md) | Bluesky threads: multi-part payloads, progress and resume |
+| [0041](0041-background-tasks-and-telegram-updates.md) | Background tasks with signals and a Telegram update poller |
 
 The numbering has gaps. The engine was extracted from a larger project
 whose other records cover operations and deployment-specific choices and

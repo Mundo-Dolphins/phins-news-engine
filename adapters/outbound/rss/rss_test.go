@@ -5,10 +5,13 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/rss"
+	"github.com/Mundo-Dolphins/phins-news-engine/domain/article"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/source"
 	"github.com/Mundo-Dolphins/phins-news-engine/infra/rssclient"
 	"github.com/Mundo-Dolphins/phins-news-engine/ports/out"
@@ -208,5 +211,66 @@ func TestFetch_ContextCancellationPropagates(t *testing.T) {
 	cancel()
 	if _, err := f.Fetch(ctx); err == nil {
 		t.Fatal("Fetch() error = nil, want context.Canceled")
+	}
+}
+
+func contentFeed(content string) string {
+	return `<?xml version="1.0"?><rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/"><channel><title>F</title>` +
+		`<item><title>Example News story</title><link>https://example.com/1</link><guid>1</guid><content:encoded><![CDATA[` + content + `]]></content:encoded></item>` +
+		`</channel></rss>`
+}
+
+func fetchContentFeed(t *testing.T, content string, keep bool) article.Article {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(contentFeed(content)))
+	}))
+	defer server.Close()
+
+	f := rss.NewFetcher([]rss.FeedConfig{{Name: "Example News", URL: server.URL, SourceType: "hard_news", KeepContent: keep}}, testClientConfig(), noopLogger{})
+	articles, err := f.Fetch(context.Background())
+	if err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+	if len(articles) != 1 {
+		t.Fatalf("articles = %+v, want 1", articles)
+	}
+	return articles[0]
+}
+
+func TestKeepContentStoresStrippedContentInMetadata(t *testing.T) {
+	a := fetchContentFeed(t, "<p>Uno <b>dos</b></p>", true)
+	if got := a.Metadata[article.MetadataFullContent]; got != "Uno dos" {
+		t.Errorf("Metadata[full_content] = %q, want %q", got, "Uno dos")
+	}
+	if a.Body != "" {
+		t.Errorf("Body = %q, want empty", a.Body)
+	}
+}
+
+func TestKeepContentKeepsBlockBoundariesAsLines(t *testing.T) {
+	a := fetchContentFeed(t, "<p>Camp opens with tryouts.</p><p>The full list:</p><ul><li>A</li><li>B</li></ul>", true)
+	want := "Camp opens with tryouts.\nThe full list:\nA\nB"
+	if got := a.Metadata[article.MetadataFullContent]; got != want {
+		t.Errorf("Metadata[full_content] = %q, want %q", got, want)
+	}
+}
+
+func TestWithoutKeepContentMetadataHasNoFullContent(t *testing.T) {
+	a := fetchContentFeed(t, "<p>Uno <b>dos</b></p>", false)
+	if _, ok := a.Metadata[article.MetadataFullContent]; ok {
+		t.Errorf("Metadata = %v, want no full_content key", a.Metadata)
+	}
+}
+
+func TestKeepContentTruncatesAt64KiB(t *testing.T) {
+	// Multi-byte runes so a naive byte cut would split one.
+	a := fetchContentFeed(t, "<p>"+strings.Repeat("é", 35*1024)+"</p>", true)
+	got := a.Metadata[article.MetadataFullContent]
+	if len(got) == 0 || len(got) > 65536 {
+		t.Errorf("len = %d, want in (0, 65536]", len(got))
+	}
+	if !utf8.ValidString(got) {
+		t.Error("truncated content is not valid UTF-8")
 	}
 }

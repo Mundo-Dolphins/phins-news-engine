@@ -29,6 +29,16 @@ type Scheduler struct {
 	logger                appout.Logger
 	timedEvents           appin.RunTimedEvents
 	timedEventInterval    time.Duration
+	tasks                 appin.RunTasks
+	taskInterval          time.Duration
+	taskWake              chan struct{}
+	updatePoller          UpdatePoller
+}
+
+// UpdatePoller is a long-running loop (the Telegram update poller) that
+// blocks until ctx is done.
+type UpdatePoller interface {
+	Run(ctx context.Context) error
 }
 
 // New builds a Scheduler.
@@ -49,6 +59,7 @@ func New(
 		outboxInterval:        outboxInterval,
 		cleanupInterval:       cleanupInterval,
 		logger:                logger,
+		taskWake:              make(chan struct{}, 1),
 	}
 }
 
@@ -60,11 +71,35 @@ func (s *Scheduler) SetTimedEvents(r appin.RunTimedEvents, interval time.Duratio
 	s.timedEventInterval = interval
 }
 
+// SetTasks adds a loop that runs the background task runners every interval.
+// Without it the scheduler behaves as before. Call it before Run.
+func (s *Scheduler) SetTasks(r appin.RunTasks, interval time.Duration) {
+	s.tasks = r
+	s.taskInterval = interval
+}
+
+// WakeTasks asks the task loop to run now instead of at its next tick (for
+// example after a signal arrived). It never blocks: wakes that arrive while
+// one is already pending collapse into it. Without SetTasks it does nothing.
+func (s *Scheduler) WakeTasks() {
+	select {
+	case s.taskWake <- struct{}{}:
+	default:
+	}
+}
+
+// SetUpdatePoller adds a goroutine that runs the given long-polling loop
+// for the scheduler's lifetime. Without it the scheduler behaves as before.
+// Call it before Run.
+func (s *Scheduler) SetUpdatePoller(p UpdatePoller) { s.updatePoller = p }
+
 // Run starts one goroutine per interval — ProcessCycle, PublishOutbox, and
 // the cleanup tick (CloseInactiveClusters then RunRetention, sequentially,
-// every tick) — each running immediately and then on its own ticker, until
-// ctx is cancelled, at which point Run waits for all three to finish their
-// current iteration before returning.
+// every tick), plus the timed event and task loops and the update poller
+// when set — each loop running immediately and then on its own ticker (the
+// task loop also on WakeTasks), until ctx is cancelled, at which point Run
+// waits for every goroutine to finish its current iteration before
+// returning.
 func (s *Scheduler) Run(ctx context.Context) error {
 	var wg sync.WaitGroup
 	wg.Add(3)
@@ -109,6 +144,28 @@ func (s *Scheduler) Run(ctx context.Context) error {
 		}()
 	}
 
+	if s.tasks != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.runLoopWake(ctx, s.taskInterval, s.taskWake, func(ctx context.Context) {
+				if _, err := s.tasks.Run(ctx); err != nil && ctx.Err() == nil {
+					s.logger.Error("run tasks failed", err)
+				}
+			})
+		}()
+	}
+
+	if s.updatePoller != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := s.updatePoller.Run(ctx); err != nil && ctx.Err() == nil {
+				s.logger.Error("telegram update poller stopped", err)
+			}
+		}()
+	}
+
 	wg.Wait()
 	return ctx.Err()
 }
@@ -116,6 +173,12 @@ func (s *Scheduler) Run(ctx context.Context) error {
 // runLoop calls fn immediately, then again on every tick of interval,
 // until ctx is done.
 func (s *Scheduler) runLoop(ctx context.Context, interval time.Duration, fn func(context.Context)) {
+	s.runLoopWake(ctx, interval, nil, fn)
+}
+
+// runLoopWake is runLoop that also calls fn whenever wake receives (a nil
+// wake never does).
+func (s *Scheduler) runLoopWake(ctx context.Context, interval time.Duration, wake <-chan struct{}, fn func(context.Context)) {
 	fn(ctx)
 
 	ticker := time.NewTicker(interval)
@@ -125,6 +188,8 @@ func (s *Scheduler) runLoop(ctx context.Context, interval time.Duration, fn func
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			fn(ctx)
+		case <-wake:
 			fn(ctx)
 		}
 	}

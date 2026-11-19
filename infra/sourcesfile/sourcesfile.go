@@ -163,6 +163,7 @@ type RSSFeedConfig struct {
 	BlockedKeywords  []string `yaml:"blocked_keywords"`
 	RequiredKeywords []string `yaml:"required_keywords"`
 	BlockedAuthors   []string `yaml:"blocked_authors"`
+	KeepContent      bool     `yaml:"keep_content"`
 	Enabled          bool     `yaml:"enabled"`
 }
 

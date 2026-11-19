@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqlite"
 	"github.com/Mundo-Dolphins/phins-news-engine/app/usecase"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/article"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/publishing"
@@ -241,5 +242,61 @@ func TestNewEventDispatcher_RejectsBadHandlers(t *testing.T) {
 	}
 	if _, err := usecase.NewEventDispatcher([]out.EventHandler{&fakeEventHandler{name: "x"}, &fakeEventHandler{name: "x"}}, nil, deps, 0); err == nil {
 		t.Error("duplicate name: want error")
+	}
+}
+
+func TestProcessCycleEnqueueTaskAction(t *testing.T) {
+	enqueue := func(context.Context, out.EventContext, article.Article) (out.EventResult, error) {
+		return out.EventResult{Actions: []out.EventAction{out.EnqueueTask{Kind: "poll", Key: "k1", State: []byte(`{"n":0}`)}}}, nil
+	}
+	h := &fakeEventHandler{name: "poll", match: "story", handle: enqueue}
+	a1 := eventTestArticle(t, "a1", "src-a", "First story", "https://example.com/a1")
+	a2 := eventTestArticle(t, "a2", "src-a", "Second story", "https://example.com/a2")
+	pc, db := eventTestCycle(t, []out.EventHandler{h}, true, time.Second, a1, a2)
+	pc.SetTaskRepository(sqlite.NewTaskRepository(db))
+
+	result, err := pc.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Events.Errors != 0 {
+		t.Fatalf("events metrics = %+v", result.Events)
+	}
+	var n int
+	var articleID, state string
+	if err := db.QueryRow(`SELECT COUNT(*), MIN(article_id), MIN(state) FROM tasks WHERE kind = 'poll' AND task_key = 'k1'`).Scan(&n, &articleID, &state); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 || articleID != "a1" || state != `{"n":0}` {
+		t.Fatalf("tasks = %d, article %q, state %q; want 1 task for the first article", n, articleID, state)
+	}
+}
+
+func TestProcessCycleEnqueueTaskActionErrorsAreCounted(t *testing.T) {
+	for name, tc := range map[string]struct {
+		act  out.EnqueueTask
+		repo bool
+	}{
+		"blank kind":      {out.EnqueueTask{Key: "k"}, true},
+		"blank key":       {out.EnqueueTask{Kind: "poll"}, true},
+		"no task storage": {out.EnqueueTask{Kind: "poll", Key: "k"}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := &fakeEventHandler{name: "poll", match: "story", handle: func(context.Context, out.EventContext, article.Article) (out.EventResult, error) {
+				return out.EventResult{Actions: []out.EventAction{tc.act}}, nil
+			}}
+			a := eventTestArticle(t, "a1", "src-a", "First story", "https://example.com/a1")
+			pc, db := eventTestCycle(t, []out.EventHandler{h}, true, time.Second, a)
+			if tc.repo {
+				pc.SetTaskRepository(sqlite.NewTaskRepository(db))
+			}
+			result, err := pc.Run(context.Background())
+			if err != nil || result.Events.Errors != 1 {
+				t.Fatalf("Run() = %+v, %v; want one counted error", result.Events, err)
+			}
+			if got := articleStatus(t, db, "a1"); got == "" {
+				t.Fatal("article lost")
+			}
+		})
 	}
 }

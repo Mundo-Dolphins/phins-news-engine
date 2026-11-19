@@ -64,6 +64,7 @@ func buildRSS(cfg *config.Config, catalog *sourcesfile.Sources, logger out.Logge
 			Name: f.Name, URL: f.URL, SourceType: f.SourceType,
 			MaxAge:          time.Duration(f.MaxAgeHours) * time.Hour,
 			BlockedKeywords: f.BlockedKeywords, RequiredKeywords: f.RequiredKeywords, BlockedAuthors: f.BlockedAuthors,
+			KeepContent: f.KeepContent,
 		}}, rssCfg, scraper, logger)
 		sources = append(sources, compositefetcher.Source{
 			Name: "rss:" + f.Name, Fetcher: feedFetcher,

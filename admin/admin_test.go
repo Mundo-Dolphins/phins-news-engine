@@ -477,12 +477,12 @@ func TestShutdownEndsOpenSSEStreamsPromptly(t *testing.T) {
 func TestProductionUnblocksOnceMigrationIsAppliedExternally(t *testing.T) {
 	defer admin.SetSchemaRecheck(50 * time.Millisecond)()
 	h := newHarness(t, "production", 1)
-	// Undo the latest migration for real (0049 only adds the two type
-	// approval columns) so that applying it again later succeeds.
+	// Undo the latest migration for real (0051 only adds telegram_update_offsets) so
+	// that applying it again later succeeds.
 	h.migrateOp(func(db *sql.DB) {
 		dropLastMigration(db)
-		for _, col := range []string{"type_window", "type_referential"} {
-			if _, err := db.Exec(`ALTER TABLE event_rule_proposals DROP COLUMN ` + col); err != nil {
+		for _, table := range []string{"telegram_update_offsets"} {
+			if _, err := db.Exec(`DROP TABLE ` + table); err != nil {
 				t.Fatal(err)
 			}
 		}

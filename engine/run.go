@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Mundo-Dolphins/phins-news-engine/adapters/inbound/scheduler"
+	"github.com/Mundo-Dolphins/phins-news-engine/adapters/inbound/telegramupdates"
 	"github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/espnscoreboard"
 	"github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/mediafs"
 	sqliteadapter "github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqlite"
@@ -68,9 +69,59 @@ type Options struct {
 	// reaction to an article (ADR 0038). They share events.<name>.enabled
 	// and the name space of EventHandlers.
 	TimedEventHandlers []out.TimedEventHandler
+	// TaskRunners advance background tasks (EnqueueTask actions). A runner
+	// whose Kind equals an EventHandler name shares its events.<name> block;
+	// otherwise events.<kind>.enabled turns it on. Empty means no task loop.
+	TaskRunners []out.TaskRunner
+	// TelegramUpdates turns on the interactive Telegram poller: it long-polls
+	// getUpdates, keeps only the authorised user and chat, and stores the
+	// updates Router claims as task signals. Nil means getUpdates is never
+	// called. Needs TELEGRAM_BOT_TOKEN.
+	TelegramUpdates *TelegramUpdates
+	// TaskTimeout bounds one task runner call; zero means
+	// usecase.DefaultTaskTimeout.
+	TaskTimeout time.Duration
 	// EventHandlerTimeout bounds one handler call (article or timed); zero means
 	// usecase.DefaultEventHandlerTimeout.
 	EventHandlerTimeout time.Duration
+}
+
+// TelegramUpdates configures the interactive update poller.
+type TelegramUpdates struct {
+	// AllowedUserID and AllowedChatID are the only sender and chat whose
+	// updates are processed. Both must be non-zero.
+	AllowedUserID int64
+	AllowedChatID int64
+	// Router decides which task an update belongs to.
+	Router out.TelegramUpdateRouter
+	// ClosedText answers a button press on a task that is already done or
+	// failed. Empty (the default) answers with no text.
+	ClosedText string
+}
+
+// validate checks the poller can start with the given bot token.
+func (t *TelegramUpdates) validate(botToken string) error {
+	if t.AllowedUserID == 0 || t.AllowedChatID == 0 {
+		return errors.New("telegram updates: AllowedUserID and AllowedChatID are required")
+	}
+	if t.Router == nil {
+		return errors.New("telegram updates: Router is required")
+	}
+	if botKey(botToken) == "" {
+		return errors.New("telegram updates: TELEGRAM_BOT_TOKEN is required")
+	}
+	return nil
+}
+
+// botKey is the numeric bot id of a token (the part before ':'), used to key
+// stored offsets so the token itself is never persisted. Empty for a blank
+// or malformed token.
+func botKey(token string) string {
+	id, _, ok := strings.Cut(token, ":")
+	if !ok {
+		return ""
+	}
+	return id
 }
 
 // DefaultServiceName is the service name used when Options.ServiceName is
@@ -83,6 +134,39 @@ func (o Options) serviceName() string {
 		return name
 	}
 	return DefaultServiceName
+}
+
+// articleHandlerSettings is eventSettings without the blocks that belong only
+// to timed handlers or task runners: the article dispatcher warns about
+// settings that name no handler it knows. A block shared with an article
+// handler stays.
+func articleHandlerSettings(eventSettings map[string]usecase.EventHandlerSettings, opts Options) map[string]usecase.EventHandlerSettings {
+	own := make(map[string]bool, len(opts.EventHandlers))
+	for _, h := range opts.EventHandlers {
+		if h != nil {
+			own[strings.TrimSpace(h.Name())] = true
+		}
+	}
+	res := make(map[string]usecase.EventHandlerSettings, len(eventSettings))
+	for name, es := range eventSettings {
+		res[name] = es
+	}
+	drop := func(name string) {
+		if name = strings.TrimSpace(name); !own[name] {
+			delete(res, name)
+		}
+	}
+	for _, h := range opts.TimedEventHandlers {
+		if h != nil {
+			drop(h.Name())
+		}
+	}
+	for _, r := range opts.TaskRunners {
+		if r != nil {
+			drop(r.Kind())
+		}
+	}
+	return res
 }
 
 // registerPublishers adds the host's non-Telegram publishers in a stable
@@ -115,6 +199,12 @@ func Run(ctx context.Context, configPath string, profile config.Profile, logger 
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
+	}
+
+	if opts.TelegramUpdates != nil {
+		if err := opts.TelegramUpdates.validate(cfg.Telegram.BotToken); err != nil {
+			return err
+		}
 	}
 
 	db, err := infrasqlite.Open(cfg.SQLite.Path, cfg.SQLite.BusyTimeout())
@@ -377,18 +467,13 @@ func Run(ctx context.Context, configPath string, profile config.Profile, logger 
 		eventSettings[name] = usecase.EventHandlerSettings{Enabled: c.Enabled, Config: c.Config}
 	}
 	eventDeps := usecase.EventDeps{Clock: realClock, Logger: logger, MatchState: matchState, Claims: eventClaims, Media: eventMedia(mediaStore), Alerts: eventAlerts(alerter, logger)}
+	taskRepo := sqliteadapter.NewTaskRepository(db)
+	processCycle.SetTaskRepository(taskRepo)
 	if len(opts.EventHandlers) > 0 {
-		// Settings that name a timed handler belong to the timed runner; the
-		// dispatcher would otherwise warn that they are not registered.
-		articleSettings := make(map[string]usecase.EventHandlerSettings, len(eventSettings))
-		for name, es := range eventSettings {
-			articleSettings[name] = es
-		}
-		for _, h := range opts.TimedEventHandlers {
-			if h != nil {
-				delete(articleSettings, strings.TrimSpace(h.Name()))
-			}
-		}
+		// Settings that name a timed handler or a task runner belong to
+		// those runners; the dispatcher would otherwise warn that they are
+		// not registered.
+		articleSettings := articleHandlerSettings(eventSettings, opts)
 		dispatcher, err := usecase.NewEventDispatcher(opts.EventHandlers, articleSettings, eventDeps, opts.EventHandlerTimeout)
 		if err != nil {
 			return err
@@ -406,6 +491,15 @@ func Run(ctx context.Context, configPath string, profile config.Profile, logger 
 		var err error
 		timedEvents, err = usecase.NewTimedEventRunner(opts.TimedEventHandlers, articleHandlerNames, eventSettings, eventDeps,
 			articles, outbox, uow, opts.EventHandlerTimeout, cfg.Scheduler.TimedEventGrace())
+		if err != nil {
+			return err
+		}
+	}
+	var taskLoop *usecase.TaskRunnerLoop
+	if len(opts.TaskRunners) > 0 {
+		var err error
+		taskLoop, err = usecase.NewTaskRunner(opts.TaskRunners, eventSettings, eventDeps,
+			taskRepo, articles, outbox, uow, opts.TaskTimeout, usecase.DefaultTaskBatch)
 		if err != nil {
 			return err
 		}
@@ -437,6 +531,29 @@ func Run(ctx context.Context, configPath string, profile config.Profile, logger 
 
 	if timedEvents.Len() > 0 {
 		sched.SetTimedEvents(timedEvents, cfg.Scheduler.TimedEventInterval())
+	}
+
+	if taskLoop.Len() > 0 {
+		sched.SetTasks(taskLoop, cfg.Scheduler.TaskInterval())
+		logger.Info("task loop enabled", "runners", taskLoop.Len(), "interval", cfg.Scheduler.TaskInterval().String())
+	}
+
+	if opts.TelegramUpdates != nil {
+		tu := opts.TelegramUpdates
+		sched.SetUpdatePoller(telegramupdates.New(telegramupdates.Config{
+			Bot:           telegram.NewBotClient("", cfg.Telegram.BotToken, cfg.Telegram.Timeout()),
+			Offsets:       sqliteadapter.NewTelegramOffsetRepository(db),
+			Tasks:         taskRepo,
+			Router:        tu.Router,
+			AllowedUserID: tu.AllowedUserID,
+			AllowedChatID: tu.AllowedChatID,
+			BotKey:        botKey(cfg.Telegram.BotToken),
+			ClosedText:    tu.ClosedText,
+			// A saved signal runs the task loop now, not at its next tick.
+			Wake:   sched.WakeTasks,
+			Logger: logger,
+		}))
+		logger.Info("telegram update poller enabled")
 	}
 
 	logger.Info(

@@ -116,11 +116,19 @@ func (r *OutboxRepository) EnqueueLane(ctx context.Context, articleID, payload s
 
 // EnqueueDestination implements ports/out.DestinationOutboxRepository.
 func (r *OutboxRepository) EnqueueDestination(ctx context.Context, articleID, payload string, lane publishing.PublicationLane, destination publishing.Destination, now time.Time) error {
+	_, err := r.TryEnqueueDestination(ctx, articleID, payload, lane, destination, now)
+	return err
+}
+
+// TryEnqueueDestination implements ports/out.ReportingOutboxRepository: it is
+// EnqueueDestination that also reports whether a row was inserted (false when
+// a row for (articleID, destination) already exists or the article does not).
+func (r *OutboxRepository) TryEnqueueDestination(ctx context.Context, articleID, payload string, lane publishing.PublicationLane, destination publishing.Destination, now time.Time) (bool, error) {
 	if err := publishing.ValidateDestination(destination); err != nil {
-		return fmt.Errorf("sqlite: enqueue outbox item for %s: %w", articleID, err)
+		return false, fmt.Errorf("sqlite: enqueue outbox item for %s: %w", articleID, err)
 	}
 	if err := publishing.ValidatePayload(payload); err != nil {
-		return fmt.Errorf("sqlite: enqueue outbox item for %s: %w", articleID, err)
+		return false, fmt.Errorf("sqlite: enqueue outbox item for %s: %w", articleID, err)
 	}
 	destination = destination.Normalized()
 	lane = lane.Normalized()
@@ -128,7 +136,7 @@ func (r *OutboxRepository) EnqueueDestination(ctx context.Context, articleID, pa
 	if lane == publishing.LaneLive && r.liveTTL > 0 {
 		liveExpiry = sqliteTime(now.Add(r.liveTTL))
 	}
-	_, err := executor(ctx, r.db).ExecContext(ctx, `
+	inserted, err := executor(ctx, r.db).ExecContext(ctx, `
 		INSERT OR IGNORE INTO publication_outbox (article_id, destination, payload, lane, available_at, expires_at)
 		SELECT ?, ?, ?, ?, ?, CASE
 			WHEN a.published_at IS NOT NULL AND a.freshness_max_age_used > 0
@@ -138,12 +146,18 @@ func (r *OutboxRepository) EnqueueDestination(ctx context.Context, articleID, pa
 		FROM articles a WHERE a.id = ?
 		`, articleID, string(destination), payload, string(lane), sqliteTime(now), articleID)
 	if err != nil {
-		return fmt.Errorf("sqlite: enqueue outbox item for %s: %w", articleID, err)
+		return false, fmt.Errorf("sqlite: enqueue outbox item for %s: %w", articleID, err)
+	}
+	n, err := inserted.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("sqlite: enqueue outbox item for %s: %w", articleID, err)
 	}
 	if lane == publishing.LaneLive && r.liveTTL > 0 {
-		_, err = executor(ctx, r.db).ExecContext(ctx, `UPDATE publication_outbox SET expires_at=? WHERE article_id=? AND destination=? AND lane='live' AND status='pending'`, liveExpiry, articleID, string(destination))
+		if _, err := executor(ctx, r.db).ExecContext(ctx, `UPDATE publication_outbox SET expires_at=? WHERE article_id=? AND destination=? AND lane='live' AND status='pending'`, liveExpiry, articleID, string(destination)); err != nil {
+			return false, err
+		}
 	}
-	return err
+	return n > 0, nil
 }
 
 // ClaimBatch implements ports/out.OutboxRepository. It always runs in its
