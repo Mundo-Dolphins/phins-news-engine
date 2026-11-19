@@ -34,8 +34,16 @@ func TestBotClientSendWithKeyboard(t *testing.T) {
 	if got["chat_id"] != float64(55) || got["text"] != "hello" {
 		t.Errorf("body = %v", got)
 	}
-	rows := got["reply_markup"].(map[string]any)["inline_keyboard"].([]any)
-	btn := rows[0].([]any)[1].(map[string]any)
+	markup, _ := got["reply_markup"].(map[string]any)
+	rows, _ := markup["inline_keyboard"].([]any)
+	if len(rows) == 0 {
+		t.Fatalf("no keyboard: %v", got)
+	}
+	row, _ := rows[0].([]any)
+	if len(row) < 2 {
+		t.Fatalf("row = %v", row)
+	}
+	btn, _ := row[1].(map[string]any)
 	if btn["text"] != "No" || btn["callback_data"] != "n:1" {
 		t.Errorf("button = %v", btn)
 	}

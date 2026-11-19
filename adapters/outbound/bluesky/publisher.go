@@ -295,7 +295,7 @@ func postText(a article.Article, payload publishing.MessagePayload) (string, err
 
 // checkLimits enforces Bluesky's per-post grapheme and byte limits.
 func checkLimits(text string) error {
-	if n := countGraphemes(text); n > maxPostGraphemes {
+	if n := CountGraphemes(text); n > maxPostGraphemes {
 		return fmt.Errorf("text is %d characters, the limit is %d", n, maxPostGraphemes)
 	}
 	if len(text) > maxPostBytes {

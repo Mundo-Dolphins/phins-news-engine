@@ -48,7 +48,7 @@ func buildFacets(text string) []postFacet {
 			continue
 		}
 		tag := text[start+1 : end]
-		if countGraphemes(tag) > maxTagGraphemes {
+		if CountGraphemes(tag) > maxTagGraphemes {
 			continue
 		}
 		facets = append(facets, postFacet{

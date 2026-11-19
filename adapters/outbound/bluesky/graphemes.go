@@ -2,14 +2,14 @@ package bluesky
 
 import "unicode"
 
-// countGraphemes returns the number of user-perceived characters in s, the
+// CountGraphemes returns the number of user-perceived characters in s, the
 // unit of Bluesky's 300-character post limit. The module carries no Unicode
 // segmentation dependency, so this implements the extended-grapheme rules
 // that matter for post text: combining marks, variation selectors, emoji
 // modifiers, zero-width-joiner sequences, regional-indicator flag pairs,
 // emoji tag sequences, keycaps and CR LF. Hangul syllable sequences are not
 // modelled; precomposed syllables count as one each, as the platform does.
-func countGraphemes(s string) int {
+func CountGraphemes(s string) int {
 	count := 0
 	var prev rune
 	riRun := 0      // regional indicators in the current run

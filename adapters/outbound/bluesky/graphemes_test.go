@@ -33,8 +33,19 @@ func TestCountGraphemes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := bluesky.CountGraphemesForTest(tt.in); got != tt.want {
-				t.Errorf("countGraphemes(%q) = %d, want %d", tt.in, got, tt.want)
+				t.Errorf("CountGraphemes(%q) = %d, want %d", tt.in, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestCountGraphemesExported(t *testing.T) {
+	if got := bluesky.CountGraphemes("👍🏽ab"); got != 3 {
+		t.Fatalf("CountGraphemes = %d, want 3", got)
+	}
+	for _, s := range []string{"", "abc", "é", "🇪🇸🇫🇷", "a\r\nb"} {
+		if bluesky.CountGraphemes(s) != bluesky.CountGraphemesForTest(s) {
+			t.Fatalf("exported and test counter differ for %q", s)
+		}
 	}
 }

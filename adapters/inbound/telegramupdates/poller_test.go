@@ -47,7 +47,8 @@ func newFakeAPI(t *testing.T, updates func(n int) (int, string)) *fakeAPI {
 		defer f.mu.Unlock()
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/getUpdates"):
-			f.offsets = append(f.offsets, int64(body["offset"].(float64)))
+			off, _ := body["offset"].(float64)
+			f.offsets = append(f.offsets, int64(off))
 			code, resp := f.updates(f.getCalls)
 			f.getCalls++
 			w.WriteHeader(code)

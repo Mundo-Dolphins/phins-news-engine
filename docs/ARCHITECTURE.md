@@ -83,6 +83,12 @@ The `reddit` fetcher sets `article.MetadataMediaImages` (`media_images`, a
 JSON array of `{"url","type"}`) on image posts whose link is a `.jpg`,
 `.jpeg` or `.png` on `i.redd.it`, so event handlers can download the image.
 
+Optional host extensions in `engine.Options`: `TaskRunners` and
+`TaskTimeout` start the background task loop (every
+`scheduler.task_interval_seconds`), and `TelegramUpdates` starts the
+Telegram `getUpdates` poller that turns approved senders' updates into task
+signals. See [ADR 0041](adr/0041-background-tasks-and-telegram-updates.md).
+
 `cli.Root()` is the composition root of the operator tools. Commands that
 need something only a host can provide (a scraper, remote operations, a
 channel-history client) look it up in `cli/cmd/shared` and fail with a

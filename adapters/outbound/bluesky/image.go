@@ -49,7 +49,7 @@ func loadImage(root string, ref publishing.ImageRef) (preparedImage, error) {
 	if !allowedImageMIME[ref.MIME] {
 		return preparedImage{}, perm("unsupported media type %q (want image/jpeg, image/png or image/webp)", ref.MIME)
 	}
-	if countGraphemes(ref.Alt) > maxAltRunes {
+	if CountGraphemes(ref.Alt) > maxAltRunes {
 		return preparedImage{}, perm("alt text exceeds %d characters", maxAltRunes)
 	}
 	if root == "" {
