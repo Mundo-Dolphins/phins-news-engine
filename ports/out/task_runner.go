@@ -35,7 +35,10 @@ type TaskOutcome struct {
 	RunAfter time.Time
 	// Consumed lists the signals Run processed; the rest stay pending.
 	Consumed []int64
-	// Actions may only be EnqueuePublication; they are enqueued for
-	// Task.ArticleID in the same transaction as the task update.
+	// Actions may only be EnqueuePublication; they are enqueued in the same
+	// transaction as the task update, on a placeholder article of the task's
+	// own (not Task.ArticleID), so they have no freshness expiry and do not
+	// collide with the originating article's rows. One row per destination
+	// per task: a publication that inserts no row fails the outcome.
 	Actions []EventAction
 }

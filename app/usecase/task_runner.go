@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Mundo-Dolphins/phins-news-engine/domain/article"
+	"github.com/Mundo-Dolphins/phins-news-engine/domain/source"
 	"github.com/Mundo-Dolphins/phins-news-engine/ports/in"
 	"github.com/Mundo-Dolphins/phins-news-engine/ports/out"
 )
@@ -26,6 +28,11 @@ const (
 	taskBaseBackoff = 30 * time.Second
 	// taskAlertAttempts is the consecutive failure count that raises an alert.
 	taskAlertAttempts = 3
+	// taskPersistTimeout bounds saving a successful outcome once shutdown has
+	// begun, so work the runner already did (messages sent) is not redone.
+	taskPersistTimeout = 10 * time.Second
+
+	taskArticlePrefix = "task:"
 )
 
 // TaskRunnerLoop advances the background tasks (see out.Task). On each Run it
@@ -33,15 +40,21 @@ const (
 // panic or timeout in one runner backs that task off and never reaches the
 // pipeline or another task. Tasks take no event claims: UNIQUE (kind, key)
 // already keeps them unique.
+//
+// A task's publications hang from a placeholder article of its own
+// ("task:<kind>:<key>", like TimedEventRunner's), never from the originating
+// Task.ArticleID: they neither inherit that article's freshness expiry nor
+// collide with its outbox rows. The placeholder has no freshness limit.
 type TaskRunnerLoop struct {
-	runners map[string]registeredTaskRunner
-	deps    EventDeps
-	tasks   out.TaskRepository
-	outbox  out.DestinationOutboxRepository
-	uow     out.UnitOfWork
-	timeout time.Duration
-	batch   int
-	kinds   []string // enabled kinds, sorted
+	runners  map[string]registeredTaskRunner
+	deps     EventDeps
+	tasks    out.TaskRepository
+	articles out.ArticleRepository
+	outbox   out.ReportingOutboxRepository
+	uow      out.UnitOfWork
+	timeout  time.Duration
+	batch    int
+	kinds    []string // enabled kinds, sorted
 }
 
 type registeredTaskRunner struct {
@@ -60,7 +73,8 @@ func NewTaskRunner(
 	settings map[string]EventHandlerSettings,
 	deps EventDeps,
 	tasks out.TaskRepository,
-	outbox out.DestinationOutboxRepository,
+	articles out.ArticleRepository,
+	outbox out.ReportingOutboxRepository,
 	uow out.UnitOfWork,
 	timeout time.Duration,
 	batch int,
@@ -73,7 +87,7 @@ func NewTaskRunner(
 	}
 	l := &TaskRunnerLoop{
 		runners: make(map[string]registeredTaskRunner, len(runners)),
-		deps:    deps, tasks: tasks, outbox: outbox, uow: uow, timeout: timeout, batch: batch,
+		deps:    deps, tasks: tasks, articles: articles, outbox: outbox, uow: uow, timeout: timeout, batch: batch,
 	}
 	seen := make(map[string]bool, len(runners))
 	for i, r := range runners {
@@ -144,23 +158,30 @@ func (l *TaskRunnerLoop) runTask(ctx context.Context, rt registeredTaskRunner, t
 	res.Ran++
 	now := l.deps.Clock.Now()
 	outcome, kind, err := l.call(ctx, rt, t, signals)
-	if ctx.Err() != nil {
+	if ctx.Err() != nil && kind != outcomeOK {
 		return // shutting down: the task stays as it was
 	}
 	if kind == outcomeOK {
-		err = validateTaskOutcome(outcome, t, signals)
+		err = validateTaskOutcome(outcome, signals)
 		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
 			kind = outcomeError
 		}
 	}
 	if kind == outcomeOK {
-		enqueued, err := l.persist(ctx, t, outcome, now)
+		// A successful Run may already have acted (sent messages): save it
+		// even if shutdown began during the call, under a short deadline.
+		pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), taskPersistTimeout)
+		defer cancel()
+		enqueued, err := l.persist(pctx, t, outcome, now)
 		if err == nil {
 			res.Enqueued += enqueued
 			return
 		}
 		l.deps.Logger.Error("task persist failed", err, "kind", t.Kind, "key", t.Key)
-		l.fail(ctx, t, now, fmt.Sprintf("task %s could not be saved: %v", t.Key, err))
+		l.fail(pctx, t, now, fmt.Sprintf("task %s could not be saved: %v", t.Key, err))
 		res.Errors++
 		return
 	}
@@ -199,7 +220,7 @@ func (l *TaskRunnerLoop) call(ctx context.Context, rt registeredTaskRunner, t ou
 }
 
 // validateTaskOutcome rejects an outcome the engine could not apply safely.
-func validateTaskOutcome(o out.TaskOutcome, t out.Task, signals []out.TaskSignal) error {
+func validateTaskOutcome(o out.TaskOutcome, signals []out.TaskSignal) error {
 	switch o.Status {
 	case out.TaskPending, out.TaskWaiting:
 		if o.RunAfter.IsZero() {
@@ -225,9 +246,6 @@ func validateTaskOutcome(o out.TaskOutcome, t out.Task, signals []out.TaskSignal
 		switch a := act.(type) {
 		case nil:
 		case out.EnqueuePublication:
-			if t.ArticleID == "" {
-				return errors.New("a publication needs the task to have an article")
-			}
 			if err := a.Payload.Validate(); err != nil {
 				return fmt.Errorf("invalid payload for %s: %w", a.Destination.Normalized(), err)
 			}
@@ -238,7 +256,10 @@ func validateTaskOutcome(o out.TaskOutcome, t out.Task, signals []out.TaskSignal
 	return nil
 }
 
-// persist saves the task and enqueues its publications in one transaction.
+// persist saves the task and enqueues its publications (on the task's
+// placeholder article, saved first if missing) in one transaction. A
+// publication that inserts no row (one already exists for that destination)
+// fails the whole outcome: an approved publication is never dropped silently.
 func (l *TaskRunnerLoop) persist(ctx context.Context, t out.Task, o out.TaskOutcome, now time.Time) (int, error) {
 	t.Status = o.Status
 	if len(o.State) > 0 {
@@ -254,17 +275,29 @@ func (l *TaskRunnerLoop) persist(ctx context.Context, t out.Task, o out.TaskOutc
 		if err := l.tasks.Save(txCtx, t, o.Consumed, now); err != nil {
 			return fmt.Errorf("save task: %w", err)
 		}
+		articleID := taskArticleID(t.Kind, t.Key)
+		placeholder := false
 		for _, act := range o.Actions {
 			a, ok := act.(out.EnqueuePublication)
 			if !ok {
 				continue
 			}
+			if !placeholder {
+				if err := l.ensureTaskArticle(txCtx, t, articleID, now); err != nil {
+					return err
+				}
+				placeholder = true
+			}
 			payload, err := a.Payload.Marshal()
 			if err != nil {
 				return fmt.Errorf("marshal payload: %w", err)
 			}
-			if err := l.outbox.EnqueueDestination(txCtx, t.ArticleID, payload, a.Lane, a.Destination, now); err != nil {
+			inserted, err := l.outbox.TryEnqueueDestination(txCtx, articleID, payload, a.Lane, a.Destination, now)
+			if err != nil {
 				return fmt.Errorf("enqueue: %w", err)
+			}
+			if !inserted {
+				return fmt.Errorf("enqueue: a publication for %s already exists for this task", a.Destination.Normalized())
 			}
 			enqueued++
 		}
@@ -274,6 +307,42 @@ func (l *TaskRunnerLoop) persist(ctx context.Context, t out.Task, o out.TaskOutc
 		return 0, err
 	}
 	return enqueued, nil
+}
+
+// ensureTaskArticle saves the task's placeholder article unless it exists
+// (an existing one keeps the lifecycle status PublishOutbox gave it).
+func (l *TaskRunnerLoop) ensureTaskArticle(ctx context.Context, t out.Task, id string, now time.Time) error {
+	_, err := l.articles.FindByID(ctx, id)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, article.ErrNotFound) {
+		return fmt.Errorf("find placeholder article: %w", err)
+	}
+	if err := l.articles.Save(ctx, taskArticle(t, id, now)); err != nil {
+		return fmt.Errorf("save placeholder article: %w", err)
+	}
+	return nil
+}
+
+func taskArticleID(kind, key string) string {
+	return taskArticlePrefix + kind + ":" + key
+}
+
+// taskArticle is the placeholder article a task's outbox rows hang from. It
+// has no FreshnessMaxAge, so its rows never expire for freshness (a review
+// may approve a publication days after the originating article appeared).
+func taskArticle(t out.Task, id string, now time.Time) article.Article {
+	sid, _ := source.NewID(source.TypeWeb, "background-task")
+	title := t.Kind + " " + t.Key
+	return article.Article{
+		ID: id, ExternalID: id, OriginalURL: id, CanonicalURL: id,
+		Source: source.Source{ID: sid, Name: "Background task", Type: source.TypeWeb},
+		Title:  title, Summary: title,
+		PublishedAt: now, FetchedAt: now,
+		ContentType: article.ContentTypeUnknown,
+		Status:      article.StatusPendingPublication,
+	}
 }
 
 // fail records one more consecutive failure: attempts+1 and an exponential

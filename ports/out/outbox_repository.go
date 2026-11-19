@@ -38,6 +38,16 @@ type LaneOutboxRepository interface {
 	EnqueueLane(ctx context.Context, articleID, payload string, lane publishing.PublicationLane, now time.Time) error
 }
 
+// ReportingOutboxRepository enqueues like DestinationOutboxRepository but
+// says whether a row was inserted, for callers that must not lose a
+// publication silently (background tasks).
+type ReportingOutboxRepository interface {
+	// TryEnqueueDestination inserts a pending row for (articleID,
+	// destination); inserted is false when a row already exists for that
+	// pair or the article does not exist.
+	TryEnqueueDestination(ctx context.Context, articleID, payload string, lane publishing.PublicationLane, destination publishing.Destination, now time.Time) (inserted bool, err error)
+}
+
 // DestinationOutboxRepository is the multi-destination extension of
 // OutboxRepository (ADR 0031). The legacy Enqueue/EnqueueLane methods always
 // mean Telegram.

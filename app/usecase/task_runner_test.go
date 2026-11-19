@@ -2,6 +2,7 @@ package usecase_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"strings"
 	"sync"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqlite"
+	telegramadapter "github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/telegram"
 	"github.com/Mundo-Dolphins/phins-news-engine/app/usecase"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/article"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/publishing"
@@ -45,6 +47,9 @@ func (l *warnLogger) Warn(msg string, _ ...any) {
 	defer l.mu.Unlock()
 	l.warns = append(l.warns, msg)
 }
+
+// taskPlaceholderID is the placeholder article of the fixture's task.
+const taskPlaceholderID = "task:poll:k1"
 
 type taskFixture struct {
 	timedFixture
@@ -85,7 +90,7 @@ func (f *taskFixture) loop(t *testing.T, enabled bool, timeout time.Duration, lo
 	}
 	l, err := usecase.NewTaskRunner(runners, settings,
 		usecase.EventDeps{Clock: f.clock, Logger: logger, Alerts: f.alerts},
-		f.tasks, sqlite.NewOutboxRepository(f.db), sqlite.NewUnitOfWork(f.db), timeout, 5)
+		f.tasks, sqlite.NewArticleRepository(f.db), sqlite.NewOutboxRepository(f.db), sqlite.NewUnitOfWork(f.db), timeout, 5)
 	if err != nil {
 		t.Fatalf("NewTaskRunner() error = %v", err)
 	}
@@ -140,8 +145,11 @@ func TestTaskRunnerPersistsOutcomeAndPublication(t *testing.T) {
 	if got.Status != out.TaskWaiting || string(got.State) != `{"n":1}` || !got.RunAfter.Equal(wake) || got.Attempts != 0 {
 		t.Fatalf("task = %+v", got)
 	}
-	if n := destinationOutboxCount(t, f.db, "art-1", "bluesky"); n != 1 {
-		t.Fatalf("outbox rows for the task's article = %d, want 1", n)
+	if n := destinationOutboxCount(t, f.db, taskPlaceholderID, "bluesky"); n != 1 {
+		t.Fatalf("outbox rows for the task's placeholder article = %d, want 1", n)
+	}
+	if n := destinationOutboxCount(t, f.db, "art-1", "bluesky"); n != 0 {
+		t.Fatalf("outbox rows for the originating article = %d, want 0", n)
 	}
 	if left, _ := f.tasks.Signals(context.Background(), f.taskID); len(left) != 0 {
 		t.Fatalf("signals left = %+v, want consumed", left)
@@ -231,7 +239,7 @@ func TestTaskRunnerPanicAndTimeoutAreErrors(t *testing.T) {
 	if got := f.get(t); got.Attempts != 2 || got.Status != out.TaskPending {
 		t.Fatalf("after timeout: %+v", got)
 	}
-	if n := destinationOutboxCount(t, f.db, "art-1", "bluesky"); n != 0 {
+	if n := destinationOutboxCount(t, f.db, taskPlaceholderID, "bluesky"); n != 0 {
 		t.Fatalf("outbox rows = %d, want none", n)
 	}
 }
@@ -317,7 +325,7 @@ func TestTaskRunnerSharesConfigWithEventHandler(t *testing.T) {
 	r := &fakeTaskRunner{kind: "poll", run: func(context.Context, out.TaskContext, out.Task, []out.TaskSignal) (out.TaskOutcome, error) {
 		return okOutcome(out.TaskDone, time.Time{}), nil
 	}}
-	l, err := usecase.NewTaskRunner([]out.TaskRunner{r}, settings, deps, f.tasks, sqlite.NewOutboxRepository(f.db), sqlite.NewUnitOfWork(f.db), time.Second, 5)
+	l, err := usecase.NewTaskRunner([]out.TaskRunner{r}, settings, deps, f.tasks, sqlite.NewArticleRepository(f.db), sqlite.NewOutboxRepository(f.db), sqlite.NewUnitOfWork(f.db), time.Second, 5)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -341,13 +349,13 @@ func TestTaskRunnerRejectsDuplicateKind(t *testing.T) {
 	}
 	_, err := usecase.NewTaskRunner(
 		[]out.TaskRunner{&fakeTaskRunner{kind: "poll", run: run}, &fakeTaskRunner{kind: " poll ", run: run}},
-		nil, usecase.EventDeps{Clock: f.clock, Logger: fakeLogger{}}, f.tasks, nil, nil, time.Second, 5,
+		nil, usecase.EventDeps{Clock: f.clock, Logger: fakeLogger{}}, f.tasks, nil, nil, nil, time.Second, 5,
 	)
 	if err == nil || !strings.Contains(err.Error(), "duplicate") {
 		t.Fatalf("error = %v, want duplicate kind", err)
 	}
 	if _, err := usecase.NewTaskRunner([]out.TaskRunner{&fakeTaskRunner{kind: "", run: run}}, nil,
-		usecase.EventDeps{Clock: f.clock, Logger: fakeLogger{}}, f.tasks, nil, nil, time.Second, 5); err == nil {
+		usecase.EventDeps{Clock: f.clock, Logger: fakeLogger{}}, f.tasks, nil, nil, nil, time.Second, 5); err == nil {
 		t.Fatal("blank kind accepted")
 	}
 }
@@ -367,7 +375,7 @@ func TestTaskRunnerDisabledKindsDoNotStarveEnabledOnes(t *testing.T) {
 	idle := &fakeTaskRunner{kind: "idle", run: r.run}
 	settings := map[string]usecase.EventHandlerSettings{"poll": {Enabled: true}, "idle": {Enabled: false}}
 	l, err := usecase.NewTaskRunner([]out.TaskRunner{r, idle}, settings,
-		usecase.EventDeps{Clock: f.clock, Logger: fakeLogger{}}, f.tasks, sqlite.NewOutboxRepository(f.db), sqlite.NewUnitOfWork(f.db), time.Second, 5)
+		usecase.EventDeps{Clock: f.clock, Logger: fakeLogger{}}, f.tasks, sqlite.NewArticleRepository(f.db), sqlite.NewOutboxRepository(f.db), sqlite.NewUnitOfWork(f.db), time.Second, 5)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -402,5 +410,122 @@ func TestTaskRunnerSignalledTaskHonoursBackoffAfterFailure(t *testing.T) {
 	}
 	if r.calls != 2 {
 		t.Fatalf("calls=%d, want a retry once RunAfter passed", r.calls)
+	}
+}
+
+// nonInsertingOutbox reports every enqueue as not inserted.
+type nonInsertingOutbox struct{}
+
+func (nonInsertingOutbox) TryEnqueueDestination(context.Context, string, string, publishing.PublicationLane, publishing.Destination, time.Time) (bool, error) {
+	return false, nil
+}
+
+func TestTaskPublicationIgnoresTheOriginatingArticleFreshness(t *testing.T) {
+	f := newTaskFixture(t)
+	ctx := context.Background()
+	articles := sqlite.NewArticleRepository(f.db)
+	// The originating article went stale long ago.
+	src, err := articles.FindByID(ctx, "art-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src.PublishedAt = f.clock.Now().Add(-10 * 24 * time.Hour)
+	src.FreshnessMaxAge = time.Hour
+	if err := articles.Save(ctx, src); err != nil {
+		t.Fatal(err)
+	}
+	r := &fakeTaskRunner{kind: "poll", run: func(context.Context, out.TaskContext, out.Task, []out.TaskSignal) (out.TaskOutcome, error) {
+		return okOutcome(out.TaskDone, time.Time{}, out.EnqueuePublication{
+			Destination: publishing.DestinationTelegram,
+			Payload:     publishing.MessagePayload{Text: "Approved thread", Kind: "poll"},
+		}), nil
+	}}
+	res, err := f.loop(t, true, time.Second, nil, r).Run(ctx)
+	if err != nil || res.Enqueued != 1 || res.Errors != 0 {
+		t.Fatalf("Run() = %+v, %v", res, err)
+	}
+	var expires sql.NullString
+	if err := f.db.QueryRow(`SELECT expires_at FROM publication_outbox WHERE article_id = ?`, taskPlaceholderID).Scan(&expires); err != nil {
+		t.Fatal(err)
+	}
+	if expires.Valid {
+		t.Fatalf("expires_at = %q, want none", expires.String)
+	}
+
+	// Three days later PublishOutbox still delivers it.
+	srv := NewFakeTelegramServer()
+	defer srv.Close()
+	later := f.clock.Now().Add(72 * time.Hour)
+	uc := usecase.NewPublishOutbox(
+		articles, sqlite.NewOutboxRepository(f.db), sqlite.NewDecisionRepository(f.db), sqlite.NewUnitOfWork(f.db),
+		telegramadapter.New(telegramadapter.Config{ChannelID: "@test", BotToken: "test-token", BaseURL: srv.URL, Timeout: time.Second}),
+		testBackoff, publishing.PolicyConfig{}, "worker-1", 10, time.Minute, fixedClock{later}, fakeLogger{},
+		sqlite.NewClusterPublicationRepository(f.db), &fakeSourcePolicyCooldownRepository{},
+		usecase.ReconciliationConfig{BatchSize: 10}, nil,
+	)
+	pub, err := uc.Run(ctx)
+	if err != nil {
+		t.Fatalf("PublishOutbox.Run() error = %v", err)
+	}
+	if pub.Published != 1 || pub.Expired != 0 {
+		t.Fatalf("PublishOutbox result = %+v, want the task publication sent", pub)
+	}
+}
+
+func TestTaskPublicationIsNotBlockedByTheOriginatingArticleRow(t *testing.T) {
+	f := newTaskFixture(t)
+	ctx := context.Background()
+	if err := sqlite.NewOutboxRepository(f.db).EnqueueDestination(ctx, "art-1", `{"text":"other"}`, publishing.LaneNormal, publishing.DestinationBluesky, f.clock.Now()); err != nil {
+		t.Fatal(err)
+	}
+	r := &fakeTaskRunner{kind: "poll", run: func(context.Context, out.TaskContext, out.Task, []out.TaskSignal) (out.TaskOutcome, error) {
+		return okOutcome(out.TaskDone, time.Time{}, publication()), nil
+	}}
+	res, err := f.loop(t, true, time.Second, nil, r).Run(ctx)
+	if err != nil || res.Enqueued != 1 || res.Errors != 0 {
+		t.Fatalf("Run() = %+v, %v", res, err)
+	}
+	if n := destinationOutboxCount(t, f.db, taskPlaceholderID, "bluesky"); n != 1 {
+		t.Fatalf("task rows = %d, want 1", n)
+	}
+	if got := f.get(t); got.Status != out.TaskDone {
+		t.Fatalf("task = %+v, want done", got)
+	}
+}
+
+func TestTaskPublicationNotInsertedFailsTheOutcome(t *testing.T) {
+	f := newTaskFixture(t)
+	r := &fakeTaskRunner{kind: "poll", run: func(context.Context, out.TaskContext, out.Task, []out.TaskSignal) (out.TaskOutcome, error) {
+		return okOutcome(out.TaskDone, time.Time{}, publication()), nil
+	}}
+	l, err := usecase.NewTaskRunner([]out.TaskRunner{r},
+		map[string]usecase.EventHandlerSettings{"poll": {Enabled: true}},
+		usecase.EventDeps{Clock: f.clock, Logger: fakeLogger{}, Alerts: f.alerts},
+		f.tasks, sqlite.NewArticleRepository(f.db), nonInsertingOutbox{}, sqlite.NewUnitOfWork(f.db), time.Second, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := l.Run(context.Background())
+	if err != nil || res.Errors != 1 || res.Enqueued != 0 {
+		t.Fatalf("Run() = %+v, %v, want a counted error", res, err)
+	}
+	got := f.get(t)
+	if got.Status != out.TaskPending || got.Attempts != 1 || string(got.State) != `{"n":0}` {
+		t.Fatalf("task = %+v, want untouched apart from the backoff", got)
+	}
+}
+
+func TestTaskRunnerSavesSuccessfulOutcomeDespiteShutdown(t *testing.T) {
+	f := newTaskFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	r := &fakeTaskRunner{kind: "poll", run: func(context.Context, out.TaskContext, out.Task, []out.TaskSignal) (out.TaskOutcome, error) {
+		cancel() // shutdown begins after the runner already acted
+		return okOutcome(out.TaskWaiting, f.clock.Now().Add(time.Hour)), nil
+	}}
+	if _, err := f.loop(t, true, time.Second, nil, r).Run(ctx); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got := f.get(t); got.Status != out.TaskWaiting || string(got.State) != `{"n":1}` {
+		t.Fatalf("task = %+v, want the outcome saved", got)
 	}
 }

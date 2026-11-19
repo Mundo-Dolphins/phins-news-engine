@@ -496,7 +496,7 @@ func Run(ctx context.Context, configPath string, profile config.Profile, logger 
 	if len(opts.TaskRunners) > 0 {
 		var err error
 		taskLoop, err = usecase.NewTaskRunner(opts.TaskRunners, eventSettings, eventDeps,
-			taskRepo, outbox, uow, opts.TaskTimeout, usecase.DefaultTaskBatch)
+			taskRepo, articles, outbox, uow, opts.TaskTimeout, usecase.DefaultTaskBatch)
 		if err != nil {
 			return err
 		}
