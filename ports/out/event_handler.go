@@ -93,7 +93,8 @@ func (EnqueuePublication) eventAction() {}
 type EnqueueTask struct {
 	Kind string
 	Key  string
-	// State is the optional initial state.
+	// State is the optional initial state. It should carry what the runner
+	// needs from the article (title, link, text): runners cannot read it.
 	State json.RawMessage
 }
 

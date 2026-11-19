@@ -19,13 +19,20 @@ const (
 
 // Task is a unit of background work identified by (Kind, Key).
 type Task struct {
-	ID        int64
-	Kind      string
-	Key       string
+	ID   int64
+	Kind string
+	Key  string
+	// ArticleID is the originating article, for reference only: the task's
+	// publications go to a placeholder article of its own.
 	ArticleID string
 	Status    TaskStatus
-	State     json.RawMessage // opaque to the engine; never empty ({} by default)
-	Attempts  int             // consecutive Run failures; reset to 0 after a successful Run
+	// State is opaque to the engine; never empty ({} by default). The
+	// initial state (EnqueueTask.State) should carry what the runner needs
+	// from the article: runners have no access to it.
+	State    json.RawMessage
+	Attempts int // consecutive Run failures; reset to 0 after a successful Run
+	// RunAfter is overwritten by the backoff after a failed Run, so a runner
+	// keeps its own deadlines in State.
 	RunAfter  time.Time
 	CreatedAt time.Time
 	UpdatedAt time.Time

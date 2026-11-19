@@ -34,6 +34,27 @@ attempts. A runner whose Kind equals an EventHandler name shares its
 `events.<name>` configuration block; otherwise `events.<kind>.enabled` turns
 it on.
 
+**Runner contract.** Tasks run one after another in one loop, so a runner
+does one bounded step per `Run` (one LLM call, one message, one check of
+the signals) and returns, saving its progress in `State`; a long step would
+keep an interactive task waiting. Runners have no access to the article, so
+the initial `EnqueueTask.State` carries what the runner needs from it
+(title, link, text). A failed run overwrites `run_after` with the backoff,
+so a runner keeps its own deadlines (for example "give up 72 h after the
+article") in `State` and checks them on every run, instead of relying on
+the `RunAfter` it returned last. A successful outcome is saved even if
+shutdown began during the call (with a short deadline of its own), so work
+already done is not repeated after a restart.
+
+**Publications.** `EnqueuePublication` actions of a task go to a placeholder
+article of the task's own, `task:<kind>:<key>` (as timed events do,
+[ADR 0038](0038-timed-event-handlers.md)), saved in the same transaction.
+It has no freshness limit, so an approval given days after the originating
+article (`Task.ArticleID`, kept for reference) still publishes, and it never
+collides with that article's outbox rows. A task gets one row per
+destination: an enqueue that inserts no row fails the outcome (counted error
+and backoff) instead of being counted as a success.
+
 **Single writer.** Only the task runner writes `tasks` rows. Producers of
 external input insert `task_signals` rows only, so the two never contend on a
 table.
@@ -43,12 +64,19 @@ answers callbacks and calls `getUpdates`. With `Options.TelegramUpdates` set,
 `telegramupdates.Poller` long-polls `getUpdates`, drops every update whose
 sender is not `AllowedUserID` or whose chat is not `AllowedChatID`, and asks
 the host's `out.TelegramUpdateRouter` which task an update belongs to. A
-claimed update becomes a signal on that task. The next offset is stored per
-bot in `telegram_update_offsets` (migration 0051), keyed by the numeric bot id
-and never by the token, and advanced only after the signals are saved.
+claimed update becomes a signal on that task, and a saved signal wakes the
+task loop at once instead of waiting for its tick. A panic in the router is
+recovered: the update is logged by id, its callback answered, and skipped.
+A button press on a closed task is answered with
+`TelegramUpdates.ClosedText` (no text by default). The next offset is stored
+per bot in `telegram_update_offsets` (migration 0051), keyed by the numeric
+bot id and never by the token, and advanced after each batch has been
+handled, even when saving a signal failed transiently: such an update is
+logged and lost, not retried.
 
 **RSS content.** A feed with `keep_content: true` in `sources.yml` stores the
-item's full text (HTML stripped, capped at 64 KiB) in
+item's full text (HTML stripped, one line per block element, capped at
+64 KiB) in
 `article.Metadata[article.MetadataFullContent]`. It is never copied to `Body`,
 so classification, dedup and clustering see the same text as before.
 
@@ -62,7 +90,9 @@ parts with the same counter the publisher enforces.
   conflict.
 - Only one user and one chat are served. Other senders are ignored without a
   reply.
-- Telegram messages are at-least-once: if saving the task state fails after a
-  message was sent, the next attempt sends it again.
+- Telegram messages sent by a runner are at-least-once: if saving the task
+  state fails after a message was sent, the next attempt sends it again.
+  Signals are at-least-once for the runner too: a run whose outcome is not
+  saved sees the same signals again, so runners handle repeats.
 - Signals are durable, so a restart loses neither updates nor approvals.
 - A runner must list handled signals in `Consumed`, or they wake it again.

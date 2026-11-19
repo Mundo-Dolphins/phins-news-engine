@@ -86,7 +86,7 @@ test fails if a new secret field is not covered.
 | `scheduler.cleanup_interval_hours` | `CloseInactiveClusters` then `RunRetention` | 24 |
 | `scheduler.timed_event_interval_seconds` | Tick of the timed event handlers ([ADR 0038](adr/0038-timed-event-handlers.md)); 0 means the default | 60 |
 | `scheduler.timed_event_grace_minutes` | How long after its instant a timed event still runs; later it is skipped and alerted; 0 means the default | 15 |
-| `scheduler.task_interval_seconds` | Tick of the background task runners (`Options.TaskRunners`); 0 means the default | 30 |
+| `scheduler.task_interval_seconds` | Tick of the background task runners (`Options.TaskRunners`); 0 means the default. A signal saved by the Telegram update poller also runs the loop at once. Tasks run one after another, so a runner should do one bounded step per `Run` (one LLM call, one message) and return, or an interactive task waits behind a long one | 30 |
 | `retention.*` | `rejected_articles_days`, `duplicates_days`, `audit_events_days`, `publication_attempts_days`, `clusters_days` (see [DATABASE.md](DATABASE.md#retention)) | 14, 7, 30, 30, 14 |
 | `cluster_lifecycle.*` | `close_after_hours`, `batch_size`, `max_batches_per_run`, `time_budget_seconds`, `close_reason` | 96, 200, 50, 30, `inactivity_ttl` |
 | `seen_items.reclaim_after_minutes` | When an unfinished seen-items claim may be taken over | 10 |
@@ -103,7 +103,7 @@ test fails if a new secret field is not covered.
 | `fetch.sources_path` | Source catalog (example: `configs/example/sources.yml`) |
 | `fetch_sources.*` | Per category (`website`, `rss`, `reddit`, `bluesky`, `twitter`, `instagram`, `youtube`): `enabled` and `on_missing_dependency`. The library builds `rss`, `reddit`, `bluesky` and `youtube`; the others need a host builder ([ARCHITECTURE.md](ARCHITECTURE.md#composition)) |
 | `scraping_service.*` | Settings for a host-provided scraper (`enabled`, `base_url`, `timeout_seconds`, `max_retries`, `backoff_base_ms`, `backoff_max_ms`, `response_limit_bytes`, `default_mode`, `default_cache_ttl_seconds`, `concurrency`, `circuit_breaker`, `domains`). The library validates them and passes the configuration to the host's `Scraper` factory; it ships no client |
-| `rss_feeds[].keep_content` (in the sources file) | Keep the item's full text, HTML stripped and capped at 64 KiB, in `Metadata["full_content"]`; never in the body. Default false ([ADR 0041](adr/0041-background-tasks-and-telegram-updates.md)) |
+| `rss_feeds[].keep_content` (in the sources file) | Keep the item's full text, HTML stripped (one line per paragraph, list item, heading, `<br>`, `div` or table row) and capped at 64 KiB, in `Metadata["full_content"]`; never in the body. Default false ([ADR 0041](adr/0041-background-tasks-and-telegram-updates.md)) |
 | `source_policy.path` | Per-source dedup and publication policies (example: `configs/example/source-policies.yml`) |
 
 ### Normalization, dedup and relevance

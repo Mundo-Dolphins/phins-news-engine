@@ -138,9 +138,10 @@ User-Agent from their configuration.
 ## Telegram updates
 
 `Options.TelegramUpdates` makes the engine read updates with the bot token
-(`TELEGRAM_BOT_TOKEN`). Only `AllowedUserID` in `AllowedChatID` is served;
-both are required and every other update is dropped before it reaches the
-router. The stored offset uses the numeric bot id, never the token. Telegram
+(`TELEGRAM_BOT_TOKEN`). An update is served only when its sender is
+`AllowedUserID` AND its chat is `AllowedChatID`; both are required and every
+other update is dropped before it reaches the router. A panic in the host's
+router is recovered and logged with the update id only, never its content. The stored offset uses the numeric bot id, never the token. Telegram
 allows one `getUpdates` consumer per token, so do not share the token with
 another poller ([ADR 0041](adr/0041-background-tasks-and-telegram-updates.md)).
 

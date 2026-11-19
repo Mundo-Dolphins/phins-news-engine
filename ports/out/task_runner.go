@@ -13,7 +13,10 @@ type TaskRunner interface {
 	// Kind is the task kind this runner owns.
 	Kind() string
 	// Run advances the task. It runs outside any transaction and must honour
-	// ctx (it carries a deadline).
+	// ctx (it carries a deadline). Tasks run one after another, so Run does
+	// one bounded step and returns. Messages it sends and the signals it is
+	// given are at-least-once: if its outcome cannot be saved, the next Run
+	// gets the same state and signals again.
 	Run(ctx context.Context, tc TaskContext, t Task, signals []TaskSignal) (TaskOutcome, error)
 }
 
@@ -31,7 +34,9 @@ type TaskOutcome struct {
 	// Status is the new status; pending and waiting require a non-zero RunAfter.
 	Status TaskStatus
 	// State is the new opaque state; nil leaves it unchanged.
-	State    json.RawMessage
+	State json.RawMessage
+	// RunAfter is the next run. A failed Run replaces it with the backoff,
+	// so deadlines the runner must keep belong in State.
 	RunAfter time.Time
 	// Consumed lists the signals Run processed; the rest stay pending.
 	Consumed []int64
