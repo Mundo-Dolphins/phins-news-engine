@@ -307,5 +307,7 @@ func TestScheduler_SignalFromPollerRunsTasksWithoutWaitingForTick(t *testing.T) 
 	go func() { done <- s.Run(ctx) }()
 	waitFor(t, func() bool { return tasks.calls.Load() == 2 })
 	cancel()
-	<-done
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run() error = %v", err)
+	}
 }
