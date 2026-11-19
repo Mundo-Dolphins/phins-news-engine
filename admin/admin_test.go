@@ -477,11 +477,11 @@ func TestShutdownEndsOpenSSEStreamsPromptly(t *testing.T) {
 func TestProductionUnblocksOnceMigrationIsAppliedExternally(t *testing.T) {
 	defer admin.SetSchemaRecheck(50 * time.Millisecond)()
 	h := newHarness(t, "production", 1)
-	// Undo the latest migration for real (0050 only adds the task tables) so
+	// Undo the latest migration for real (0051 only adds telegram_update_offsets) so
 	// that applying it again later succeeds.
 	h.migrateOp(func(db *sql.DB) {
 		dropLastMigration(db)
-		for _, table := range []string{"task_signals", "tasks"} {
+		for _, table := range []string{"telegram_update_offsets"} {
 			if _, err := db.Exec(`DROP TABLE ` + table); err != nil {
 				t.Fatal(err)
 			}

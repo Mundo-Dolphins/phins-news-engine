@@ -31,6 +31,13 @@ type Scheduler struct {
 	timedEventInterval    time.Duration
 	tasks                 appin.RunTasks
 	taskInterval          time.Duration
+	updatePoller          UpdatePoller
+}
+
+// UpdatePoller is a long-running loop (the Telegram update poller) that
+// blocks until ctx is done.
+type UpdatePoller interface {
+	Run(ctx context.Context) error
 }
 
 // New builds a Scheduler.
@@ -68,6 +75,11 @@ func (s *Scheduler) SetTasks(r appin.RunTasks, interval time.Duration) {
 	s.tasks = r
 	s.taskInterval = interval
 }
+
+// SetUpdatePoller adds a goroutine that runs the given long-polling loop
+// for the scheduler's lifetime. Without it the scheduler behaves as before.
+// Call it before Run.
+func (s *Scheduler) SetUpdatePoller(p UpdatePoller) { s.updatePoller = p }
 
 // Run starts one goroutine per interval — ProcessCycle, PublishOutbox, and
 // the cleanup tick (CloseInactiveClusters then RunRetention, sequentially,
@@ -127,6 +139,16 @@ func (s *Scheduler) Run(ctx context.Context) error {
 					s.logger.Error("run tasks failed", err)
 				}
 			})
+		}()
+	}
+
+	if s.updatePoller != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := s.updatePoller.Run(ctx); err != nil && ctx.Err() == nil {
+				s.logger.Error("telegram update poller stopped", err)
+			}
 		}()
 	}
 
