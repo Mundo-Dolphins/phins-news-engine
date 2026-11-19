@@ -94,6 +94,9 @@ type TelegramUpdates struct {
 	AllowedChatID int64
 	// Router decides which task an update belongs to.
 	Router out.TelegramUpdateRouter
+	// ClosedText answers a button press on a task that is already done or
+	// failed. Empty (the default) answers with no text.
+	ClosedText string
 }
 
 // validate checks the poller can start with the given bot token.
@@ -545,7 +548,10 @@ func Run(ctx context.Context, configPath string, profile config.Profile, logger 
 			AllowedUserID: tu.AllowedUserID,
 			AllowedChatID: tu.AllowedChatID,
 			BotKey:        botKey(cfg.Telegram.BotToken),
-			Logger:        logger,
+			ClosedText:    tu.ClosedText,
+			// A saved signal runs the task loop now, not at its next tick.
+			Wake:   sched.WakeTasks,
+			Logger: logger,
 		}))
 		logger.Info("telegram update poller enabled")
 	}

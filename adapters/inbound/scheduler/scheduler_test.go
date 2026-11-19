@@ -240,3 +240,72 @@ func TestScheduler_RunsTaskLoopOnlyWhenSet(t *testing.T) {
 		t.Fatalf("tasks ran %d times, want an immediate run plus ticks", got)
 	}
 }
+
+func TestScheduler_WakeTasksRunsTheTaskLoopBeforeItsTick(t *testing.T) {
+	tasks := &countingTasks{}
+	s := scheduler.New(&countingProcessCycle{}, &countingPublishOutbox{}, &countingCloseInactiveClusters{}, &countingRunRetention{}, time.Hour, time.Hour, time.Hour, nopLogger{})
+	s.SetTasks(tasks, time.Hour)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+	waitFor(t, func() bool { return tasks.calls.Load() == 1 }) // the immediate run
+	s.WakeTasks()
+	waitFor(t, func() bool { return tasks.calls.Load() == 2 })
+	// Wakes never block, even when many arrive at once.
+	for i := 0; i < 10; i++ {
+		s.WakeTasks()
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run() error = %v", err)
+	}
+}
+
+func TestScheduler_WakeTasksWithoutTaskLoopDoesNotBlock(t *testing.T) {
+	s := scheduler.New(&countingProcessCycle{}, &countingPublishOutbox{}, &countingCloseInactiveClusters{}, &countingRunRetention{}, time.Hour, time.Hour, time.Hour, nopLogger{})
+	s.WakeTasks()
+	s.WakeTasks()
+}
+
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatal("condition not met within 2s")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// signallingPoller stands in for the update poller: once the task loop has
+// had its immediate run it "saves a signal" and wakes the loop, as the
+// engine wires it (Config.Wake = WakeTasks).
+type signallingPoller struct {
+	tasks *countingTasks
+	wake  func()
+}
+
+func (p *signallingPoller) Run(ctx context.Context) error {
+	for p.tasks.calls.Load() < 1 {
+		time.Sleep(time.Millisecond)
+	}
+	p.wake()
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestScheduler_SignalFromPollerRunsTasksWithoutWaitingForTick(t *testing.T) {
+	tasks := &countingTasks{}
+	s := scheduler.New(&countingProcessCycle{}, &countingPublishOutbox{}, &countingCloseInactiveClusters{}, &countingRunRetention{}, time.Hour, time.Hour, time.Hour, nopLogger{})
+	s.SetTasks(tasks, time.Hour)
+	s.SetUpdatePoller(&signallingPoller{tasks: tasks, wake: s.WakeTasks})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+	waitFor(t, func() bool { return tasks.calls.Load() == 2 })
+	cancel()
+	<-done
+}

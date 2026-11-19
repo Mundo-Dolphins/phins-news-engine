@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -93,14 +94,18 @@ func (f *fakeTasks) AddSignal(_ context.Context, id int64, payload json.RawMessa
 }
 
 type fakeRouter struct {
-	mu     sync.Mutex
-	routed []out.TelegramUpdate
+	mu      sync.Mutex
+	routed  []out.TelegramUpdate
+	panicOn int64 // update id whose routing panics
 }
 
 func (r *fakeRouter) Route(u out.TelegramUpdate) (int64, json.RawMessage, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.routed = append(r.routed, u)
+	if r.panicOn != 0 && u.UpdateID == r.panicOn {
+		panic("router bug")
+	}
 	return 5, json.RawMessage(`{"d":"` + u.CallbackData + `"}`), true
 }
 
@@ -109,14 +114,18 @@ const callbackUpdate = `{"update_id":%d,"callback_query":{"id":"cb%d","from":{"i
 func cb(id, user int) string { return fmt.Sprintf(callbackUpdate, id, id, user) }
 
 // run starts the poller and cancels it once stop() reports true.
-func run(t *testing.T, f *fakeAPI, offs *fakeOffsets, tasks *fakeTasks, router *fakeRouter, sleep func(context.Context, time.Duration), stop func() bool) {
+func run(t *testing.T, f *fakeAPI, offs *fakeOffsets, tasks *fakeTasks, router *fakeRouter, sleep func(context.Context, time.Duration), stop func() bool, mods ...func(*telegramupdates.Config)) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	p := telegramupdates.New(telegramupdates.Config{
+	cfg := telegramupdates.Config{
 		Bot: telegram.NewBotClient(f.srv.URL, token, 2*time.Second), Offsets: offs, Tasks: tasks, Router: router,
 		AllowedUserID: 11, AllowedChatID: 22, BotKey: "123456", Logger: nopLogger{}, Sleep: sleep,
-	})
+	}
+	for _, m := range mods {
+		m(&cfg)
+	}
+	p := telegramupdates.New(cfg)
 	done := make(chan struct{})
 	go func() { _ = p.Run(ctx); close(done) }()
 	deadline := time.Now().Add(5 * time.Second)
@@ -209,9 +218,94 @@ func TestPollerAnswersClosedTask(t *testing.T) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		return len(f.answers) >= 1
-	})
-	if len(f.answers) != 1 || f.answers[0] != "cb7|Este borrador ya está cerrado" {
+	}, func(c *telegramupdates.Config) { c.ClosedText = "already closed" })
+	if len(f.answers) != 1 || f.answers[0] != "cb7|already closed" {
 		t.Errorf("answers = %v", f.answers)
+	}
+}
+
+func TestPollerAnswersClosedTaskWithNoTextByDefault(t *testing.T) {
+	f := newFakeAPI(t, func(n int) (int, string) {
+		if n == 0 {
+			return 200, `{"ok":true,"result":[` + cb(7, 11) + `]}`
+		}
+		return empty(n)
+	})
+	run(t, f, &fakeOffsets{}, &fakeTasks{err: out.ErrTaskClosed}, &fakeRouter{}, func(context.Context, time.Duration) {}, func() bool {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return len(f.answers) >= 1
+	})
+	if len(f.answers) != 1 || f.answers[0] != "cb7|" {
+		t.Errorf("answers = %v", f.answers)
+	}
+}
+
+type recordingLogger struct {
+	nopLogger
+	mu     sync.Mutex
+	errors []string
+}
+
+func (l *recordingLogger) Error(msg string, err error, kv ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.errors = append(l.errors, fmt.Sprint(msg, " ", err, " ", kv))
+}
+
+func TestPollerSurvivesRouterPanic(t *testing.T) {
+	f := newFakeAPI(t, func(n int) (int, string) {
+		if n == 0 {
+			return 200, `{"ok":true,"result":[` + cb(7, 11) + `,` + cb(9, 11) + `]}`
+		}
+		return empty(n)
+	})
+	tasks, router, offs, logger := &fakeTasks{}, &fakeRouter{panicOn: 7}, &fakeOffsets{}, &recordingLogger{}
+	run(t, f, offs, tasks, router, func(context.Context, time.Duration) {}, func() bool {
+		offs.mu.Lock()
+		defer offs.mu.Unlock()
+		return len(offs.stored) >= 1
+	}, func(c *telegramupdates.Config) { c.Logger = logger })
+	if len(f.answers) != 2 || f.answers[0] != "cb7|" || f.answers[1] != "cb9|" {
+		t.Errorf("answers = %v, want both callbacks answered", f.answers)
+	}
+	if len(tasks.signals) != 1 {
+		t.Errorf("signals = %v, want only the update after the panic", tasks.signals)
+	}
+	if offs.stored[0] != 10 {
+		t.Errorf("offset stored = %d, want 10 (the panicking update is not replayed)", offs.stored[0])
+	}
+	if len(logger.errors) != 1 || !strings.Contains(logger.errors[0], "router panicked router bug [update_id 7]") {
+		t.Errorf("errors = %v, want the panic logged with the update id", logger.errors)
+	}
+	if strings.Contains(strings.Join(logger.errors, "\n"), token) {
+		t.Error("token logged")
+	}
+}
+
+func TestPollerWakesAfterSavedSignalOnly(t *testing.T) {
+	f := newFakeAPI(t, func(n int) (int, string) {
+		if n == 0 {
+			return 200, `{"ok":true,"result":[` + cb(7, 11) + `]}`
+		}
+		return empty(n)
+	})
+	for _, tc := range []struct {
+		err  error
+		want int32
+	}{{nil, 1}, {out.ErrTaskClosed, 0}, {errors.New("db down"), 0}} {
+		f.mu.Lock()
+		f.getCalls, f.answers = 0, nil
+		f.mu.Unlock()
+		var wakes atomic.Int32
+		run(t, f, &fakeOffsets{}, &fakeTasks{err: tc.err}, &fakeRouter{}, func(context.Context, time.Duration) {}, func() bool {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			return len(f.answers) >= 1
+		}, func(c *telegramupdates.Config) { c.Wake = func() { wakes.Add(1) } })
+		if got := wakes.Load(); got != tc.want {
+			t.Errorf("AddSignal err %v: wakes = %d, want %d", tc.err, got, tc.want)
+		}
 	}
 }
 

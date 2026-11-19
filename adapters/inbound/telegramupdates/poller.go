@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -14,10 +15,9 @@ import (
 )
 
 const (
-	pollTimeout    = 25 * time.Second
-	baseBackoff    = 5 * time.Second
-	maxBackoff     = 2 * time.Minute
-	closedTaskText = "Este borrador ya está cerrado"
+	pollTimeout = 25 * time.Second
+	baseBackoff = 5 * time.Second
+	maxBackoff  = 2 * time.Minute
 )
 
 // Bot is the part of the Bot API client the poller needs.
@@ -42,6 +42,12 @@ type Config struct {
 	AllowedUserID, AllowedChatID int64
 	// BotKey keys the stored offset: the numeric bot id, never the token.
 	BotKey string
+	// ClosedText answers a button press on a task that is already closed;
+	// empty answers with no text.
+	ClosedText string
+	// Wake, if set, is called after each signal is saved so the task loop
+	// can run without waiting for its tick. It must not block.
+	Wake   func()
 	Logger appout.Logger
 	// Now and Sleep are injectable for tests; zero values use the real clock.
 	Now   func() time.Time
@@ -128,7 +134,13 @@ func (p *Poller) handle(ctx context.Context, u appout.TelegramUpdate) {
 		p.cfg.Logger.Debug("telegram updates: dropped unauthorised update", "update_id", u.UpdateID)
 		return
 	}
-	taskID, payload, ok := p.cfg.Router.Route(u)
+	taskID, payload, ok, panicked := p.route(u)
+	if panicked {
+		if u.IsCallback() {
+			p.answer(ctx, u, "")
+		}
+		return
+	}
 	if !ok {
 		if u.IsCallback() {
 			p.answer(ctx, u, "")
@@ -138,14 +150,32 @@ func (p *Poller) handle(ctx context.Context, u appout.TelegramUpdate) {
 	err := p.cfg.Tasks.AddSignal(ctx, taskID, payload, p.cfg.Now())
 	text := ""
 	switch {
+	case err == nil:
+		if p.cfg.Wake != nil {
+			p.cfg.Wake()
+		}
 	case errors.Is(err, appout.ErrTaskClosed):
-		text = closedTaskText
-	case err != nil:
+		text = p.cfg.ClosedText
+	default:
 		p.cfg.Logger.Error("telegram updates: add signal", err, "update_id", u.UpdateID, "task_id", strconv.FormatInt(taskID, 10))
 	}
 	if u.IsCallback() {
 		p.answer(ctx, u, text)
 	}
+}
+
+// route asks the host's router under a recover: a panicking router must not
+// crash the process, nor repeat after a restart (the offset still advances).
+// Only the update id and the panic value are logged, never the content.
+func (p *Poller) route(u appout.TelegramUpdate) (taskID int64, payload json.RawMessage, ok, panicked bool) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			p.cfg.Logger.Error("telegram updates: router panicked", fmt.Errorf("%v", rec), "update_id", u.UpdateID)
+			taskID, payload, ok, panicked = 0, nil, false, true
+		}
+	}()
+	taskID, payload, ok = p.cfg.Router.Route(u)
+	return taskID, payload, ok, false
 }
 
 func (p *Poller) answer(ctx context.Context, u appout.TelegramUpdate, text string) {
