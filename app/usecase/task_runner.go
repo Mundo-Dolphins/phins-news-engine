@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -40,7 +41,7 @@ type TaskRunnerLoop struct {
 	uow     out.UnitOfWork
 	timeout time.Duration
 	batch   int
-	warned  map[string]bool
+	kinds   []string // enabled kinds, sorted
 }
 
 type registeredTaskRunner struct {
@@ -73,7 +74,6 @@ func NewTaskRunner(
 	l := &TaskRunnerLoop{
 		runners: make(map[string]registeredTaskRunner, len(runners)),
 		deps:    deps, tasks: tasks, outbox: outbox, uow: uow, timeout: timeout, batch: batch,
-		warned: map[string]bool{},
 	}
 	seen := make(map[string]bool, len(runners))
 	for i, r := range runners {
@@ -94,8 +94,10 @@ func NewTaskRunner(
 			continue
 		}
 		l.runners[kind] = registeredTaskRunner{runner: r, config: s.Config}
+		l.kinds = append(l.kinds, kind)
 		deps.Logger.Info("task runner enabled", "kind", kind)
 	}
+	sort.Strings(l.kinds)
 	return l, nil
 }
 
@@ -115,7 +117,7 @@ func (l *TaskRunnerLoop) Run(ctx context.Context) (in.RunTasksResult, error) {
 		return res, nil
 	}
 	now := l.deps.Clock.Now()
-	due, err := l.tasks.Due(ctx, now, l.batch)
+	due, err := l.tasks.Due(ctx, now, l.kinds, l.batch)
 	if err != nil {
 		return res, fmt.Errorf("task runner: read due tasks: %w", err)
 	}
@@ -125,10 +127,6 @@ func (l *TaskRunnerLoop) Run(ctx context.Context) (in.RunTasksResult, error) {
 		}
 		rt, ok := l.runners[t.Kind]
 		if !ok {
-			if !l.warned[t.Kind] {
-				l.warned[t.Kind] = true
-				l.deps.Logger.Warn("tasks of a kind with no enabled runner are left untouched", "kind", t.Kind)
-			}
 			continue
 		}
 		l.runTask(ctx, rt, t, &res)

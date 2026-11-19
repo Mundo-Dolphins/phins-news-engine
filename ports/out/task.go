@@ -45,9 +45,12 @@ type TaskRepository interface {
 	// Enqueue creates the task (pending, RunAfter=now) if (kind,key) does not
 	// exist; created is false when it already existed.
 	Enqueue(ctx context.Context, kind, key, articleID string, state json.RawMessage, now time.Time) (created bool, err error)
-	// Due returns tasks pending|waiting with run_after <= now or with
-	// unconsumed signals, ordered by run_after, up to limit.
-	Due(ctx context.Context, now time.Time, limit int) ([]Task, error)
+	// Due returns tasks of the given kinds (empty kinds: none), pending|waiting,
+	// with run_after <= now, or with unconsumed signals when Attempts == 0
+	// (a failed task waits for its backoff even if signals are queued).
+	// Ordered by run_after, up to limit. Runners must list every signal they
+	// handled in TaskOutcome.Consumed, or the task is woken again by it.
+	Due(ctx context.Context, now time.Time, kinds []string, limit int) ([]Task, error)
 	Get(ctx context.Context, id int64) (Task, bool, error)
 	// Signals returns the task's unconsumed signals, by id.
 	Signals(ctx context.Context, taskID int64) ([]TaskSignal, error)

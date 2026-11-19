@@ -79,20 +79,29 @@ func scanTask(s rowScanner) (appout.Task, error) {
 	return t, nil
 }
 
-// Due implements ports/out.TaskRepository. Timestamps are RFC3339Nano text
+// Due implements ports/out.TaskRepository (kinds filtered, signals wake only
+// tasks that have not failed). Timestamps are RFC3339Nano text
 // whose fraction length varies, so they are compared and ordered through
 // julianday() rather than lexically.
-func (r *TaskRepository) Due(ctx context.Context, now time.Time, limit int) ([]appout.Task, error) {
-	if limit <= 0 {
+func (r *TaskRepository) Due(ctx context.Context, now time.Time, kinds []string, limit int) ([]appout.Task, error) {
+	if limit <= 0 || len(kinds) == 0 {
 		return nil, nil
 	}
+	args := make([]any, 0, len(kinds)+2)
+	for _, k := range kinds {
+		args = append(args, k)
+	}
+	args = append(args, sqliteTime(now), limit)
+	marks := strings.TrimSuffix(strings.Repeat("?,", len(kinds)), ",")
 	rows, err := executor(ctx, r.db).QueryContext(ctx, `
 		SELECT `+taskColumns+` FROM tasks
 		WHERE status IN ('pending','waiting')
+		  AND kind IN (`+marks+`)
 		  AND (julianday(run_after) <= julianday(?)
-		       OR EXISTS (SELECT 1 FROM task_signals s WHERE s.task_id = tasks.id AND s.consumed_at IS NULL))
+		       OR (attempts = 0
+		           AND EXISTS (SELECT 1 FROM task_signals s WHERE s.task_id = tasks.id AND s.consumed_at IS NULL)))
 		ORDER BY julianday(run_after), id
-		LIMIT ?`, sqliteTime(now), limit)
+		LIMIT ?`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: list due tasks: %w", err)
 	}

@@ -38,7 +38,7 @@ func TestTaskDueIncludesPendingAndSignalledWaiting(t *testing.T) {
 		if _, err := repo.Enqueue(ctx, "k", key, "", nil, at); err != nil {
 			t.Fatal(err)
 		}
-		due, err := repo.Due(ctx, at.Add(time.Hour*24*365), 100)
+		due, err := repo.Due(ctx, at.Add(time.Hour*24*365), []string{"k"}, 100)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -68,7 +68,7 @@ func TestTaskDueIncludesPendingAndSignalledWaiting(t *testing.T) {
 	set(enqueue("done", taskNow), out.TaskDone, taskNow.Add(-time.Hour))
 
 	byKey := map[string]out.Task{}
-	all, _ := repo.Due(ctx, taskNow.Add(24*time.Hour*365), 100)
+	all, _ := repo.Due(ctx, taskNow.Add(24*time.Hour*365), []string{"k"}, 100)
 	for _, d := range all {
 		byKey[d.Key] = d
 	}
@@ -76,7 +76,7 @@ func TestTaskDueIncludesPendingAndSignalledWaiting(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	due, err := repo.Due(ctx, taskNow, 100)
+	due, err := repo.Due(ctx, taskNow, []string{"k"}, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,11 +94,11 @@ func TestTaskDueIncludesPendingAndSignalledWaiting(t *testing.T) {
 		}
 	}
 
-	if due, _ := repo.Due(ctx, taskNow, 1); len(due) != 1 {
+	if due, _ := repo.Due(ctx, taskNow, []string{"k"}, 1); len(due) != 1 {
 		t.Fatalf("Due limit 1 returned %d tasks", len(due))
 	}
 	// Just past the fractional run_after the future task becomes due.
-	due, _ = repo.Due(ctx, frac, 100)
+	due, _ = repo.Due(ctx, frac, []string{"k"}, 100)
 	found := false
 	for _, d := range due {
 		found = found || d.Key == "pending-future"
@@ -198,5 +198,38 @@ func TestTaskOperationsJoinUnitOfWork(t *testing.T) {
 	}
 	if _, found, _ := repo.Get(ctx, 1); found {
 		t.Fatal("task survived a rolled-back unit of work")
+	}
+}
+
+func TestTaskDueFiltersKindsAndFailedTasksIgnoreSignals(t *testing.T) {
+	repo := sqliteadapter.NewTaskRepository(newTestDB(t))
+	ctx := context.Background()
+	for _, kk := range [][2]string{{"a", "1"}, {"b", "1"}} {
+		if _, err := repo.Enqueue(ctx, kk[0], kk[1], "", nil, taskNow); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if due, _ := repo.Due(ctx, taskNow, nil, 10); len(due) != 0 {
+		t.Fatalf("no kinds returned %d tasks", len(due))
+	}
+	due, _ := repo.Due(ctx, taskNow, []string{"b"}, 10)
+	if len(due) != 1 || due[0].Kind != "b" {
+		t.Fatalf("Due(b) = %+v", due)
+	}
+
+	// A failed task (attempts > 0) with a signal waits for its run_after.
+	task := due[0]
+	task.Attempts, task.RunAfter = 1, taskNow.Add(time.Minute)
+	if err := repo.Save(ctx, task, nil, taskNow); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AddSignal(ctx, task.ID, nil, taskNow); err != nil {
+		t.Fatal(err)
+	}
+	if due, _ := repo.Due(ctx, taskNow, []string{"b"}, 10); len(due) != 0 {
+		t.Fatalf("failed task with a signal is due before its backoff: %+v", due)
+	}
+	if due, _ := repo.Due(ctx, taskNow.Add(time.Minute), []string{"b"}, 10); len(due) != 1 {
+		t.Fatalf("failed task not due at its run_after: %+v", due)
 	}
 }

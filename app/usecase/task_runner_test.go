@@ -66,7 +66,7 @@ func newTaskFixture(t *testing.T) *taskFixture {
 	if _, err := f.tasks.Enqueue(context.Background(), "poll", "k1", "art-1", json.RawMessage(`{"n":0}`), f.clock.Now()); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
-	due, err := f.tasks.Due(context.Background(), f.clock.Now(), 10)
+	due, err := f.tasks.Due(context.Background(), f.clock.Now(), []string{"poll"}, 10)
 	if err != nil || len(due) != 1 {
 		t.Fatalf("Due = %+v, %v", due, err)
 	}
@@ -288,8 +288,7 @@ func TestTaskRunnerSkipsDisabledKind(t *testing.T) {
 	r := &fakeTaskRunner{kind: "poll", run: func(context.Context, out.TaskContext, out.Task, []out.TaskSignal) (out.TaskOutcome, error) {
 		return okOutcome(out.TaskDone, time.Time{}), nil
 	}}
-	logger := &warnLogger{}
-	l := f.loop(t, false, time.Second, logger, r)
+	l := f.loop(t, false, time.Second, nil, r)
 	for i := 0; i < 2; i++ {
 		res, err := l.Run(context.Background())
 		if err != nil || res.Ran != 0 {
@@ -298,19 +297,6 @@ func TestTaskRunnerSkipsDisabledKind(t *testing.T) {
 	}
 	if r.calls != 0 || f.get(t).Status != out.TaskPending {
 		t.Fatalf("disabled runner ran: calls=%d", r.calls)
-	}
-
-	// An enabled loop warns once per kind about tasks nobody runs.
-	logger = &warnLogger{}
-	other := &fakeTaskRunner{kind: "other", run: r.run}
-	l = f.loop(t, true, time.Second, logger, other)
-	for i := 0; i < 3; i++ {
-		if _, err := l.Run(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if len(logger.warns) != 1 {
-		t.Fatalf("warnings = %v, want exactly one", logger.warns)
 	}
 }
 
@@ -363,5 +349,58 @@ func TestTaskRunnerRejectsDuplicateKind(t *testing.T) {
 	if _, err := usecase.NewTaskRunner([]out.TaskRunner{&fakeTaskRunner{kind: "", run: run}}, nil,
 		usecase.EventDeps{Clock: f.clock, Logger: fakeLogger{}}, f.tasks, nil, nil, time.Second, 5); err == nil {
 		t.Fatal("blank kind accepted")
+	}
+}
+
+func TestTaskRunnerDisabledKindsDoNotStarveEnabledOnes(t *testing.T) {
+	f := newTaskFixture(t) // one due "poll" task, created last
+	ctx := context.Background()
+	for i := 0; i < 5; i++ {
+		// Older run_after than the poll task, so they come first in the queue.
+		if _, err := f.tasks.Enqueue(ctx, "idle", string(rune('a'+i)), "", nil, f.clock.Now().Add(-time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := &fakeTaskRunner{kind: "poll", run: func(context.Context, out.TaskContext, out.Task, []out.TaskSignal) (out.TaskOutcome, error) {
+		return okOutcome(out.TaskDone, time.Time{}), nil
+	}}
+	idle := &fakeTaskRunner{kind: "idle", run: r.run}
+	settings := map[string]usecase.EventHandlerSettings{"poll": {Enabled: true}, "idle": {Enabled: false}}
+	l, err := usecase.NewTaskRunner([]out.TaskRunner{r, idle}, settings,
+		usecase.EventDeps{Clock: f.clock, Logger: fakeLogger{}}, f.tasks, sqlite.NewOutboxRepository(f.db), sqlite.NewUnitOfWork(f.db), time.Second, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if r.calls != 1 || idle.calls != 0 || f.get(t).Status != out.TaskDone {
+		t.Fatalf("poll calls=%d idle calls=%d status=%s", r.calls, idle.calls, f.get(t).Status)
+	}
+}
+
+func TestTaskRunnerSignalledTaskHonoursBackoffAfterFailure(t *testing.T) {
+	f := newTaskFixture(t)
+	if err := f.tasks.AddSignal(context.Background(), f.taskID, nil, f.clock.Now()); err != nil {
+		t.Fatal(err)
+	}
+	r := &fakeTaskRunner{kind: "poll", run: func(context.Context, out.TaskContext, out.Task, []out.TaskSignal) (out.TaskOutcome, error) {
+		return out.TaskOutcome{}, context.Canceled
+	}}
+	l := f.loop(t, true, time.Second, nil, r)
+	for i := 0; i < 2; i++ {
+		if _, err := l.Run(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if r.calls != 1 || f.get(t).Attempts != 1 {
+		t.Fatalf("calls=%d attempts=%d; the backoff must hold despite the signal", r.calls, f.get(t).Attempts)
+	}
+	f.clock.Set(f.get(t).RunAfter)
+	if _, err := l.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if r.calls != 2 {
+		t.Fatalf("calls=%d, want a retry once RunAfter passed", r.calls)
 	}
 }
