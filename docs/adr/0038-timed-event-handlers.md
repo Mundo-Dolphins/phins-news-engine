@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted. Superseded in part by ADR 0042 (per-event deadlines and closing an event).
 
 ## Context
 

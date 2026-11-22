@@ -3,6 +3,7 @@ package usecase_test
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"strings"
 	"sync"
 	"testing"
@@ -340,5 +341,154 @@ func TestTimedEventRunner_PlaceholderArticleLoadsAndClaimReconciles(t *testing.T
 	published, failed, err := sqlite.NewEventClaimRepository(f.db).ReconcileWithOutbox(context.Background(), f.clock.Now())
 	if err != nil || published != 1 || failed != 0 {
 		t.Fatalf("Reconcile = %d, %d, %v, want the claim published", published, failed, err)
+	}
+}
+
+// errorLogger records the messages and fields of Error calls.
+type errorLogger struct {
+	fakeLogger
+	mu     sync.Mutex
+	errors [][]any
+}
+
+func (l *errorLogger) Error(msg string, _ error, kv ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.errors = append(l.errors, append([]any{msg}, kv...))
+}
+
+func (f *timedFixture) runnerWithLogger(t *testing.T, logger out.Logger, grace time.Duration, h out.TimedEventHandler) *usecase.TimedEventRunner {
+	t.Helper()
+	r, err := usecase.NewTimedEventRunner([]out.TimedEventHandler{h}, nil,
+		map[string]usecase.EventHandlerSettings{h.Name(): {Enabled: true}},
+		usecase.EventDeps{Clock: f.clock, Logger: logger, Claims: sqlite.NewEventClaimRepository(f.db), Alerts: f.alerts},
+		sqlite.NewArticleRepository(f.db), sqlite.NewOutboxRepository(f.db), sqlite.NewUnitOfWork(f.db), 200*time.Millisecond, grace)
+	if err != nil {
+		t.Fatalf("NewTimedEventRunner() error = %v", err)
+	}
+	return r
+}
+
+func TestTimedEventRunner_UntilKeepsEventRunnable(t *testing.T) {
+	f := newTimedFixture(t)
+	now := f.clock.Now()
+	h := &fakeTimedHandler{name: "handler-a", events: []out.DueEvent{{Key: "2026-reg-1", At: now.Add(-2 * time.Hour), Until: now.Add(time.Hour)}}}
+	res, err := f.runner(t, true, 15*time.Minute, h).Run(context.Background())
+	if err != nil || h.calls != 1 || res.Missed != 0 {
+		t.Fatalf("err=%v calls=%d res=%+v, want one call and no miss", err, h.calls, res)
+	}
+	if state, _ := f.claimState(t, "handler-a", "2026-reg-1"); state == "failed" {
+		t.Fatalf("claim failed, want it runnable")
+	}
+}
+
+func TestTimedEventRunner_PastUntilIsMissed(t *testing.T) {
+	f := newTimedFixture(t)
+	now := f.clock.Now()
+	until := now.Add(-time.Minute)
+	h := &fakeTimedHandler{name: "handler-a", events: []out.DueEvent{{Key: "2026-reg-1", At: now.Add(-2 * time.Hour), Until: until}}}
+	res, err := f.runner(t, true, 15*time.Minute, h).Run(context.Background())
+	if err != nil || h.calls != 0 || res.Missed != 1 {
+		t.Fatalf("err=%v calls=%d res=%+v, want a miss and no call", err, h.calls, res)
+	}
+	if state, found := f.claimState(t, "handler-a", "2026-reg-1"); !found || state != "failed" {
+		t.Fatalf("claim = %q found=%v, want failed", state, found)
+	}
+	var data string
+	if err := f.db.QueryRow(`SELECT data FROM event_claims WHERE handler = ? AND claim_key = ?`, "handler-a", "2026-reg-1").Scan(&data); err != nil || !strings.Contains(data, `"reason":"missed_window"`) {
+		t.Fatalf("claim data = %q err=%v, want reason missed_window", data, err)
+	}
+	if f.alerts.count() != 1 || !strings.Contains(f.alerts.messages[0], until.UTC().Format(time.RFC3339)) {
+		t.Fatalf("alerts = %v, want one alert naming the deadline", f.alerts.messages)
+	}
+}
+
+func TestTimedEventRunner_UntilBeforeAtUsesGrace(t *testing.T) {
+	f := newTimedFixture(t)
+	now := f.clock.Now()
+	h := &fakeTimedHandler{name: "handler-a", events: []out.DueEvent{{Key: "2026-reg-1", At: now.Add(-5 * time.Minute), Until: now.Add(-10 * time.Minute)}}}
+	logger := &errorLogger{}
+	if _, err := f.runnerWithLogger(t, logger, 15*time.Minute, h).Run(context.Background()); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if h.calls != 1 {
+		t.Fatalf("calls = %d, want 1 (default grace)", h.calls)
+	}
+	logged := false
+	for _, e := range logger.errors {
+		s := ""
+		for _, v := range e {
+			s += " " + toString(v)
+		}
+		if strings.Contains(s, "handler") && strings.Contains(s, "key") {
+			logged = true
+		}
+	}
+	if !logged {
+		t.Fatalf("errors = %v, want one error log with handler and key", logger.errors)
+	}
+}
+
+func toString(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
+}
+
+func closeResult(reason string, extra ...out.EventAction) out.EventResult {
+	return out.EventResult{Actions: append([]out.EventAction{out.CloseEvent{Reason: reason}}, extra...)}
+}
+
+func TestTimedEventRunner_CloseEventClaimsWithoutOutbox(t *testing.T) {
+	f := newTimedFixture(t)
+	f.clock.Set(kickoff.Add(-time.Hour))
+	h := &fakeTimedHandler{name: "handler-a", events: dueAtKickoffMinusHour("2026-reg-1"),
+		handle: func(context.Context, out.DueEvent) (out.EventResult, error) { return closeResult("no overtime"), nil }}
+	r := f.runner(t, true, 15*time.Minute, h)
+	if _, err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if state, found := f.claimState(t, "handler-a", "2026-reg-1"); !found || state != "claimed" {
+		t.Fatalf("claim = %q found=%v, want claimed", state, found)
+	}
+	var articleID, data string
+	if err := f.db.QueryRow(`SELECT article_id, data FROM event_claims WHERE handler = ? AND claim_key = ?`, "handler-a", "2026-reg-1").Scan(&articleID, &data); err != nil {
+		t.Fatalf("read claim: %v", err)
+	}
+	var got struct{ Reason, Detail string }
+	if err := json.Unmarshal([]byte(data), &got); err != nil || articleID != "" || got.Reason != usecase.TimedEventClosedReason || got.Detail != "no overtime" {
+		t.Fatalf("article_id=%q data=%s err=%v", articleID, data, err)
+	}
+	if f.outboxRows(t) != 0 || f.alerts.count() != 0 {
+		t.Fatalf("rows=%d alerts=%d, want none", f.outboxRows(t), f.alerts.count())
+	}
+	f.clock.Set(f.clock.Now().Add(time.Minute))
+	if _, err := r.Run(context.Background()); err != nil || h.calls != 1 {
+		t.Fatalf("second tick: err=%v calls=%d, want 1", err, h.calls)
+	}
+}
+
+func TestTimedEventRunner_CloseEventWithPublicationIsError(t *testing.T) {
+	f := newTimedFixture(t)
+	f.clock.Set(kickoff.Add(-time.Hour))
+	h := &fakeTimedHandler{name: "handler-a", events: dueAtKickoffMinusHour("2026-reg-1"),
+		handle: func(context.Context, out.DueEvent) (out.EventResult, error) {
+			return closeResult("x", out.EnqueuePublication{
+				Destination: publishing.DestinationBluesky,
+				Payload:     publishing.MessagePayload{Text: "hello", Kind: "weather"},
+			}), nil
+		}}
+	r := f.runner(t, true, 15*time.Minute, h)
+	res, err := r.Run(context.Background())
+	if err != nil || res.Errors != 1 {
+		t.Fatalf("err=%v res=%+v, want one error", err, res)
+	}
+	if _, found := f.claimState(t, "handler-a", "2026-reg-1"); found || f.outboxRows(t) != 0 {
+		t.Fatalf("claim found=%v rows=%d, want neither", found, f.outboxRows(t))
+	}
+	f.clock.Set(f.clock.Now().Add(time.Minute))
+	if _, err := r.Run(context.Background()); err != nil || h.calls != 2 {
+		t.Fatalf("second tick: err=%v calls=%d, want 2", err, h.calls)
 	}
 }
