@@ -406,7 +406,8 @@ func TestTimedEventRunner_PastUntilIsMissed(t *testing.T) {
 func TestTimedEventRunner_UntilBeforeAtUsesGrace(t *testing.T) {
 	f := newTimedFixture(t)
 	now := f.clock.Now()
-	h := &fakeTimedHandler{name: "handler-a", events: []out.DueEvent{{Key: "2026-reg-1", At: now.Add(-5 * time.Minute), Until: now.Add(-10 * time.Minute)}}}
+	h := &fakeTimedHandler{name: "handler-a", events: []out.DueEvent{{Key: "2026-reg-1", At: now.Add(-5 * time.Minute), Until: now.Add(-10 * time.Minute)}},
+		handle: func(context.Context, out.DueEvent) (out.EventResult, error) { return out.EventResult{}, nil }}
 	logger := &errorLogger{}
 	r := f.runnerWithLogger(t, logger, 15*time.Minute, h)
 	for i := 0; i < 2; i++ {
@@ -415,8 +416,11 @@ func TestTimedEventRunner_UntilBeforeAtUsesGrace(t *testing.T) {
 		}
 		f.clock.Set(f.clock.Now().Add(time.Second))
 	}
-	if h.calls < 1 {
-		t.Fatalf("calls = %d, want the default grace to run it", h.calls)
+	if h.calls != 2 {
+		t.Fatalf("calls = %d, want 2 (default grace, nothing claimed)", h.calls)
+	}
+	if _, found := f.claimState(t, "handler-a", "2026-reg-1"); found {
+		t.Fatalf("key is claimed, want it unclaimed")
 	}
 	if len(logger.errors) != 1 {
 		t.Fatalf("errors = %v, want exactly one", logger.errors)

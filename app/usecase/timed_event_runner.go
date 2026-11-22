@@ -300,7 +300,7 @@ func (r *TimedEventRunner) persist(ctx context.Context, name string, ev out.DueE
 	}
 	if closed != nil {
 		if len(enqueues) > 0 {
-			return 0, fmt.Errorf("close cannot be combined with publications")
+			return 0, errors.New("close cannot be combined with publications")
 		}
 		data, err := json.Marshal(timedClaimData{At: ev.At.UTC(), Reason: TimedEventClosedReason, Detail: closed.Reason})
 		if err != nil {
