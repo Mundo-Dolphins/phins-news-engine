@@ -306,12 +306,18 @@ func (r *TimedEventRunner) persist(ctx context.Context, name string, ev out.DueE
 		if err != nil {
 			return 0, err
 		}
+		didClose := false
 		err = r.uow.Do(ctx, func(txCtx context.Context) error {
-			if _, err := r.deps.Claims.TryClaim(txCtx, name, ev.Key, "", data, now); err != nil {
+			claimed, err := r.deps.Claims.TryClaim(txCtx, name, ev.Key, "", data, now)
+			if err != nil {
 				return fmt.Errorf("claim: %w", err)
 			}
+			didClose = claimed
 			return nil
 		})
+		if err == nil && didClose {
+			r.deps.Logger.Info("timed event closed", "handler", name, "key", ev.Key, "reason", closed.Reason)
+		}
 		return 0, err
 	}
 	if len(enqueues) == 0 {
@@ -372,7 +378,7 @@ func (r *TimedEventRunner) markMissed(ctx context.Context, name string, ev out.D
 	}
 	res.Missed++
 	late := now.Sub(deadline).Round(time.Second)
-	r.deps.Logger.Warn("timed event missed its grace window", "handler", name, "key", ev.Key, "scheduled_at", ev.At.UTC().Format(time.RFC3339), "late_by", late.String(), "deadline", deadline.UTC().Format(time.RFC3339))
+	r.deps.Logger.Warn("timed event missed its deadline", "handler", name, "key", ev.Key, "scheduled_at", ev.At.UTC().Format(time.RFC3339), "late_by", late.String(), "deadline", deadline.UTC().Format(time.RFC3339))
 	r.alert(ctx, name, fmt.Sprintf("event %s was scheduled for %s and not run by %s: found %s late", ev.Key, ev.At.UTC().Format(time.RFC3339), deadline.UTC().Format(time.RFC3339), late))
 }
 

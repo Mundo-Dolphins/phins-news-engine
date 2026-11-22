@@ -408,32 +408,33 @@ func TestTimedEventRunner_UntilBeforeAtUsesGrace(t *testing.T) {
 	now := f.clock.Now()
 	h := &fakeTimedHandler{name: "handler-a", events: []out.DueEvent{{Key: "2026-reg-1", At: now.Add(-5 * time.Minute), Until: now.Add(-10 * time.Minute)}}}
 	logger := &errorLogger{}
-	if _, err := f.runnerWithLogger(t, logger, 15*time.Minute, h).Run(context.Background()); err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-	if h.calls != 1 {
-		t.Fatalf("calls = %d, want 1 (default grace)", h.calls)
-	}
-	logged := false
-	for _, e := range logger.errors {
-		s := ""
-		for _, v := range e {
-			s += " " + toString(v)
+	r := f.runnerWithLogger(t, logger, 15*time.Minute, h)
+	for i := 0; i < 2; i++ {
+		if _, err := r.Run(context.Background()); err != nil {
+			t.Fatalf("Run() error = %v", err)
 		}
-		if strings.Contains(s, "handler") && strings.Contains(s, "key") {
-			logged = true
-		}
+		f.clock.Set(f.clock.Now().Add(time.Second))
 	}
-	if !logged {
-		t.Fatalf("errors = %v, want one error log with handler and key", logger.errors)
+	if h.calls < 1 {
+		t.Fatalf("calls = %d, want the default grace to run it", h.calls)
 	}
-}
-
-func toString(v any) string {
-	if s, ok := v.(string); ok {
-		return s
+	if len(logger.errors) != 1 {
+		t.Fatalf("errors = %v, want exactly one", logger.errors)
 	}
-	return ""
+	e := logger.errors[0]
+	if msg, _ := e[0].(string); !strings.Contains(msg, "Until is before At") {
+		t.Fatalf("error message = %q, want the Until-before-At problem", msg)
+	}
+	fields := map[any]bool{}
+	for _, v := range e[1:] {
+		fields[v] = true
+	}
+	if !fields["handler"] || !fields["key"] {
+		t.Fatalf("error fields = %v, want handler and key", e[1:])
+	}
+	if f.alerts.count() != 1 {
+		t.Fatalf("alerts = %v, want exactly one", f.alerts.messages)
+	}
 }
 
 func closeResult(reason string, extra ...out.EventAction) out.EventResult {
