@@ -3,7 +3,7 @@ module github.com/Mundo-Dolphins/phins-news-engine
 go 1.27.3
 
 require (
-	github.com/PuerkitoBio/goquery v1.13.0
+	github.com/PuerkitoBio/goquery v1.14.0
 	github.com/google/uuid v1.6.0
 	github.com/mmcdole/gofeed v1.5.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
@@ -17,7 +17,7 @@ require (
 )
 
 require (
-	github.com/andybalholm/cascadia v1.3.4 // indirect
+	github.com/andybalholm/cascadia v1.3.5 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
