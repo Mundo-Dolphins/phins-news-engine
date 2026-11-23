@@ -1,7 +1,6 @@
 package usecase_test
 
 import (
-	"github.com/Mundo-Dolphins/phins-news-engine/domain/article"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/Mundo-Dolphins/phins-news-engine/adapters/outbound/sqlite"
 	"github.com/Mundo-Dolphins/phins-news-engine/app/usecase"
+	"github.com/Mundo-Dolphins/phins-news-engine/domain/article"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/publishing"
 	"github.com/Mundo-Dolphins/phins-news-engine/ports/out"
 )
