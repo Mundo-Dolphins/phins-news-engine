@@ -282,8 +282,8 @@ type timedClaimData struct {
 }
 
 // persist validates the actions, then in one transaction takes the claim,
-// saves the event's placeholder article, enqueues the tasks and the rows. Losing the
-// claim race, or any failure, writes nothing.
+// saves the event's placeholder article, enqueues the tasks and the rows.
+// Losing the claim race, or any failure, writes nothing.
 func (r *TimedEventRunner) persist(ctx context.Context, name string, ev out.DueEvent, result out.EventResult, now time.Time) (int, error) {
 	var enqueues []out.EnqueuePublication
 	var taskActs []out.EnqueueTask

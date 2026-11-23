@@ -13,14 +13,18 @@ import (
 
 var _ appout.PublicationLog = (*OutboxRepository)(nil)
 
-// DeliveredBetween implements ports/out.PublicationLog.
+// DeliveredBetween implements ports/out.PublicationLog. The delivery time is
+// sent_at, or updated_at for a row delivered without one. Placeholder articles
+// of timed events ("timed:") and tasks ("task:") are excluded; those ids match
+// the prefixes the use cases give them.
 func (r *OutboxRepository) DeliveredBetween(ctx context.Context, dest publishing.Destination, from, to time.Time) ([]appout.DeliveredPublication, error) {
 	rows, err := executor(ctx, r.db).QueryContext(ctx, `
-		SELECT o.article_id, o.destination, o.sent_at, a.title, a.summary,
+		SELECT o.article_id, o.destination, COALESCE(o.sent_at, o.updated_at), a.title, a.summary,
 		       CASE WHEN a.canonical_url <> '' THEN a.canonical_url ELSE a.original_url END, a.source_id
 		FROM publication_outbox o JOIN articles a ON a.id = o.article_id
-		WHERE o.destination = ? AND o.status = 'delivered' AND o.sent_at >= ? AND o.sent_at < ?
-		ORDER BY o.sent_at, o.id
+		WHERE o.destination = ? AND o.status = 'delivered' AND COALESCE(o.sent_at, o.updated_at) >= ? AND COALESCE(o.sent_at, o.updated_at) < ?
+		  AND a.id NOT LIKE 'timed:%' AND a.id NOT LIKE 'task:%'
+		ORDER BY COALESCE(o.sent_at, o.updated_at), o.id
 	`, string(dest.Normalized()), sqliteTime(from), sqliteTime(to))
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: delivered between: %w", err)

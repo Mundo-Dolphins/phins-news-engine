@@ -19,7 +19,11 @@ type DeliveredPublication struct {
 
 // PublicationLog reads what was delivered. It is read-only.
 type PublicationLog interface {
-	// DeliveredBetween lists rows delivered on dest with sent_at in [from, to), oldest first.
+	// DeliveredBetween lists rows delivered on dest with delivery time in
+	// [from, to), oldest first. The delivery time is sent_at, or updated_at
+	// when a delivered row has no sent_at. Rows hanging from the placeholder
+	// articles of timed events and tasks are not listed: only publications
+	// of real articles are.
 	DeliveredBetween(ctx context.Context, dest publishing.Destination, from, to time.Time) ([]DeliveredPublication, error)
 }
 

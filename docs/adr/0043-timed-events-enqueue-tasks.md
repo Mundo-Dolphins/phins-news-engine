@@ -33,7 +33,7 @@ Errors, counted and alerted like any other persist failure:
 - no task store wired: "task storage is not wired";
 - blank `Kind` or `Key`: "task kind and key are required".
 
-The event claim stays `claimed` and is never settled by the outbox
+The event claim stays `claimed` when no publication is enqueued, and is never settled by the outbox
 reconciliation, which only settles claims whose article has outbox rows.
 The claim records that the event ran and keeps it from running again; it
 does not track the work. The task owns its lifecycle and, when it has

@@ -53,6 +53,8 @@ func TestPublicationLog_DeliveredBetween(t *testing.T) {
 		{"late", publishing.DestinationTelegram, "delivered", to.Add(-sec)},
 		{"at-to", publishing.DestinationTelegram, "delivered", to},
 		{"other-dest", publishing.DestinationBluesky, "delivered", from.Add(time.Minute)},
+		{"timed:h:k", publishing.DestinationTelegram, "delivered", from.Add(time.Minute)},
+		{"task:k:k", publishing.DestinationTelegram, "delivered", from.Add(time.Minute)},
 		{"not-delivered", publishing.DestinationTelegram, "pending", from.Add(time.Minute)},
 	}
 	for _, r := range rows {
@@ -64,19 +66,26 @@ func TestPublicationLog_DeliveredBetween(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// A delivered row with no sent_at falls back to updated_at.
+	seedLogArticle(t, db, "no-sent-at", "src-a", article.StatusPublished, from)
+	seedOutboxRow(t, db, "no-sent-at", publishing.DestinationTelegram, "delivered", time.Time{})
+	if _, err := db.Exec(`UPDATE publication_outbox SET updated_at = ? WHERE article_id = 'no-sent-at'`, from.Add(30*time.Minute).UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+
 	got, err := sqliteadapter.NewOutboxRepository(db).DeliveredBetween(context.Background(), publishing.DestinationTelegram, from, to)
 	if err != nil {
 		t.Fatalf("DeliveredBetween() error = %v", err)
 	}
-	if len(got) != 2 || got[0].ArticleID != "at-from" || got[1].ArticleID != "late" {
-		t.Fatalf("DeliveredBetween() = %+v, want at-from then late", got)
+	if len(got) != 3 || got[0].ArticleID != "at-from" || got[1].ArticleID != "no-sent-at" || got[2].ArticleID != "late" {
+		t.Fatalf("DeliveredBetween() = %+v, want at-from, no-sent-at, late", got)
 	}
 	if got[0].Title != "Title at-from" || got[0].Summary != "Summary at-from" || got[0].URL != "https://example.com/c/at-from" ||
 		got[0].SourceID != mustID(t, source.TypeRSS, "src-a").String() || got[0].Destination != publishing.DestinationTelegram || !got[0].SentAt.Equal(from) {
 		t.Errorf("got[0] = %+v", got[0])
 	}
-	if got[1].URL != "https://example.com/o/late" {
-		t.Errorf("URL = %q, want original URL fallback", got[1].URL)
+	if got[2].URL != "https://example.com/o/late" {
+		t.Errorf("URL = %q, want original URL fallback", got[2].URL)
 	}
 }
 

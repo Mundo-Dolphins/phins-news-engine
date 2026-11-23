@@ -545,11 +545,8 @@ func TestTaskRunner_PassesReaders(t *testing.T) {
 			t.Fatalf("Run() error = %v", err)
 		}
 		tc := r.gotTC
-		if got := tc.Claims != nil && tc.Publications != nil && tc.Articles != nil; got != wired {
-			t.Errorf("wired=%v: readers non-nil = %v (claims %v pubs %v articles %v)", wired, got, tc.Claims, tc.Publications, tc.Articles)
-		}
-		if !wired && (tc.Claims != nil || tc.Publications != nil || tc.Articles != nil) {
-			t.Errorf("unwired runner got readers: %+v", tc)
+		if (tc.Claims != nil) != wired || (tc.Publications != nil) != wired || (tc.Articles != nil) != wired {
+			t.Errorf("wired=%v: claims=%v publications=%v articles=%v", wired, tc.Claims, tc.Publications, tc.Articles)
 		}
 	}
 }

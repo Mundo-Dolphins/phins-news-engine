@@ -1,6 +1,7 @@
 package usecase_test
 
 import (
+	"github.com/Mundo-Dolphins/phins-news-engine/domain/article"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -614,5 +615,68 @@ func TestTimedEventRunner_EnqueueTaskClaimNotReconciled(t *testing.T) {
 	}
 	if s, found := f.claimState(t, "handler-a", "2026-reg-1"); !found || s != "claimed" {
 		t.Fatalf("claim = %q found=%v, want claimed", s, found)
+	}
+}
+
+func TestTimedEventRunner_EnqueueTaskExistingKeyTakesClaimWithoutSecondTask(t *testing.T) {
+	f := newTimedFixture(t)
+	f.clock.Set(kickoff.Add(-time.Hour))
+	// The existing task needs an article to hang from.
+	other := eventTestArticle(t, "other", "src-a", "Other", "https://example.com/other")
+	other.Status = article.StatusPendingPublication
+	other.FetchedAt = f.clock.Now()
+	if err := sqlite.NewArticleRepository(f.db).Save(context.Background(), other); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqlite.NewTaskRepository(f.db).Enqueue(context.Background(), "kind-a", "key-a", "other", json.RawMessage(`{"n":0}`), f.clock.Now()); err != nil {
+		t.Fatal(err)
+	}
+	res, err := f.taskRunner(t, true, newTaskHandler(taskResult())).Run(context.Background())
+	if err != nil || res.Errors != 0 {
+		t.Fatalf("err=%v res=%+v, want no error", err, res)
+	}
+	if n, _, state := f.taskRows(t); n != 1 || state != `{"n":0}` {
+		t.Fatalf("tasks=%d state=%q, want the original single task", n, state)
+	}
+	if s, found := f.claimState(t, "handler-a", "2026-reg-1"); !found || s != "claimed" {
+		t.Fatalf("claim = %q found=%v, want claimed", s, found)
+	}
+}
+
+func TestTimedEventRunner_EnqueueTaskRollsBackWhenPublicationFails(t *testing.T) {
+	f := newTimedFixture(t)
+	f.clock.Set(kickoff.Add(-time.Hour))
+	h := newTaskHandler(taskResult(out.EnqueuePublication{
+		Destination: publishing.Destination("nowhere"),
+		Payload:     publishing.MessagePayload{Text: "hello", Kind: "weather"},
+	}))
+	res, err := f.taskRunner(t, true, h).Run(context.Background())
+	if err != nil || res.Errors != 1 {
+		t.Fatalf("err=%v res=%+v, want one error", err, res)
+	}
+	if n, _, _ := f.taskRows(t); n != 0 {
+		t.Fatalf("tasks = %d, want 0 after rollback", n)
+	}
+	if _, found := f.claimState(t, "handler-a", "2026-reg-1"); found || f.outboxRows(t) != 0 {
+		t.Fatalf("claim found=%v rows=%d, want neither", found, f.outboxRows(t))
+	}
+}
+
+func TestTimedEventRunner_EnqueueTaskBlankKindOrKeyIsError(t *testing.T) {
+	for _, tc := range []out.EnqueueTask{{Kind: "", Key: "key-a"}, {Kind: "kind-a", Key: ""}} {
+		f := newTimedFixture(t)
+		f.clock.Set(kickoff.Add(-time.Hour))
+		h := newTaskHandler(out.EventResult{Actions: []out.EventAction{tc}})
+		res, err := f.taskRunner(t, true, h).Run(context.Background())
+		if err != nil || res.Errors != 1 {
+			t.Fatalf("%+v: err=%v res=%+v, want one error", tc, err, res)
+		}
+		var n int
+		if err := f.db.QueryRow(`SELECT COUNT(*) FROM tasks`).Scan(&n); err != nil || n != 0 {
+			t.Fatalf("%+v: tasks=%d err=%v, want 0", tc, n, err)
+		}
+		if _, found := f.claimState(t, "handler-a", "2026-reg-1"); found || f.outboxRows(t) != 0 {
+			t.Fatalf("%+v: claim found=%v rows=%d, want neither", tc, found, f.outboxRows(t))
+		}
 	}
 }
