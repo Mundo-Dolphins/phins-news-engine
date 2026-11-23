@@ -62,6 +62,13 @@ type EventClaimFilter struct {
 	Limit int
 }
 
+// EventClaimReader is the read-only part of EventClaimRepository, lent to task
+// runners; EventClaimRepository satisfies it.
+type EventClaimReader interface {
+	// Get returns the claim, with found false when there is none.
+	Get(ctx context.Context, handler, key string) (claim EventClaim, found bool, err error)
+}
+
 // EventClaimRepository is the transactional idempotency store event handlers
 // use to reserve a unique key before acting (ADR 0034). Uniqueness of
 // (handler, key) is enforced by the database.

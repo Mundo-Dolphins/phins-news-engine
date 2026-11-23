@@ -529,3 +529,27 @@ func TestTaskRunnerSavesSuccessfulOutcomeDespiteShutdown(t *testing.T) {
 		t.Fatalf("task = %+v, want the outcome saved", got)
 	}
 }
+
+func TestTaskRunner_PassesReaders(t *testing.T) {
+	for _, wired := range []bool{false, true} {
+		f := newTaskFixture(t)
+		r := &fakeTaskRunner{kind: "poll", run: func(context.Context, out.TaskContext, out.Task, []out.TaskSignal) (out.TaskOutcome, error) {
+			return okOutcome(out.TaskDone, time.Time{}), nil
+		}}
+		l := f.loop(t, true, time.Second, nil, r)
+		if wired {
+			outbox := sqlite.NewOutboxRepository(f.db)
+			l.SetReaders(sqlite.NewEventClaimRepository(f.db), outbox, sqlite.NewArticleLog(f.db))
+		}
+		if _, err := l.Run(context.Background()); err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+		tc := r.gotTC
+		if got := tc.Claims != nil && tc.Publications != nil && tc.Articles != nil; got != wired {
+			t.Errorf("wired=%v: readers non-nil = %v (claims %v pubs %v articles %v)", wired, got, tc.Claims, tc.Publications, tc.Articles)
+		}
+		if !wired && (tc.Claims != nil || tc.Publications != nil || tc.Articles != nil) {
+			t.Errorf("unwired runner got readers: %+v", tc)
+		}
+	}
+}

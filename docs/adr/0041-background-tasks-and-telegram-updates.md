@@ -55,6 +55,15 @@ collides with that article's outbox rows. A task gets one row per
 destination: an enqueue that inserts no row fails the outcome (counted error
 and backoff) instead of being counted as a success.
 
+**Readers.** `out.TaskContext` carries three read-only readers so a runner can
+wait on a claim and summarize what was published or collected: `Claims`
+(`EventClaimReader.Get`, which `EventClaimRepository` satisfies),
+`Publications` (`DeliveredBetween`: rows delivered on a destination with
+`sent_at` in `[from, to)`, oldest first, with the article's title, summary, URL
+and source) and `Articles` (`ArticlesBetween`: stored articles of given
+sources with `published_at` in `[from, to)`, oldest first, in any status). Each
+is nil when the host did not wire it; `engine.Run` wires all three.
+
 **Single writer.** Only the task runner writes `tasks` rows. Producers of
 external input insert `task_signals` rows only, so the two never contend on a
 table.
