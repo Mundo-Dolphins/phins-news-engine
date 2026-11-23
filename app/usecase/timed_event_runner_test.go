@@ -497,3 +497,122 @@ func TestTimedEventRunner_CloseEventWithPublicationIsError(t *testing.T) {
 		t.Fatalf("second tick: err=%v calls=%d, want 2", err, h.calls)
 	}
 }
+
+func taskResult(extra ...out.EventAction) out.EventResult {
+	return out.EventResult{Actions: append([]out.EventAction{out.EnqueueTask{
+		Kind: "kind-a", Key: "key-a", State: json.RawMessage(`{"n":1}`),
+	}}, extra...)}
+}
+
+func (f *timedFixture) taskRows(t *testing.T) (n int, articleID, state string) {
+	t.Helper()
+	if err := f.db.QueryRow(`SELECT COUNT(*) FROM tasks`).Scan(&n); err != nil {
+		t.Fatalf("count tasks: %v", err)
+	}
+	if n > 0 {
+		if err := f.db.QueryRow(`SELECT article_id, state FROM tasks WHERE kind = 'kind-a' AND task_key = 'key-a'`).Scan(&articleID, &state); err != nil {
+			t.Fatalf("read task: %v", err)
+		}
+	}
+	return n, articleID, state
+}
+
+func (f *timedFixture) taskRunner(t *testing.T, withRepo bool, h out.TimedEventHandler) *usecase.TimedEventRunner {
+	t.Helper()
+	r := f.runner(t, true, 15*time.Minute, h)
+	if withRepo {
+		r.SetTaskRepository(sqlite.NewTaskRepository(f.db))
+	}
+	return r
+}
+
+func newTaskHandler(res out.EventResult) *fakeTimedHandler {
+	return &fakeTimedHandler{name: "handler-a", events: dueAtKickoffMinusHour("2026-reg-1"),
+		handle: func(context.Context, out.DueEvent) (out.EventResult, error) { return res, nil }}
+}
+
+func TestTimedEventRunner_EnqueueTaskCreatesTaskAndClaim(t *testing.T) {
+	f := newTimedFixture(t)
+	f.clock.Set(kickoff.Add(-time.Hour))
+	h := newTaskHandler(taskResult())
+	r := f.taskRunner(t, true, h)
+	if _, err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	n, articleID, state := f.taskRows(t)
+	if n != 1 || articleID != "timed:handler-a:2026-reg-1" || state != `{"n":1}` {
+		t.Fatalf("tasks=%d article=%q state=%q", n, articleID, state)
+	}
+	if s, found := f.claimState(t, "handler-a", "2026-reg-1"); !found || s != "claimed" {
+		t.Fatalf("claim = %q found=%v, want claimed", s, found)
+	}
+	if f.outboxRows(t) != 0 {
+		t.Fatalf("outbox rows = %d, want 0", f.outboxRows(t))
+	}
+	f.clock.Set(f.clock.Now().Add(time.Minute))
+	if _, err := r.Run(context.Background()); err != nil || h.calls != 1 {
+		t.Fatalf("second tick: err=%v calls=%d, want 1", err, h.calls)
+	}
+}
+
+func TestTimedEventRunner_EnqueueTaskWithPublication(t *testing.T) {
+	f := newTimedFixture(t)
+	f.clock.Set(kickoff.Add(-time.Hour))
+	h := newTaskHandler(taskResult(out.EnqueuePublication{
+		Destination: publishing.DestinationBluesky,
+		Payload:     publishing.MessagePayload{Text: "hello", Kind: "weather"},
+	}))
+	res, err := f.taskRunner(t, true, h).Run(context.Background())
+	if err != nil || res.Errors != 0 {
+		t.Fatalf("err=%v res=%+v", err, res)
+	}
+	if n, _, _ := f.taskRows(t); n != 1 || f.outboxRows(t) != 1 {
+		t.Fatalf("tasks=%d rows=%d, want 1 and 1", n, f.outboxRows(t))
+	}
+}
+
+func TestTimedEventRunner_EnqueueTaskWithCloseIsError(t *testing.T) {
+	f := newTimedFixture(t)
+	f.clock.Set(kickoff.Add(-time.Hour))
+	h := newTaskHandler(closeResult("x", out.EnqueueTask{Kind: "kind-a", Key: "key-a"}))
+	res, err := f.taskRunner(t, true, h).Run(context.Background())
+	if err != nil || res.Errors != 1 {
+		t.Fatalf("err=%v res=%+v, want one error", err, res)
+	}
+	if n, _, _ := f.taskRows(t); n != 0 {
+		t.Fatalf("tasks = %d, want 0", n)
+	}
+	if _, found := f.claimState(t, "handler-a", "2026-reg-1"); found || f.outboxRows(t) != 0 {
+		t.Fatalf("claim found=%v rows=%d, want neither", found, f.outboxRows(t))
+	}
+}
+
+func TestTimedEventRunner_EnqueueTaskWithoutRepoIsError(t *testing.T) {
+	f := newTimedFixture(t)
+	f.clock.Set(kickoff.Add(-time.Hour))
+	res, err := f.taskRunner(t, false, newTaskHandler(taskResult())).Run(context.Background())
+	if err != nil || res.Errors != 1 {
+		t.Fatalf("err=%v res=%+v, want one error", err, res)
+	}
+	if n, _, _ := f.taskRows(t); n != 0 {
+		t.Fatalf("tasks = %d, want 0", n)
+	}
+	if _, found := f.claimState(t, "handler-a", "2026-reg-1"); found || f.outboxRows(t) != 0 {
+		t.Fatalf("claim found=%v rows=%d, want neither", found, f.outboxRows(t))
+	}
+}
+
+func TestTimedEventRunner_EnqueueTaskClaimNotReconciled(t *testing.T) {
+	f := newTimedFixture(t)
+	f.clock.Set(kickoff.Add(-time.Hour))
+	if _, err := f.taskRunner(t, true, newTaskHandler(taskResult())).Run(context.Background()); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	published, failed, err := sqlite.NewEventClaimRepository(f.db).ReconcileWithOutbox(context.Background(), f.clock.Now())
+	if err != nil || published != 0 || failed != 0 {
+		t.Fatalf("Reconcile = %d, %d, %v, want nothing settled", published, failed, err)
+	}
+	if s, found := f.claimState(t, "handler-a", "2026-reg-1"); !found || s != "claimed" {
+		t.Fatalf("claim = %q found=%v, want claimed", s, found)
+	}
+}

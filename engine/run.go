@@ -494,6 +494,7 @@ func Run(ctx context.Context, configPath string, profile config.Profile, logger 
 		if err != nil {
 			return err
 		}
+		timedEvents.SetTaskRepository(taskRepo)
 	}
 	var taskLoop *usecase.TaskRunnerLoop
 	if len(opts.TaskRunners) > 0 {
