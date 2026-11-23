@@ -99,3 +99,16 @@ type EnqueueTask struct {
 }
 
 func (EnqueueTask) eventAction() {}
+
+// CloseEvent settles a timed event that no longer applies, without publishing
+// anything (ADR 0042). It is only valid from a TimedEventHandler and cannot be
+// combined with EnqueuePublication: it claims the key with no article and no
+// outbox row, so the engine never asks about the event again. An operator can
+// release the claim to run it again. Several CloseEvent actions in one result
+// are treated as one.
+type CloseEvent struct {
+	// Reason is kept in the claim data for the operator.
+	Reason string
+}
+
+func (CloseEvent) eventAction() {}

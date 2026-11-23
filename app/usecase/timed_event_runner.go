@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/article"
@@ -25,6 +26,9 @@ const (
 	// TimedEventMissedReason is stored in the failed claim of an event that
 	// was found outside its grace window.
 	TimedEventMissedReason = "missed_window"
+	// TimedEventClosedReason is stored in the claim of an event its handler
+	// closed with out.CloseEvent.
+	TimedEventClosedReason = "closed"
 
 	timedArticlePrefix = "timed:"
 )
@@ -42,6 +46,9 @@ type TimedEventRunner struct {
 	uow      out.UnitOfWork
 	timeout  time.Duration
 	grace    time.Duration
+
+	badUntilMu sync.Mutex
+	badUntil   map[string]bool
 }
 
 type registeredTimedHandler struct {
@@ -75,7 +82,7 @@ func NewTimedEventRunner(
 	if grace <= 0 {
 		grace = DefaultTimedEventGrace
 	}
-	r := &TimedEventRunner{deps: deps, articles: articles, outbox: outbox, uow: uow, timeout: timeout, grace: grace}
+	r := &TimedEventRunner{deps: deps, articles: articles, outbox: outbox, uow: uow, timeout: timeout, grace: grace, badUntil: map[string]bool{}}
 	seen := make(map[string]bool, len(handlers)+len(articleHandlerNames))
 	for _, n := range articleHandlerNames {
 		seen[strings.TrimSpace(n)] = true
@@ -161,12 +168,33 @@ func (r *TimedEventRunner) runHandler(ctx context.Context, rh registeredTimedHan
 			continue
 		}
 		res.Due++
-		if now.Sub(ev.At) > r.grace {
-			r.markMissed(ctx, name, ev, now, res)
+		if deadline := r.deadline(ctx, name, ev); now.After(deadline) {
+			r.markMissed(ctx, name, ev, deadline, now, res)
 			continue
 		}
 		r.runEvent(ctx, rh, ev, now, res)
 	}
+}
+
+// deadline is the last instant ev may run: Until, or At plus the grace when
+// Until is unset or (a handler bug, reported once per handler and key) before At.
+func (r *TimedEventRunner) deadline(ctx context.Context, name string, ev out.DueEvent) time.Time {
+	if ev.Until.IsZero() {
+		return ev.At.Add(r.grace)
+	}
+	if ev.Until.Before(ev.At) {
+		id := name + "\x00" + ev.Key
+		r.badUntilMu.Lock()
+		first := !r.badUntil[id]
+		r.badUntil[id] = true
+		r.badUntilMu.Unlock()
+		if first {
+			r.deps.Logger.Error("timed event Until is before At", errors.New("until before at"), "handler", name, "key", ev.Key)
+			r.alert(ctx, name, fmt.Sprintf("event %s has Until %s before At %s: using the default grace", ev.Key, ev.Until.UTC().Format(time.RFC3339), ev.At.UTC().Format(time.RFC3339)))
+		}
+		return ev.At.Add(r.grace)
+	}
+	return ev.Until
 }
 
 // due calls Due under a recover.
@@ -245,6 +273,7 @@ func (r *TimedEventRunner) handle(ctx context.Context, rh registeredTimedHandler
 type timedClaimData struct {
 	At     time.Time `json:"at"`
 	Reason string    `json:"reason,omitempty"`
+	Detail string    `json:"detail,omitempty"`
 }
 
 // persist validates the actions, then in one transaction takes the claim,
@@ -252,6 +281,7 @@ type timedClaimData struct {
 // claim race, or any failure, writes nothing.
 func (r *TimedEventRunner) persist(ctx context.Context, name string, ev out.DueEvent, result out.EventResult, now time.Time) (int, error) {
 	var enqueues []out.EnqueuePublication
+	var closed *out.CloseEvent
 	for _, act := range result.Actions {
 		switch a := act.(type) {
 		case nil:
@@ -260,9 +290,35 @@ func (r *TimedEventRunner) persist(ctx context.Context, name string, ev out.DueE
 				return 0, fmt.Errorf("invalid payload for %s: %w", a.Destination.Normalized(), err)
 			}
 			enqueues = append(enqueues, a)
+		case out.CloseEvent:
+			if closed == nil {
+				closed = &a
+			}
 		default:
 			return 0, fmt.Errorf("unknown action %T", act)
 		}
+	}
+	if closed != nil {
+		if len(enqueues) > 0 {
+			return 0, errors.New("close cannot be combined with publications")
+		}
+		data, err := json.Marshal(timedClaimData{At: ev.At.UTC(), Reason: TimedEventClosedReason, Detail: closed.Reason})
+		if err != nil {
+			return 0, err
+		}
+		didClose := false
+		err = r.uow.Do(ctx, func(txCtx context.Context) error {
+			claimed, err := r.deps.Claims.TryClaim(txCtx, name, ev.Key, "", data, now)
+			if err != nil {
+				return fmt.Errorf("claim: %w", err)
+			}
+			didClose = claimed
+			return nil
+		})
+		if err == nil && didClose {
+			r.deps.Logger.Info("timed event closed", "handler", name, "key", ev.Key, "reason", closed.Reason)
+		}
+		return 0, err
 	}
 	if len(enqueues) == 0 {
 		return 0, nil
@@ -303,10 +359,10 @@ func (r *TimedEventRunner) persist(ctx context.Context, name string, ev out.DueE
 	return enqueued, nil
 }
 
-// markMissed records an event found outside its grace window as a failed
+// markMissed records an event found past its deadline as a failed
 // claim, so it is alerted once and never run late. An operator can release
 // the claim to let it run.
-func (r *TimedEventRunner) markMissed(ctx context.Context, name string, ev out.DueEvent, now time.Time, res *in.RunTimedEventsResult) {
+func (r *TimedEventRunner) markMissed(ctx context.Context, name string, ev out.DueEvent, deadline, now time.Time, res *in.RunTimedEventsResult) {
 	data, _ := json.Marshal(timedClaimData{At: ev.At.UTC(), Reason: TimedEventMissedReason})
 	err := r.uow.Do(ctx, func(txCtx context.Context) error {
 		claimed, err := r.deps.Claims.TryClaim(txCtx, name, ev.Key, "", data, now)
@@ -321,9 +377,9 @@ func (r *TimedEventRunner) markMissed(ctx context.Context, name string, ev out.D
 		return
 	}
 	res.Missed++
-	late := now.Sub(ev.At).Round(time.Second)
-	r.deps.Logger.Warn("timed event missed its grace window", "handler", name, "key", ev.Key, "scheduled_at", ev.At.UTC().Format(time.RFC3339), "late_by", late.String(), "grace", r.grace.String())
-	r.alert(ctx, name, fmt.Sprintf("event %s was scheduled for %s and not run: found %s late (grace %s)", ev.Key, ev.At.UTC().Format(time.RFC3339), late, r.grace))
+	late := now.Sub(deadline).Round(time.Second)
+	r.deps.Logger.Warn("timed event missed its deadline", "handler", name, "key", ev.Key, "scheduled_at", ev.At.UTC().Format(time.RFC3339), "late_by", late.String(), "deadline", deadline.UTC().Format(time.RFC3339))
+	r.alert(ctx, name, fmt.Sprintf("event %s was scheduled for %s and not run by %s: found %s late", ev.Key, ev.At.UTC().Format(time.RFC3339), deadline.UTC().Format(time.RFC3339), late))
 }
 
 func (r *TimedEventRunner) alert(ctx context.Context, handler, message string) {

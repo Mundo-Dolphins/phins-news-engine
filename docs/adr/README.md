@@ -26,6 +26,7 @@ today.
 | [0039](0039-admin-panel.md) | Admin panel: REST, MCP and web UI over operator actions |
 | [0040](0040-bluesky-threads.md) | Bluesky threads: multi-part payloads, progress and resume |
 | [0041](0041-background-tasks-and-telegram-updates.md) | Background tasks with signals and a Telegram update poller |
+| [0042](0042-timed-event-deadlines-and-close.md) | Timed event deadlines (`Until`) and closing an event without publishing |
 
 The numbering has gaps. The engine was extracted from a larger project
 whose other records cover operations and deployment-specific choices and

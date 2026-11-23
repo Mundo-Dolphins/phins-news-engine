@@ -40,4 +40,10 @@ type DueEvent struct {
 	Key string
 	// At is the instant the event was scheduled for (kickoff minus offset).
 	At time.Time
+	// Until is the last instant the event may still run. The zero value means
+	// the engine's default grace after At. Use it for events with no exact
+	// time, such as the end of a period of a live game: At is the earliest
+	// instant and Until the latest. An Until before At is a handler bug: the
+	// engine alerts once and falls back to the default grace.
+	Until time.Time
 }

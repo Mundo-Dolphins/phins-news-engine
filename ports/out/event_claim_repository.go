@@ -11,7 +11,8 @@ import (
 type EventClaimState string
 
 const (
-	// EventClaimClaimed: the key is reserved and its publication is pending.
+	// EventClaimClaimed: the key is reserved; its publication is pending, or the
+	// event was closed without one (empty article id, ADR 0042).
 	EventClaimClaimed EventClaimState = "claimed"
 	// EventClaimPublished: the publication behind the claim was delivered.
 	EventClaimPublished EventClaimState = "published"
