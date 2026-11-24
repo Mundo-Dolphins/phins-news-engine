@@ -50,8 +50,8 @@ twitter:
       max_age_hours: 24
       enabled: true
   searches:
-    - hashtag: "Dolphins"
-      name: "Dolphins Community"
+    - hashtag: "Isotopes"
+      name: "Isotopes Community"
       source_type: social
       interval_minutes: 3
       max_items_per_cycle: 15
