@@ -55,6 +55,10 @@ type TaskRunnerLoop struct {
 	timeout  time.Duration
 	batch    int
 	kinds    []string // enabled kinds, sorted
+
+	claims       out.EventClaimReader
+	publications out.PublicationLog
+	articleLog   out.ArticleLog
 }
 
 type registeredTaskRunner struct {
@@ -113,6 +117,12 @@ func NewTaskRunner(
 	}
 	sort.Strings(l.kinds)
 	return l, nil
+}
+
+// SetReaders wires the read-only readers lent to runners in TaskContext. Any
+// may be nil; runners then see nil.
+func (l *TaskRunnerLoop) SetReaders(claims out.EventClaimReader, pubs out.PublicationLog, articles out.ArticleLog) {
+	l.claims, l.publications, l.articleLog = claims, pubs, articles
 }
 
 // Len reports how many runners are enabled.
@@ -208,7 +218,8 @@ func (l *TaskRunnerLoop) call(ctx context.Context, rt registeredTaskRunner, t ou
 			outcome, kind, err = out.TaskOutcome{}, outcomePanic, fmt.Errorf("%v", rec)
 		}
 	}()
-	tc := out.TaskContext{Clock: l.deps.Clock, Logger: l.deps.Logger, Alerts: l.deps.Alerts, Config: rt.config}
+	tc := out.TaskContext{Clock: l.deps.Clock, Logger: l.deps.Logger, Alerts: l.deps.Alerts, Config: rt.config,
+		Claims: l.claims, Publications: l.publications, Articles: l.articleLog}
 	outcome, err = rt.runner.Run(rctx, tc, t, signals)
 	if errors.Is(rctx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
 		return out.TaskOutcome{}, outcomeTimeout, rctx.Err()

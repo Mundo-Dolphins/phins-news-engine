@@ -529,3 +529,24 @@ func TestTaskRunnerSavesSuccessfulOutcomeDespiteShutdown(t *testing.T) {
 		t.Fatalf("task = %+v, want the outcome saved", got)
 	}
 }
+
+func TestTaskRunner_PassesReaders(t *testing.T) {
+	for _, wired := range []bool{false, true} {
+		f := newTaskFixture(t)
+		r := &fakeTaskRunner{kind: "poll", run: func(context.Context, out.TaskContext, out.Task, []out.TaskSignal) (out.TaskOutcome, error) {
+			return okOutcome(out.TaskDone, time.Time{}), nil
+		}}
+		l := f.loop(t, true, time.Second, nil, r)
+		if wired {
+			outbox := sqlite.NewOutboxRepository(f.db)
+			l.SetReaders(sqlite.NewEventClaimRepository(f.db), outbox, sqlite.NewArticleLog(f.db))
+		}
+		if _, err := l.Run(context.Background()); err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+		tc := r.gotTC
+		if (tc.Claims != nil) != wired || (tc.Publications != nil) != wired || (tc.Articles != nil) != wired {
+			t.Errorf("wired=%v: claims=%v publications=%v articles=%v", wired, tc.Claims, tc.Publications, tc.Articles)
+		}
+	}
+}

@@ -27,6 +27,7 @@ today.
 | [0040](0040-bluesky-threads.md) | Bluesky threads: multi-part payloads, progress and resume |
 | [0041](0041-background-tasks-and-telegram-updates.md) | Background tasks with signals and a Telegram update poller |
 | [0042](0042-timed-event-deadlines-and-close.md) | Timed event deadlines (`Until`) and closing an event without publishing |
+| [0043](0043-timed-events-enqueue-tasks.md) | Timed event handlers can enqueue background tasks |
 
 The numbering has gaps. The engine was extracted from a larger project
 whose other records cover operations and deployment-specific choices and

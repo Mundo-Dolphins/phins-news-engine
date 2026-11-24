@@ -43,6 +43,7 @@ type TimedEventRunner struct {
 	deps     EventDeps
 	articles out.ArticleRepository
 	outbox   out.DestinationOutboxRepository
+	tasks    out.TaskRepository
 	uow      out.UnitOfWork
 	timeout  time.Duration
 	grace    time.Duration
@@ -109,6 +110,10 @@ func NewTimedEventRunner(
 	}
 	return r, nil
 }
+
+// SetTaskRepository wires the store out.EnqueueTask actions write to (ADR
+// 0043). Without it a handler that returns one gets an error.
+func (r *TimedEventRunner) SetTaskRepository(t out.TaskRepository) { r.tasks = t }
 
 // Len reports how many handlers are enabled.
 func (r *TimedEventRunner) Len() int {
@@ -277,10 +282,11 @@ type timedClaimData struct {
 }
 
 // persist validates the actions, then in one transaction takes the claim,
-// saves the event's placeholder article and enqueues the rows. Losing the
-// claim race, or any failure, writes nothing.
+// saves the event's placeholder article, enqueues the tasks and the rows.
+// Losing the claim race, or any failure, writes nothing.
 func (r *TimedEventRunner) persist(ctx context.Context, name string, ev out.DueEvent, result out.EventResult, now time.Time) (int, error) {
 	var enqueues []out.EnqueuePublication
+	var taskActs []out.EnqueueTask
 	var closed *out.CloseEvent
 	for _, act := range result.Actions {
 		switch a := act.(type) {
@@ -290,6 +296,14 @@ func (r *TimedEventRunner) persist(ctx context.Context, name string, ev out.DueE
 				return 0, fmt.Errorf("invalid payload for %s: %w", a.Destination.Normalized(), err)
 			}
 			enqueues = append(enqueues, a)
+		case out.EnqueueTask:
+			if r.tasks == nil {
+				return 0, errors.New("task storage is not wired")
+			}
+			if a.Kind == "" || a.Key == "" {
+				return 0, errors.New("task kind and key are required")
+			}
+			taskActs = append(taskActs, a)
 		case out.CloseEvent:
 			if closed == nil {
 				closed = &a
@@ -299,8 +313,8 @@ func (r *TimedEventRunner) persist(ctx context.Context, name string, ev out.DueE
 		}
 	}
 	if closed != nil {
-		if len(enqueues) > 0 {
-			return 0, errors.New("close cannot be combined with publications")
+		if len(enqueues) > 0 || len(taskActs) > 0 {
+			return 0, errors.New("close cannot be combined with other actions")
 		}
 		data, err := json.Marshal(timedClaimData{At: ev.At.UTC(), Reason: TimedEventClosedReason, Detail: closed.Reason})
 		if err != nil {
@@ -320,7 +334,7 @@ func (r *TimedEventRunner) persist(ctx context.Context, name string, ev out.DueE
 		}
 		return 0, err
 	}
-	if len(enqueues) == 0 {
+	if len(enqueues) == 0 && len(taskActs) == 0 {
 		return 0, nil
 	}
 	data, err := json.Marshal(timedClaimData{At: ev.At.UTC()})
@@ -340,6 +354,11 @@ func (r *TimedEventRunner) persist(ctx context.Context, name string, ev out.DueE
 		}
 		if err := r.articles.Save(txCtx, timedArticle(name, ev, articleID, now)); err != nil {
 			return fmt.Errorf("save placeholder article: %w", err)
+		}
+		for _, t := range taskActs {
+			if _, err := r.tasks.Enqueue(txCtx, t.Kind, t.Key, articleID, t.State, now); err != nil {
+				return fmt.Errorf("enqueue task: %w", err)
+			}
 		}
 		for _, a := range enqueues {
 			payload, err := a.Payload.Marshal()

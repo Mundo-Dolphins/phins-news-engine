@@ -27,6 +27,13 @@ type TaskContext struct {
 	Alerts EventAlertSink
 	// Config is events.<kind>.config.
 	Config map[string]any
+	// Claims reads event claims (for example to wait on one). Nil when the
+	// host did not wire it.
+	Claims EventClaimReader
+	// Publications reads delivered publications. Nil when not wired.
+	Publications PublicationLog
+	// Articles reads stored articles. Nil when not wired.
+	Articles ArticleLog
 }
 
 // TaskOutcome is the result of a successful TaskRunner.Run.

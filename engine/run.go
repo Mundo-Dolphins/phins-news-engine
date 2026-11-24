@@ -494,6 +494,7 @@ func Run(ctx context.Context, configPath string, profile config.Profile, logger 
 		if err != nil {
 			return err
 		}
+		timedEvents.SetTaskRepository(taskRepo)
 	}
 	var taskLoop *usecase.TaskRunnerLoop
 	if len(opts.TaskRunners) > 0 {
@@ -503,6 +504,7 @@ func Run(ctx context.Context, configPath string, profile config.Profile, logger 
 		if err != nil {
 			return err
 		}
+		taskLoop.SetReaders(eventClaims, outbox, sqliteadapter.NewArticleLog(db))
 	}
 	outbox.SetLiveTTL(time.Duration(cfg.PublicationPolicy.Live.TTLMinutes) * time.Minute)
 	urlCfg, urlResolvers := cfg.Normalization.URL.Policy()
