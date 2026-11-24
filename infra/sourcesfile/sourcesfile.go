@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/source"
 	"gopkg.in/yaml.v3"
@@ -23,6 +24,17 @@ type Sources struct {
 	Twitter   TwitterConfig   `yaml:"twitter"`
 	Instagram InstagramConfig `yaml:"instagram"`
 	YouTube   YouTubeConfig   `yaml:"youtube"`
+	// DefaultBlockedURLs is the global exclusion list, applied on top of
+	// every per-source list. Load merges it into the BlockedURLs of every
+	// twitter (accounts, searches, lists) and bluesky (accounts, feeds)
+	// entry, and into the BlockedKeywords of every rss feed — the rss
+	// adapter filters on keywords, and the matcher's substring semantics
+	// make a domain pattern work there identically. Entries go through the
+	// same sourcefilter matcher as per-source lists (case-insensitive
+	// substring, scheme- and trailing-slash-insensitive), so a pattern like
+	// "cheapjersey" blocks every host of a rotating spam network no matter
+	// which source carries the link.
+	DefaultBlockedURLs []string `yaml:"default_blocked_urls"`
 }
 
 // IDs returns every source.ID this catalog would construct, in
@@ -657,7 +669,7 @@ func (s Sources) Validate() error {
 }
 
 // Load reads path, decodes it strictly (unknown keys rejected), validates
-// the result, and returns it.
+// the result, and merges DefaultBlockedURLs into the per-source lists.
 func Load(path string) (*Sources, error) {
 	data, err := os.ReadFile(path) // #nosec G304 -- path is an operator-provided CLI/config value, not user input
 	if err != nil {
@@ -674,5 +686,56 @@ func Load(path string) (*Sources, error) {
 	if err := s.Validate(); err != nil {
 		return nil, err
 	}
+	s.applyDefaults()
 	return &s, nil
+}
+
+// applyDefaults merges DefaultBlockedURLs into every per-source exclusion
+// list, so the global list protects every source without repeating the
+// entry in each of them. Per-source entries keep their position after the
+// defaults.
+func (s *Sources) applyDefaults() {
+	if len(s.DefaultBlockedURLs) == 0 {
+		return
+	}
+	for i := range s.RSSFeeds {
+		s.RSSFeeds[i].BlockedKeywords = mergeStringList(s.DefaultBlockedURLs, s.RSSFeeds[i].BlockedKeywords)
+	}
+	for i := range s.Bluesky.Accounts {
+		s.Bluesky.Accounts[i].BlockedURLs = mergeStringList(s.DefaultBlockedURLs, s.Bluesky.Accounts[i].BlockedURLs)
+	}
+	for i := range s.Bluesky.Feeds {
+		s.Bluesky.Feeds[i].BlockedURLs = mergeStringList(s.DefaultBlockedURLs, s.Bluesky.Feeds[i].BlockedURLs)
+	}
+	for i := range s.Twitter.Accounts {
+		s.Twitter.Accounts[i].BlockedURLs = mergeStringList(s.DefaultBlockedURLs, s.Twitter.Accounts[i].BlockedURLs)
+	}
+	for i := range s.Twitter.Searches {
+		s.Twitter.Searches[i].BlockedURLs = mergeStringList(s.DefaultBlockedURLs, s.Twitter.Searches[i].BlockedURLs)
+	}
+	for i := range s.Twitter.Lists {
+		s.Twitter.Lists[i].BlockedURLs = mergeStringList(s.DefaultBlockedURLs, s.Twitter.Lists[i].BlockedURLs)
+	}
+}
+
+// mergeStringList returns defaults followed by extra, deduplicated
+// case-insensitively (first occurrence wins, entries trimmed). Blank
+// entries are dropped — the sourcefilter matchers treat a blank pattern
+// as a match-everything after trimming and silently skip it, so dropping
+// them keeps a typo from silently going away in the merged list.
+func mergeStringList(defaults, extra []string) []string {
+	seen := make(map[string]bool, len(defaults)+len(extra))
+	var out []string
+	for _, entry := range append(append([]string{}, defaults...), extra...) {
+		normalized := strings.ToLower(strings.TrimSpace(entry))
+		if normalized == "" {
+			continue
+		}
+		if seen[normalized] {
+			continue
+		}
+		seen[normalized] = true
+		out = append(out, entry)
+	}
+	return out
 }
