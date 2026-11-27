@@ -39,6 +39,7 @@ export function Layout({ children }: { children: ComponentChildren }) {
           {mode === "local" && <a href="/review">Review</a>}
           {mode === "local" && <a href="/cycle">Editorial cycle</a>}
           {mode === "local" && <a href="/settings/llm">LLM{llm && ` (${llm.server} · ${llm.model})`}</a>}
+          {mode === "local" && <a href="/settings/config">Config</a>}
         </nav>
         <span class="spacer" />
         {health && <span class={"badge mode-" + health.mode}>{health.mode}</span>}
