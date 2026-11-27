@@ -58,6 +58,44 @@ func TestBuildCatalogIndex_SurnameOwnerAmbiguousWhenSharedByTwoEntities(t *testi
 	}
 }
 
+func TestBuildCatalogIndex_CanonicalKeyLookupMatchesSuffixVariant(t *testing.T) {
+	// "Ollie Gordon" is in the catalog; "Ollie Gordon II" has the same
+	// CanonicalKey (suffix stripped) and should resolve to the same entity.
+	rules := append(sampleRules(), eventsignals.EntityRule{
+		ID: "ollie-gordon", CanonicalName: "Ollie Gordon", Kind: eventsignals.EntityKindPlayer,
+		Terms: []string{"Ollie Gordon", "Gordon"},
+	})
+	idx := entitydiscovery.BuildCatalogIndex(rules)
+
+	// Direct canonical key match.
+	if ce, ok := idx.CanonicalKeyLookup("ollie gordon"); !ok || ce.ID != "ollie-gordon" {
+		t.Fatalf("CanonicalKeyLookup(ollie gordon) = %+v, %v, want ollie-gordon", ce, ok)
+	}
+
+	// The CanonicalKey of "Ollie Gordon II" is "ollie gordon" (II stripped).
+	// This is the key scenario: a discovered name with a suffix resolves
+	// to the existing entry.
+	ck := "ollie gordon" // == dictionaryupdate.CanonicalKey("Ollie Gordon II")
+	if ce, ok := idx.CanonicalKeyLookup(ck); !ok || ce.ID != "ollie-gordon" {
+		t.Fatalf("CanonicalKeyLookup(%q) for suffix variant = %+v, %v, want ollie-gordon", ck, ce, ok)
+	}
+}
+
+func TestBuildCatalogIndex_CanonicalKeyLookupMissesUnknown(t *testing.T) {
+	idx := entitydiscovery.BuildCatalogIndex(sampleRules())
+	if _, ok := idx.CanonicalKeyLookup("unknown person"); ok {
+		t.Fatal("CanonicalKeyLookup(unknown person) = true, want false")
+	}
+}
+
+func TestBuildCatalogIndex_CanonicalKeyLookupSkipsCompetitions(t *testing.T) {
+	idx := entitydiscovery.BuildCatalogIndex(sampleRules())
+	// "AFC East" is a competition; its CanonicalKey should not be indexed.
+	if _, ok := idx.CanonicalKeyLookup("afc east"); ok {
+		t.Fatal("CanonicalKeyLookup(afc east) = true, want false — competitions are out of scope")
+	}
+}
+
 func TestCatalogIndex_TeamIDsReturnsOnlyTeams(t *testing.T) {
 	ids := entitydiscovery.BuildCatalogIndex(sampleRules()).TeamIDs()
 	if len(ids) != 1 || !ids["springfield-isotopes"] {

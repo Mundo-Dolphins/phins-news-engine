@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Mundo-Dolphins/phins-news-engine/app/dictionaryupdate"
 	"github.com/Mundo-Dolphins/phins-news-engine/app/leaguegazetteer"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/article"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/entityproposal"
@@ -338,6 +339,16 @@ func classifyAndMerge(aggregates map[string]*aggregate, surnameOwnerThisRun map[
 		// entity evidence recording is intentionally out of scope for
 		// this version).
 		return
+	}
+
+	// Dictionary-first: if the CanonicalKey (suffix-insensitive) matches
+	// an existing catalog entity, classify as an alias of that entity
+	// rather than a new entity. This catches "Ollie Gordon II" → "Ollie Gordon".
+	if ck := dictionaryupdate.CanonicalKey(e.Name); ck != "" {
+		if owner, ok := catalog.CanonicalKeyLookup(ck); ok {
+			mergeAliasAggregate(aggregates, owner, e, et, batch, now)
+			return
+		}
 	}
 
 	surname := entityproposal.Surname(e.Name)

@@ -47,11 +47,23 @@ func Normalize(s string) string {
 	return strings.TrimSpace(b.String())
 }
 
+// generationalSuffixes are trailing tokens that identify a generation,
+// not a surname. They are stripped by Surname so that "Ollie Gordon II"
+// yields surname "gordon" rather than "ii".
+var generationalSuffixes = map[string]bool{
+	"jr": true, "sr": true, "ii": true, "iii": true, "iv": true,
+}
+
 // Surname returns the normalized last whitespace-separated token of
 // canonicalName, or "" when the name has fewer than two parts (a single
 // token has no meaningful surname to key alias/duplicate detection on).
+// Trailing generational suffixes (Jr, Sr, II, III, IV) are stripped so
+// that "Ollie Gordon II" yields "gordon", not "ii".
 func Surname(canonicalName string) string {
 	parts := strings.Fields(Normalize(canonicalName))
+	for len(parts) > 1 && generationalSuffixes[parts[len(parts)-1]] {
+		parts = parts[:len(parts)-1]
+	}
 	if len(parts) < 2 {
 		return ""
 	}

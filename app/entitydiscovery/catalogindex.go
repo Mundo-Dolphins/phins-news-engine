@@ -10,6 +10,7 @@
 package entitydiscovery
 
 import (
+	"github.com/Mundo-Dolphins/phins-news-engine/app/dictionaryupdate"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/entityproposal"
 	"github.com/Mundo-Dolphins/phins-news-engine/domain/eventsignals"
 )
@@ -25,9 +26,10 @@ type CatalogEntity struct {
 // CatalogIndex is a normalized-name lookup over the entity catalog
 // loaded at the start of a discover run.
 type CatalogIndex struct {
-	byTerm    map[string]CatalogEntity
-	bySurname map[string]CatalogEntity
-	teamIDs   map[string]bool
+	byTerm         map[string]CatalogEntity
+	bySurname      map[string]CatalogEntity
+	byCanonicalKey map[string]CatalogEntity
+	teamIDs        map[string]bool
 }
 
 // BuildCatalogIndex indexes rules by every normalized term (canonical
@@ -39,7 +41,7 @@ type CatalogIndex struct {
 // entityproposal.EntityType equivalent (eventsignals.EntityKindCompetition)
 // are skipped entirely.
 func BuildCatalogIndex(rules []eventsignals.EntityRule) CatalogIndex {
-	idx := CatalogIndex{byTerm: map[string]CatalogEntity{}, bySurname: map[string]CatalogEntity{}, teamIDs: map[string]bool{}}
+	idx := CatalogIndex{byTerm: map[string]CatalogEntity{}, bySurname: map[string]CatalogEntity{}, byCanonicalKey: map[string]CatalogEntity{}, teamIDs: map[string]bool{}}
 	surnameCount := map[string]int{}
 	surnameFirst := map[string]CatalogEntity{}
 
@@ -54,6 +56,13 @@ func BuildCatalogIndex(rules []eventsignals.EntityRule) CatalogIndex {
 		}
 		for _, term := range r.Terms {
 			idx.byTerm[entityproposal.Normalize(term)] = ce
+		}
+		// Index by CanonicalKey for suffix-insensitive matching.
+		// Only the first entity claiming a given key wins (the catalog
+		// should not have two entries with the same CanonicalKey).
+		ck := dictionaryupdate.CanonicalKey(r.CanonicalName)
+		if _, exists := idx.byCanonicalKey[ck]; !exists {
+			idx.byCanonicalKey[ck] = ce
 		}
 		if sn := entityproposal.Surname(r.CanonicalName); sn != "" {
 			surnameCount[sn]++
@@ -89,6 +98,16 @@ func entityTypeForKind(k eventsignals.EntityKind) (entityproposal.EntityType, bo
 // passed through entityproposal.Normalize), if any.
 func (idx CatalogIndex) Lookup(normalizedName string) (CatalogEntity, bool) {
 	ce, ok := idx.byTerm[normalizedName]
+	return ce, ok
+}
+
+// CanonicalKeyLookup reports the catalog entity whose canonical name has
+// the given CanonicalKey (suffix-insensitive, from
+// dictionaryupdate.CanonicalKey), if any. This catches cases like
+// "Ollie Gordon II" matching the existing "Ollie Gordon" entry even
+// though their Normalize forms differ.
+func (idx CatalogIndex) CanonicalKeyLookup(key string) (CatalogEntity, bool) {
+	ce, ok := idx.byCanonicalKey[key]
 	return ce, ok
 }
 
