@@ -32,6 +32,27 @@ func TestSurname_ReturnsLastToken(t *testing.T) {
 	}
 }
 
+func TestSurname_StripsGenerationalSuffixes(t *testing.T) {
+	cases := []struct {
+		name string
+		want string
+	}{
+		{"Ollie Gordon II", "gordon"},
+		{"Ollie Gordon III", "gordon"},
+		{"Michael Jordan Jr", "jordan"},
+		{"Michael Jordan Sr", "jordan"},
+		{"John Somebody IV", "somebody"},
+		{"Regular Person", "person"},
+		{"Single II", ""}, // after stripping, only one token remains
+		{"Somebody IV", ""}, // after stripping, only one token remains — no surname
+	}
+	for _, tc := range cases {
+		if got := entityproposal.Surname(tc.name); got != tc.want {
+			t.Errorf("Surname(%q) = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestSurname_EmptyForSingleWordName(t *testing.T) {
 	if got := entityproposal.Surname("Isotopes"); got != "" {
 		t.Errorf("Surname() = %q, want empty for a single-word name", got)

@@ -326,13 +326,41 @@ func applyNewAlias(p entityproposal.Proposal, paths CatalogPaths, now time.Time)
 			if eventsignals.Slug(e.CanonicalName) != p.TargetEntityID {
 				continue
 			}
+			// Found the target entry. Merge aliases, then remove any
+			// sibling entries whose canonical name is subsumed by the
+			// target's terms (canonical name + aliases). This resolves
+			// conflicts like a standalone "ollie" entry when "ollie" is
+			// added as an alias of "Ollie Gordon".
 			candidate := current
 			candidate.Categories = make([]dictionary.Category, len(current.Categories))
 			copy(candidate.Categories, current.Categories)
-			entries := make([]dictionary.Entry, len(candidate.Categories[ci].Entries))
-			copy(entries, candidate.Categories[ci].Entries)
+			originalEntries := candidate.Categories[ci].Entries
+			entries := make([]dictionary.Entry, len(originalEntries))
+			copy(entries, originalEntries)
 			entries[ei].Aliases = mergeAliases(entries[ei].Aliases, p.Aliases)
-			candidate.Categories[ci].Entries = entries
+
+			// Build the set of normalized terms owned by the target after merge.
+			targetTerms := make(map[string]bool)
+			targetTerms[entityproposal.Normalize(entries[ei].CanonicalName)] = true
+			for _, a := range entries[ei].Aliases {
+				targetTerms[entityproposal.Normalize(a)] = true
+			}
+
+			// Remove sibling entries subsumed by the target's terms.
+			var kept []dictionary.Entry
+			for i, other := range entries {
+				if i == ei {
+					kept = append(kept, other)
+					continue
+				}
+				if targetTerms[entityproposal.Normalize(other.CanonicalName)] {
+					// This entry's identity is now covered by the target;
+					// dropping it avoids a duplicate-term validation error.
+					continue
+				}
+				kept = append(kept, other)
+			}
+			candidate.Categories[ci].Entries = kept
 
 			return writeDictionary(current, candidate, paths.DictionaryPath, now)
 		}

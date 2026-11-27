@@ -546,3 +546,100 @@ func TestApplyApproval_FileErrorIsNotARefusal(t *testing.T) {
 		t.Fatalf("err = %v, want a plain load error", err)
 	}
 }
+
+// TestApplyApproval_AliasRemovesConflictingStandaloneEntry verifies that
+// when merging an alias that matches a sibling entry's canonical name, the
+// sibling entry is removed (its identity is subsumed by the target).
+func TestApplyApproval_AliasRemovesConflictingStandaloneEntry(t *testing.T) {
+	dir := t.TempDir()
+	dictPath := filepath.Join(dir, "dictionary.yml")
+	manualPath := filepath.Join(dir, "entity_catalog_manual.yml")
+
+	// Dictionary with both "Ollie Gordon" and a standalone "ollie" entry
+	// in the same category — the exact data condition that caused the deadlock.
+	dictYAML := `
+meta:
+  version: "1.0.0"
+  name: isotopes
+  language: en
+decision:
+  positive_threshold_high: 0.8
+  positive_threshold_medium: 0.5
+  negative_threshold_high: 0
+  title_weight_multiplier: 1.5
+  max_count_per_term: 5
+categories:
+  active_roster_core:
+    weight: 1
+    entries:
+      - canonical_name: "Ollie Gordon"
+        type: person
+        roster_status: active
+        position: RB
+        number: "0"
+        confidence: 0.8
+        updated_at: "2026-01-01"
+      - canonical_name: "ollie"
+        type: person
+        confidence: 0.5
+        updated_at: "2026-10-07"
+`
+	if err := os.WriteFile(dictPath, []byte(dictYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manualPath, []byte(minimalManualYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	paths := entitydiscovery.CatalogPaths{DictionaryPath: dictPath, ManualCatalogPath: manualPath}
+
+	// Merge "Ollie Gordon II" as an alias of "Ollie Gordon" (slug: ollie-gordon).
+	// The proposal carries "ollie" as one of its aliases, which conflicts
+	// with the standalone "ollie" entry.
+	p := entityproposal.Proposal{
+		ID: "p1", Kind: entityproposal.KindNewAlias, EntityType: entityproposal.EntityTypePlayer,
+		TargetEntityID: "ollie-gordon", Aliases: []string{"Ollie Gordon II", "ollie"},
+	}
+	if err := entitydiscovery.ApplyApproval(p, paths, time.Now().UTC()); err != nil {
+		t.Fatalf("ApplyApproval() error = %v — the standalone 'ollie' entry should be removed, not cause a validation failure", err)
+	}
+
+	// Verify: "Ollie Gordon" has the new aliases, and the standalone "ollie" entry is gone.
+	d, err := dictionaryfile.Load(paths.DictionaryPath)
+	if err != nil {
+		t.Fatalf("dictionaryfile.Load() error = %v", err)
+	}
+	foundTarget := false
+	foundStandalone := false
+	for _, cat := range d.Categories {
+		for _, e := range cat.Entries {
+			if e.CanonicalName == "Ollie Gordon" {
+				foundTarget = true
+				hasOllieAlias := false
+				hasIIAlias := false
+				for _, a := range e.Aliases {
+					if strings.EqualFold(a, "ollie") {
+						hasOllieAlias = true
+					}
+					if a == "Ollie Gordon II" {
+						hasIIAlias = true
+					}
+				}
+				if !hasOllieAlias {
+					t.Error("'ollie' not found in Ollie Gordon's aliases")
+				}
+				if !hasIIAlias {
+					t.Error("'Ollie Gordon II' not found in Ollie Gordon's aliases")
+				}
+			}
+			if e.CanonicalName == "ollie" {
+				foundStandalone = true
+			}
+		}
+	}
+	if !foundTarget {
+		t.Fatal("Ollie Gordon entry not found after alias merge")
+	}
+	if foundStandalone {
+		t.Error("standalone 'ollie' entry still exists — it should have been removed as subsumed by Ollie Gordon")
+	}
+}
