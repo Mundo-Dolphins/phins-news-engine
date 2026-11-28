@@ -183,3 +183,44 @@ export const clearLLM = async () => {
   window.dispatchEvent(new Event(LLM_CHANGED));
   return s;
 };
+
+// --- Config editor (local mode) ---
+
+export interface ConfigFile {
+  key: string;
+  title: string;
+  path: string;
+  configured: boolean;
+  exists: boolean;
+  sections?: string[];
+}
+export interface ConfigDoc {
+  key: string;
+  title: string;
+  path: string;
+  value: any;
+  comments: Record<string, string>;
+  sections: string[];
+}
+export interface ConfigApplyResult {
+  key: string;
+  title: string;
+  path: string;
+  edits: number;
+  backup: string;
+}
+
+async function configObject<T>(name: string, params: Record<string, unknown>, confirm: boolean): Promise<T> {
+  const out = await runAction(name, params, confirm);
+  if (!("result" in out)) throw new Error("unexpected response for " + name);
+  return out.result.object as T;
+}
+
+export const listConfigFiles = async (): Promise<ConfigFile[]> => {
+  const out = await runAction("config.files", {}, false);
+  if (!("result" in out) || !out.result.rows) throw new Error("config.files: unexpected response");
+  return out.result.rows as unknown as ConfigFile[];
+};
+export const readConfig = (file: string): Promise<ConfigDoc> => configObject<ConfigDoc>("config.read", { file }, false);
+export const applyConfig = (file: string, edits: unknown[]): Promise<ConfigApplyResult> =>
+  configObject<ConfigApplyResult>("config.apply", { file, edits: JSON.stringify(edits) }, true);

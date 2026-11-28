@@ -28,6 +28,7 @@ today.
 | [0041](0041-background-tasks-and-telegram-updates.md) | Background tasks with signals and a Telegram update poller |
 | [0042](0042-timed-event-deadlines-and-close.md) | Timed event deadlines (`Until`) and closing an event without publishing |
 | [0043](0043-timed-events-enqueue-tasks.md) | Timed event handlers can enqueue background tasks |
+| [0044](0044-config-file-editor.md) | Config file editor: comment-preserving surgical YAML edits from the panel |
 
 The numbering has gaps. The engine was extracted from a larger project
 whose other records cover operations and deployment-specific choices and

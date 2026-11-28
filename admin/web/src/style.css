@@ -255,3 +255,29 @@ kbd { font-family: ui-monospace, monospace; font-size: .75em; padding: 0 5px; bo
   .cycle-layout { grid-template-columns: minmax(0, 1fr); }
   .cycle-rail { position: static; }
 }
+
+/* --- Config editor --- */
+.cfg-root { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 4px 16px 16px; margin: 12px 0; }
+.cfg-map { display: grid; gap: 6px; }
+.cfg-field { padding: 8px 10px; border-left: 3px solid var(--border); }
+.cfg-head { display: flex; align-items: baseline; gap: 8px; }
+.cfg-key { font-family: ui-monospace, monospace; font-weight: 600; }
+.cfg-type { color: var(--muted); font-size: 0.85em; margin-left: auto; }
+.cfg-x { margin-left: 4px; border: none; background: none; color: var(--muted); cursor: pointer; padding: 0 4px; }
+.cfg-x:hover { color: var(--warn-fg); }
+.cfg-comment { color: var(--muted); font-size: 0.9em; margin: 2px 0 6px; }
+.cfg-details { margin: 4px 0 4px 6px; }
+.cfg-details > summary { cursor: pointer; color: var(--muted); }
+.cfg-details[open] { border-left: 1px solid var(--border); padding-left: 8px; margin-left: 4px; }
+.cfg-list { display: grid; gap: 4px; }
+.cfg-item { display: flex; gap: 8px; align-items: flex-start; }
+.cfg-idx { color: var(--muted); font-size: 0.8em; min-width: 1.2em; text-align: right; padding-top: 4px; }
+.cfg-item-body { flex: 1; min-width: 0; }
+.cfg-input { width: 100%; max-width: 28em; box-sizing: border-box; }
+.cfg-number { max-width: 12em; }
+.cfg-addrow { display: flex; gap: 6px; margin-top: 6px; }
+.cfg-addkey { flex: 1; max-width: 16em; }
+.cfg-addval { flex: 1; max-width: 16em; }
+.cfg-add { align-self: center; }
+.cfg-actions { position: sticky; bottom: 0; background: var(--bg); padding: 8px 0; }
+.ok { color: var(--accent); }
