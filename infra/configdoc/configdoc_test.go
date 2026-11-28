@@ -139,10 +139,20 @@ func TestApplyArraySetAppendRemove(t *testing.T) {
 			t.Fatalf("apply %v: %v", e, err)
 		}
 	}
-	val, _ := doc.Value()
-	list := val.(map[string]any)["items"].([]any)
-	if len(list) != 2 || list[0] != "a-prime" || list[1] != "c" {
-		t.Errorf("got %v, want [a-prime c]", list)
+	val, err := doc.Value()
+	if err != nil {
+		t.Fatalf("value: %v", err)
+	}
+	m, ok := val.(map[string]any)
+	if !ok {
+		t.Fatalf("value is %T, want map[string]any", val)
+	}
+	items, ok := m["items"].([]any)
+	if !ok {
+		t.Fatalf("items is %T, want []any", m["items"])
+	}
+	if len(items) != 2 || items[0] != "a-prime" || items[1] != "c" {
+		t.Errorf("got %v, want [a-prime c]", items)
 	}
 }
 
